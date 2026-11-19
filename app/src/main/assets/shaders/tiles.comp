@@ -1,0 +1,15 @@
+// Each 16-pixel tile's largest blur (dof_tiles).
+uniform sampler2D uWork;
+layout(r32f, binding = 0) writeonly uniform image2D uOut;
+
+void main() {
+    ivec2 t = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 tsz = imageSize(uOut);
+    if (t.x >= tsz.x || t.y >= tsz.y) return;
+    ivec2 sz = textureSize(uWork, 0) - 1;
+    float mx = 0.0;
+    for (int y = 0; y < 16; y += 2)
+        for (int x = 0; x < 16; x += 2)
+            mx = max(mx, abs(texelFetch(uWork, min(t * 16 + ivec2(x, y), sz), 0).a));
+    imageStore(uOut, t, vec4(mx));
+}

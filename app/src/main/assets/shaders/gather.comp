@@ -1,0 +1,80 @@
+// Depth of field by gathering: each pixel looks over the largest blur that can
+// reach it (the dilated tiles) and takes each sample's light if the pixel lies
+// inside that sample's own bokeh, the lens's aperture image scaled by the
+// sample's blur and clipped into a cat's eye by the barrel where it sits in the
+// field (Shaders.swift `pupil`). Samples are read from the mip level matching
+// the patch of image each stands for, so a big blur stays smooth with few taps.
+uniform sampler2D uWork;         // rgb + signed coc, mipmapped
+uniform sampler2D uTiles;        // R32F dilated tile reach (texelFetch)
+layout(rgba16f, binding = 0) writeonly uniform image2D uOut;
+layout(std140, binding = 0) uniform Pattern { vec4 uPat[256]; };
+uniform int uN;
+uniform float uMaxLevel;
+uniform vec2 uAxis;
+uniform float uHalfDiag;
+uniform vec4 uLens;              // (blades, blade rotation, cat's eye, soap bubble)
+uniform vec2 uLens2;             // (central obstruction, open = N wide open / N)
+
+float shape_norm(vec2 l, vec2 q) {
+    float r = length(l);
+    float n = r;
+    if (uLens.x >= 3.0) {
+        float seg = 2.0 * PI / uLens.x;
+        float th = atan(l.y, l.x) - uLens.y;
+        float a = mod(th, seg) - seg * 0.5;
+        n = r * cos(a) / cos(PI / uLens.x);
+    }
+    return max(n, length(l * uLens2.y + uLens.z * q));
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 sz = imageSize(uOut);
+    if (p.x >= sz.x || p.y >= sz.y) return;
+    vec2 pc = vec2(p) + 0.5;
+    vec4 c0 = texelFetch(uWork, p, 0);
+    float coc0 = c0.a;
+    ivec2 tsz = textureSize(uTiles, 0);
+    vec2 tf = pc / 16.0 - 0.5;
+    ivec2 t0 = ivec2(floor(tf));
+    vec2 fr = tf - vec2(t0);
+    float r00 = texelFetch(uTiles, clamp(t0, ivec2(0), tsz - 1), 0).r;
+    float r10 = texelFetch(uTiles, clamp(t0 + ivec2(1, 0), ivec2(0), tsz - 1), 0).r;
+    float r01 = texelFetch(uTiles, clamp(t0 + ivec2(0, 1), ivec2(0), tsz - 1), 0).r;
+    float r11 = texelFetch(uTiles, clamp(t0 + ivec2(1, 1), ivec2(0), tsz - 1), 0).r;
+    float R = max(abs(coc0), mix(mix(r00, r10, fr.x), mix(r01, r11, fr.x), fr.y));
+    if (R < 0.75) { imageStore(uOut, p, vec4(c0.rgb, 1.0)); return; }
+
+    float area = PI * R * R / float(uN);
+    float lvl = clamp(0.5 * log2(area), 0.0, uMaxLevel);
+    vec2 inv = 1.0 / vec2(sz);
+    // The pattern turned a different way at each pixel (noise, not blocks).
+    float rot = fract(52.9829189 * fract(dot(pc, vec2(0.06711056, 0.00583715)))) * 2.0 * PI;
+    mat2 turn = mat2(cos(rot), sin(rot), -sin(rot), cos(rot));
+
+    float r0 = max(abs(coc0), 0.5);
+    float w0 = 1.0 / (PI * r0 * r0);
+    vec3 acc = c0.rgb * w0;
+    float wsum = w0;
+    float soapNorm = 1.0 / (1.0 + uLens.w * 0.25);
+    for (int j = 0; j < uN; j++) {
+        vec2 v = turn * uPat[j].xy * R;
+        vec2 ps = pc + v;
+        vec4 c = textureLod(uWork, ps * inv, lvl);
+        float rs = abs(c.a);
+        // Behind this pixel: no wider than its own blur (eased, not switched), so
+        // a sharp subject keeps its edge against a blurred background.
+        rs = mix(rs, min(rs, abs(coc0)), smoothstep(0.0, 1.0, c.a - coc0));
+        rs = max(rs, 0.5);
+        vec2 l = -v / rs;
+        vec2 q = (ps - uAxis) / uHalfDiag;
+        float cov = clamp((1.0 - shape_norm(l, q)) * rs + 0.5, 0.0, 1.0);
+        float lr = length(l);
+        cov *= clamp((lr - uLens2.x) * rs + 0.5, 0.0, 1.0);
+        float rim = (1.0 + uLens.w * pow(min(lr, 1.0), 6.0)) * soapNorm;
+        float w = cov * rim * area / (PI * rs * rs);
+        acc += c.rgb * w;
+        wsum += w;
+    }
+    imageStore(uOut, p, vec4(acc / wsum, 1.0));
+}

@@ -1,0 +1,13 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.DS_Store
+._*
+captures/
+.kotlin/
+# Models and test photos live off-repo (see scripts/push_models.sh)
+*.onnx
+*.tflite
+bench_out/

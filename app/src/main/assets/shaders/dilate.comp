@@ -1,0 +1,22 @@
+// The largest blur that can reach each tile, one direction at a time (dof_reach,
+// made separable): a tile counts if its blur covers the gap to this one.
+uniform sampler2D uIn;           // R32F tiles (texelFetch)
+uniform ivec2 uDir;
+uniform int uRadius;             // tiles
+layout(r32f, binding = 0) writeonly uniform image2D uOut;
+
+void main() {
+    ivec2 t = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 tsz = imageSize(uOut);
+    if (t.x >= tsz.x || t.y >= tsz.y) return;
+    float mx = texelFetch(uIn, t, 0).r;
+    for (int k = 1; k <= uRadius; k++) {
+        float gap = float(k - 1) * 16.0;
+        ivec2 a = clamp(t + uDir * k, ivec2(0), tsz - 1);
+        ivec2 b = clamp(t - uDir * k, ivec2(0), tsz - 1);
+        float ra = texelFetch(uIn, a, 0).r, rb = texelFetch(uIn, b, 0).r;
+        if (ra >= gap) mx = max(mx, ra);
+        if (rb >= gap) mx = max(mx, rb);
+    }
+    imageStore(uOut, t, vec4(mx));
+}

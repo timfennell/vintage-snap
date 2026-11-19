@@ -1,0 +1,18 @@
+// One mip level from the one above it: a 2 x 2 box (colour and signed blur
+// both average; blur is linear in disparity, so this is the patch's mean disparity).
+uniform sampler2D uIn;           // the same texture, level uLevel - 1 read with texelFetch
+uniform int uLevel;
+layout(rgba16f, binding = 0) writeonly uniform image2D uOut;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 sz = imageSize(uOut);
+    if (p.x >= sz.x || p.y >= sz.y) return;
+    ivec2 up = textureSize(uIn, uLevel - 1) - 1;
+    int l = uLevel - 1;
+    vec4 a = texelFetch(uIn, min(2 * p, up), l);
+    vec4 b = texelFetch(uIn, min(2 * p + ivec2(1, 0), up), l);
+    vec4 c = texelFetch(uIn, min(2 * p + ivec2(0, 1), up), l);
+    vec4 d = texelFetch(uIn, min(2 * p + ivec2(1, 1), up), l);
+    imageStore(uOut, p, 0.25 * (a + b + c + d));
+}

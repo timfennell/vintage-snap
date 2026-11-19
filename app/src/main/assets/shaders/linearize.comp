@@ -1,0 +1,19 @@
+// The camera's picture (sRGB, 8 bit) to scene-linear half floats at any size.
+// A JPEG has its highlights clipped and rolled off: expand the top of the range
+// so lamps and specular points come back hotter than white and make bokeh balls.
+// (The RAW path replaces this pass with a demosaic of the DNG's linear data.)
+uniform sampler2D uSrc;          // RGBA8, linear filtering
+layout(rgba16f, binding = 0) writeonly uniform image2D uOut;
+uniform float uGain;             // exposure, linear
+uniform float uHighlight;        // highlight expansion (0 = none)
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 sz = imageSize(uOut);
+    if (p.x >= sz.x || p.y >= sz.y) return;
+    vec2 uv = (vec2(p) + 0.5) / vec2(sz);
+    vec3 c = to_lin(textureLod(uSrc, uv, 0.0).rgb);
+    float m = max(c.r, max(c.g, c.b));
+    c *= 1.0 + uHighlight * pow(smoothstep(0.80, 1.0, m), 2.0);
+    imageStore(uOut, p, vec4(c * uGain, 1.0));
+}

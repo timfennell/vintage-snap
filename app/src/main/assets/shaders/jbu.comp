@@ -1,0 +1,34 @@
+// Joint bilateral upsampling: the depth network's low-resolution disparity to
+// full resolution, edges taken from the full-resolution picture, so the blur
+// boundary follows the subject's outline (hair, twigs) rather than the
+// network's 14-pixel patches.
+uniform sampler2D uDispLo;       // R32F, texelFetch only (not filterable)
+uniform sampler2D uGuideLo;      // RGBA8: the picture the network saw
+uniform sampler2D uSrc;          // RGBA16F: full-resolution linear picture
+layout(r32f, binding = 0) writeonly uniform image2D uOut;
+uniform float uSigmaRange;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 sz = imageSize(uOut);
+    if (p.x >= sz.x || p.y >= sz.y) return;
+    ivec2 lo = textureSize(uDispLo, 0);
+    vec2 fp = (vec2(p) + 0.5) * vec2(lo) / vec2(sz) - 0.5;
+    ivec2 b = ivec2(floor(fp));
+    float g = sqrt(luma(texelFetch(uSrc, p, 0).rgb));     // roughly perceptual
+    float acc = 0.0, wsum = 0.0;
+    float inv2s = 1.0 / (2.0 * uSigmaRange * uSigmaRange);
+    for (int y = -1; y <= 2; y++) {
+        for (int x = -1; x <= 2; x++) {
+            ivec2 t = clamp(b + ivec2(x, y), ivec2(0), lo - 1);
+            vec2 d = vec2(t) - fp;
+            float ws = exp(-0.5 * dot(d, d));
+            float gl = sqrt(luma(to_lin(texelFetch(uGuideLo, t, 0).rgb)));
+            float wr = exp(-(g - gl) * (g - gl) * inv2s);
+            float w = ws * wr + 1e-5 * ws;
+            acc += texelFetch(uDispLo, t, 0).r * w;
+            wsum += w;
+        }
+    }
+    imageStore(uOut, p, vec4(acc / wsum));
+}

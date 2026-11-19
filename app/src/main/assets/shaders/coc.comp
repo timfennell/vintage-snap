@@ -1,0 +1,26 @@
+// Circle of confusion from disparity. The network's disparity is relative
+// (affine), so the app maps it to dioptres: D = a + b * disparity, from the
+// near and far distances the user agrees to. Then, as CameraBody/coc_px:
+//   signed blur radius = k (D_focus(q) - D), + behind focus, - in front,
+// with a tilt lens moving the focus by a dioptre slope across the field.
+uniform sampler2D uSrc;          // RGBA16F linear picture
+uniform sampler2D uDisp;         // R32F full-res disparity (texelFetch)
+layout(rgba16f, binding = 0) writeonly uniform image2D uOut;   // rgb, signed coc px
+uniform vec2 uDispToD;           // (a, b)
+uniform float uFocusD;           // dioptres in focus at the axis
+uniform vec2 uTiltD;             // dioptres of focus change at the frame's half-diagonal, x and y
+uniform float uCocPerD;          // blur radius px per dioptre
+uniform float uMaxCoc;           // cap, px
+uniform vec2 uAxis;              // optical axis, px
+uniform float uHalfDiag;         // px
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 sz = imageSize(uOut);
+    if (p.x >= sz.x || p.y >= sz.y) return;
+    vec2 q = (vec2(p) + 0.5 - uAxis) / uHalfDiag;
+    float D = uDispToD.x + uDispToD.y * texelFetch(uDisp, p, 0).r;
+    float coc = uCocPerD * (uFocusD + dot(uTiltD, q) - D);
+    coc = clamp(coc, -uMaxCoc, uMaxCoc);
+    imageStore(uOut, p, vec4(texelFetch(uSrc, p, 0).rgb, coc));
+}

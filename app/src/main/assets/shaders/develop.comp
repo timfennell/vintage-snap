@@ -1,0 +1,94 @@
+// The print: fall-off, lateral colour, halation and the film stock's look,
+// ported from Shaders.swift develop_px / film_look.
+uniform sampler2D uIn;           // RGBA16F, linear, after the lens
+layout(rgba8, binding = 0) writeonly uniform image2D uOut;
+uniform vec4 uF[8];              // FilmStock.packed()
+uniform float uExposure;         // linear gain
+uniform float uVignette;         // lens fall-off at the corner (already scaled for the stop)
+uniform float uLateralCA;
+uniform vec2 uAxis;
+uniform float uHalfDiag;
+uniform uint uSeed;
+uniform vec4 uPat[32];           // 32 Vogel points for halation
+
+float hash(uvec2 p, uint s) {
+    uint h = (p.x * 0x8da6b343u) ^ (p.y * 0xd8163841u) ^ (s * 0xcb1ab31fu);
+    h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+    return float(h & 0xffffffu) / 16777215.0;
+}
+float value_noise(vec2 p, uint s) {
+    vec2 i = floor(p), t = fract(p);
+    t = t * t * (3.0 - 2.0 * t);
+    uvec2 a = uvec2(ivec2(i) + 65536);
+    float v00 = hash(a, s), v10 = hash(a + uvec2(1, 0), s);
+    float v01 = hash(a + uvec2(0, 1), s), v11 = hash(a + uvec2(1, 1), s);
+    return mix(mix(v00, v10, t.x), mix(v01, v11, t.x), t.y);
+}
+
+vec3 film_look(vec3 lin, vec3 halo, vec2 px, uint seed, float lines) {
+    lin += uF[6].x * uF[6].yzw * halo;
+    if (uF[7].w > 0.5) {
+        // Colour infrared: estimate infrared from colour (leaves glow, sky darkens).
+        float lum = luma(lin);
+        float leaf = clamp(3.0 * (lin.g - max(lin.r, lin.b)) / max(lin.g, 1e-4), 0.0, 1.0);
+        float sky = clamp((lin.b - max(lin.r, lin.g)) / max(lin.b, 1e-4), 0.0, 1.0);
+        float reds = clamp((lin.r - max(lin.g, lin.b)) / max(lin.r, 1e-4), 0.0, 1.0);
+        float ir = lum * (1.0 + 3.0 * leaf) * (1.0 - 0.75 * sky) + 0.9 * reds * lin.r;
+        vec3 c = lin - lum;
+        float strength = smoothstep(0.06, 0.3, length(c) / max(lum, 1e-4));
+        vec3 swapped = vec3(ir - lum, c.r * strength,
+                            c.g * strength - 0.45 * leaf * lin.g + 0.35 * sky * lin.b);
+        lin = max(lum + swapped, 0.0) * (1.0 - 0.3 * sky);
+    }
+    vec3 c = vec3(dot(uF[0].xyz, lin), dot(uF[1].xyz, lin), dot(uF[2].xyz, lin)) * uF[3].xyz;
+    bool bw = uF[3].w > 0.5;
+    if (bw) c = vec3(dot(uF[4].xyz, c));
+    float l = luma(c);
+    c = max(l + (c - l) * uF[4].w, 0.0);
+    // Characteristic curve in stops about mid grey: toe below, shoulder above.
+    vec3 x = log2(max(c, 1e-6) / 0.18);
+    float k = uF[5].x * 0.34;
+    vec3 xs = mix(x * uF[7].z, x * uF[5].z, step(vec3(0.0), x));
+    vec3 y = 0.5 + 0.5 * tanh(k * xs);
+    y = uF[5].y + (1.0 - uF[5].y) * y;
+    // Grain: strongest in the midtones, finer on slower stocks.
+    float size = uF[7].y * lines / 1080.0;
+    vec2 g = px / max(size, 0.5);
+    float amp = uF[5].w * 0.16;
+    float mono = value_noise(g, seed) + value_noise(g * 2.1 + 17.0, seed + 1u) * 0.5 - 0.75;
+    vec3 n;
+    if (bw) n = vec3(mono);
+    else {
+        vec3 chroma = vec3(value_noise(g + 31.0, seed + 2u), value_noise(g + 57.0, seed + 3u),
+                           value_noise(g + 83.0, seed + 4u)) - 0.5;
+        n = mono + 0.35 * chroma;
+    }
+    y += amp * n * 4.0 * y * (1.0 - y);
+    return clamp(y, 0.0, 1.0);
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 sz = imageSize(uOut);
+    if (p.x >= sz.x || p.y >= sz.y) return;
+    vec2 pc = vec2(p) + 0.5;
+    vec2 inv = 1.0 / vec2(sz);
+    vec2 q = (pc - uAxis) / uHalfDiag;
+    float vig = 1.0 - uVignette * dot(q, q);
+    vec3 lin;
+    lin.r = textureLod(uIn, (uAxis + (pc - uAxis) * (1.0 - uLateralCA)) * inv, 0.0).r;
+    lin.g = texelFetch(uIn, p, 0).g;
+    lin.b = textureLod(uIn, (uAxis + (pc - uAxis) * (1.0 + uLateralCA)) * inv, 0.0).b;
+    lin *= uExposure * vig;
+    vec3 halo = vec3(0.0);
+    if (uF[6].x > 0.0) {
+        float rad = float(sz.y) * 0.012;
+        for (int j = 0; j < 32; j++) {
+            vec2 o = uPat[j].xy * rad;
+            halo += max(textureLod(uIn, (pc + o) * inv, 0.0).rgb * uExposure - 0.9, 0.0);
+        }
+        halo /= 32.0;
+    }
+    // film_look gives the print, display-referred already (VC writes it straight out).
+    imageStore(uOut, p, vec4(film_look(lin, halo, pc, uSeed, float(sz.y)), 1.0));
+}
