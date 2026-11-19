@@ -14,6 +14,6 @@ void main() {
     vec2 uv = (vec2(p) + 0.5) / vec2(sz);
     vec3 c = to_lin(textureLod(uSrc, uv, 0.0).rgb);
     float m = max(c.r, max(c.g, c.b));
-    c *= 1.0 + uHighlight * pow(smoothstep(0.80, 1.0, m), 2.0);
+    c *= 1.0 + uHighlight * pow(smoothstep(0.90, 1.0, m), 2.0);
     imageStore(uOut, p, vec4(c * uGain, 1.0));
 }

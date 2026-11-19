@@ -12,10 +12,10 @@ dims = m.graph.input[0].type.tensor_type.shape.dim
 for d, v in zip(dims, (1, 3, h, w)):
     d.ClearField("dim_param")
     d.dim_value = v
-for o in m.graph.output:
-    for d in o.type.tensor_type.shape.dim:
-        if d.dim_param:
-            d.ClearField("dim_param")
+for o in m.graph.output:          # predicted_depth: [1, H, W]
+    for d, v in zip(o.type.tensor_type.shape.dim, (1, h, w)):
+        d.ClearField("dim_param")
+        d.dim_value = v
 out = src.replace(".onnx", f"_{h}x{w}.onnx")
 onnx.save(m, out)
 print(out, [d.dim_value for d in dims])

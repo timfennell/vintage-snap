@@ -55,6 +55,7 @@ class Bench(private val ctx: Context, private val ui: (String) -> Unit) {
         val mi = ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
         log("device ${Build.MANUFACTURER} ${Build.MODEL} (${Build.DEVICE}), Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
         if (Build.VERSION.SDK_INT >= 31) log("soc ${Build.SOC_MANUFACTURER} ${Build.SOC_MODEL}")
+        CameraProbe.report(ctx).forEach(::log)
         log("ram total %.1f GB, avail %.1f GB, java heap max %d MB".format(
             mi.totalMem / 1e9, mi.availMem / 1e9, Runtime.getRuntime().maxMemory() / 1048576))
 
@@ -89,7 +90,9 @@ class Bench(private val ctx: Context, private val ui: (String) -> Unit) {
         for (m in models.filter { it.name.endsWith(".onnx") && !it.name.startsWith("._") }) {
             for (ep in eps) {
                 if (ep == "cpu" && "slow" !in flags && m.name.contains("fp16")) continue
-                val r = runOrt(m, ep, small, runs, ::log)
+                // Qualcomm's quantized graph is meant for the NPU; on the CPU it only says how slow that is.
+                if (m.name.contains("qai") && ep == "nnapi") continue
+                val r = runOrt(m, ep, photo, runs, ::log)
                 log(r.line()); results.add(r)
             }
         }

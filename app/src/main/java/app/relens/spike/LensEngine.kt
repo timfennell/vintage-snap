@@ -69,7 +69,7 @@ class LensEngine(private val gl: Gl) {
             gl.sampler(p, "uSrc", 0, src)
             gl.image(0, lin, GLES30.GL_RGBA16F)
             gl.u1f(p, "uGain", look.exposure)
-            gl.u1f(p, "uHighlight", 6f)
+            gl.u1f(p, "uHighlight", 2f)   // JPEG only; small clipped points become hot, big areas barely change
             gl.dispatch(w, h)
         }
         timed("depth upsample (JBU)") {

@@ -68,8 +68,8 @@ private inline fun ms(block: () -> Unit): Double {
 }
 
 /** ONNX Runtime with one execution provider. [ep] = "cpu", "xnnpack", "nnapi", "qnn". */
-fun runOrt(model: File, ep: String, bmp: Bitmap, runs: Int, log: (String) -> Unit): DepthResult {
-    val label = "ORT ${model.name} [$ep] ${bmp.width}x${bmp.height}"
+fun runOrt(model: File, ep: String, photo: Bitmap, runs: Int, log: (String) -> Unit): DepthResult {
+    val label = "ORT ${model.name} [$ep]"
     return try {
         val env = OrtEnvironment.getEnvironment()
         val opts = OrtSession.SessionOptions()
@@ -91,11 +91,17 @@ fun runOrt(model: File, ep: String, bmp: Bitmap, runs: Int, log: (String) -> Uni
             session = s; (System.nanoTime() - t) / 1e6
         }
         val inName = session.inputNames.first()
-        log("  $label input $inName ${session.inputInfo[inName]?.info}")
+        val info = session.inputInfo[inName]?.info as ai.onnxruntime.TensorInfo
+        log("  $label input $inName $info")
+        // Static shape from the model file (scripts/fix_shapes.py, float_io.py): [1, 3, H, W].
+        val ih = info.shape[2].toInt(); val iw = info.shape[3].toInt()
+        val bmp = Bitmap.createScaledBitmap(photo, iw, ih, true)
+        // onnx-community exports want ImageNet-normalised input; Qualcomm's take RGB 0...1.
+        val imagenet = !model.name.contains("qai")
         lateinit var tensor: OnnxTensor
         val preMs = ms {
-            val fb = toTensor(bmp, nchw = true, imagenet = true)
-            tensor = OnnxTensor.createTensor(env, fb, longArrayOf(1, 3, bmp.height.toLong(), bmp.width.toLong()))
+            val fb = toTensor(bmp, nchw = true, imagenet = imagenet)
+            tensor = OnnxTensor.createTensor(env, fb, longArrayOf(1, 3, ih.toLong(), iw.toLong()))
         }
         val times = ArrayList<Double>()
         var raw: FloatArray? = null
