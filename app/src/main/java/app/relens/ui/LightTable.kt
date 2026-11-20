@@ -133,6 +133,7 @@ fun LightTableScreen(body: Body, onBack: () -> Unit, openBench: () -> Unit, init
                         })
                 }) {
                 withTransform({ translate(pan.x, pan.y); scale(scale, scale, Offset.Zero) }) {
+                    glassDust(Rect(toSheet(Offset.Zero), toSheet(Offset(size.width, size.height))), density / 2.625f)
                     for ((i, st) in strips.withIndex()) {
                         val r = stripRect(i, st.size)
                         drawStrip(r, mm, st, i, frameRect = { j -> frameRect(r, j) }, measurer = measurer)
@@ -269,6 +270,39 @@ private fun handOff(ctx: android.content.Context, file: java.io.File, mime: Stri
     }.onFailure { app.relens.Trace.w("hand-off failed", it) }
 }
 
+/**
+ * Dust, hairs and fine scratches on the glass itself, in the table's own space (they pan
+ * and grow under the loupe with the film): laid out tile by tile from a fixed seed, so the
+ * glass never runs out however far it is moved. [view]: the visible region, in table space.
+ */
+private fun DrawScope.glassDust(view: Rect, px: Float) {
+    val tile = 320f * px
+    val x0 = kotlin.math.floor(view.left / tile).toInt(); val x1 = kotlin.math.floor(view.right / tile).toInt()
+    val y0 = kotlin.math.floor(view.top / tile).toInt(); val y1 = kotlin.math.floor(view.bottom / tile).toInt()
+    if ((x1 - x0 + 1) * (y1 - y0 + 1) > 400) return             // zoomed far out: too many to bother
+    for (ty in y0..y1) for (tx in x0..x1) {
+        val rng = Random(tx * 73856093 xor ty * 19349663 xor 2024)
+        val ox = tx * tile; val oy = ty * tile
+        repeat(10) {
+            val r = (0.4f + 1.6f * rng.nextFloat() * rng.nextFloat()) * px
+            val c = Offset(ox + rng.nextFloat() * tile, oy + rng.nextFloat() * tile)
+            drawOval(Color(0xFF404040).copy(alpha = 0.12f + 0.35f * rng.nextFloat()), c, Size(2 * r * 2, 2 * r * 2 * (0.6f + 0.4f * rng.nextFloat())))
+        }
+        if (rng.nextFloat() < 0.25f) {                          // a hair
+            val path = Path()
+            var p = Offset(ox + rng.nextFloat() * tile, oy + rng.nextFloat() * tile); path.moveTo(p.x, p.y)
+            var a = rng.nextFloat() * 6.28f
+            repeat(10) { a += (rng.nextFloat() - 0.5f) * 0.7f; p += Offset(cos(a), kotlin.math.sin(a)) * (4f * px); path.lineTo(p.x, p.y) }
+            drawPath(path, Color(0x4D4D4D4D), style = Stroke(0.6f * px))
+        }
+        if (rng.nextFloat() < 0.12f) {                          // a long fine scratch
+            val p = Offset(ox + rng.nextFloat() * tile, oy + rng.nextFloat() * tile)
+            val a = rng.nextFloat() * Math.PI.toFloat(); val len = (120f + 500f * rng.nextFloat()) * px
+            drawLine(if (rng.nextBoolean()) Color(0x1EFFFFFF) else Color(0x1E646464), p, p + Offset(cos(a), kotlin.math.sin(a)) * len, 1.5f * px)
+        }
+    }
+}
+
 /** One strip of film on the glass: punched base, rebate printing, the frames, dust, keepers. */
 private fun DrawScope.drawStrip(r: Rect, mm: Float, frames: List<DarkroomEntry>, index: Int, frameRect: (Int) -> Rect,
                                 measurer: androidx.compose.ui.text.TextMeasurer) {
@@ -376,7 +410,7 @@ private fun DrawScope.greasePencil(fr: Rect, seed: Int, mm: Float) {
     }
 }
 
-/** The lit glass: tube banding, a soft mottle, falling off to the edges, dust and a few scratches. */
+/** The light box's glow under the glass: tube banding, a soft mottle, falling off to the edges (fixed). */
 private fun tableGlass(w: Int, h: Int): ImageBitmap {
     val rng = Random(2024)
     val gw = 9; val gh = 7
@@ -408,21 +442,6 @@ private fun tableGlass(w: Int, h: Int): ImageBitmap {
     }
     val small = Bitmap.createBitmap(px, qw, qh, Bitmap.Config.ARGB_8888)
     val big = Bitmap.createScaledBitmap(small, w, h, true)
-    val c = android.graphics.Canvas(big)
-    val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
-    repeat(260) {
-        val r = 0.4f + 1.6f * rng.nextFloat() * rng.nextFloat()
-        p.color = android.graphics.Color.argb(((0.12f + 0.35f * rng.nextFloat()) * 255).toInt(), 64, 64, 64)
-        val x = rng.nextFloat() * w; val y = rng.nextFloat() * h
-        c.drawOval(x, y, x + 2 * r * 2, y + 2 * r * 2 * (0.6f + 0.4f * rng.nextFloat()), p)
-    }
-    p.strokeWidth = 1.5f
-    repeat(10) {
-        val x = rng.nextFloat() * w; val y = rng.nextFloat() * h
-        val a = rng.nextFloat() * Math.PI.toFloat(); val len = 120 + 500 * rng.nextFloat()
-        p.color = if (rng.nextBoolean()) android.graphics.Color.argb(30, 255, 255, 255) else android.graphics.Color.argb(30, 100, 100, 100)
-        c.drawLine(x, y, x + cos(a) * len, y + kotlin.math.sin(a) * len, p)
-    }
     return big.asImageBitmap()
 }
 
