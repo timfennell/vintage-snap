@@ -10,6 +10,8 @@
         android:label="Relens"
         android:largeHeap="true"
         android:hardwareAccelerated="true">
+        <!-- ARCore is optional: Parallax capture uses it where the phone has it. -->
+        <meta-data android:name="com.google.ar.core" android:value="optional" />
         <!-- The GPU delegate looks for the vendor OpenCL library. -->
         <uses-native-library android:name="libOpenCL.so" android:required="false" />
         <uses-native-library android:name="libOpenCL-pixel.so" android:required="false" />

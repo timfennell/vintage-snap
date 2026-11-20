@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.ui.text.drawText
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -67,6 +69,7 @@ import kotlin.math.sin
 @Composable
 fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: () -> Unit, openDarkroom: () -> Unit) {
     val liveD by body.rig.liveFocusD.collectAsState()
+    val sceneEV by body.rig.sceneEV.collectAsState()
     val framing by body.rig.framing.collectAsState()
     val rigError by body.rig.error.collectAsState()
     val raw = framing?.camera?.raw == true
@@ -148,6 +151,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                     is Movement.Shift -> ShiftGuides(Modifier.fillMaxSize())
                     Movement.None -> {}
                 }
+                sceneEV?.let { ev -> MeterCard(body.shutterPos, body.meteredShutterPos(ev), body.exposureStops(ev), Modifier.align(Alignment.CenterStart)) }
                 Text("${lens.name}${if (body.filter.isNone) "" else " + " + body.filter.name}  ·  ${body.stock.name}", color = Palette.cream.copy(alpha = 0.8f), fontSize = 10.sp,
                     modifier = Modifier.align(Alignment.TopStart).padding(8.dp))
                 rigError?.let { Text(it, color = Palette.led, fontSize = 11.sp, modifier = Modifier.align(Alignment.Center).padding(16.dp)) }
@@ -167,6 +171,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
         val shownM = ringM ?: heldM
         Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
             Led("F ${fLabel(body.fNumber)}")
+            Led(shutterLabel(body.shutterSeconds))
             Led(if (shownM == null) "-- m" else if (shownM.isInfinite()) "∞ m" else "%.2f m".format(shownM),
                 // long-press the distance: collimate this camera's focus readings
                 Modifier.pointerInput(Unit) { detectTapGestures(onLongPress = { body.startCollimating(); haptics.clunk() }) })
@@ -218,13 +223,25 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
             onDetent = { haptics.click() },
             caption = "APERTURE",
             labelColor = { if (it == 0) Palette.amber else Palette.engraving },
-            height = 56.dp,
+            height = 52.dp,
             spacing = 58.dp,
             modifier = Modifier.padding(top = 2.dp),
         )
+        BarrelRing(
+            labels = shutterSpeeds.map { it.first },
+            position = body.shutterPos,
+            onPosition = { body.shutterPos = it; body.save() },
+            detents = true,
+            onDetent = { haptics.sounds.play(Sounds.Event.DIAL, 0.7f); haptics.tick() },
+            caption = "SHUTTER",
+            labelColor = { if (shutterSpeeds[it].second >= 1f / 30) Palette.orange else Palette.engraving },
+            height = 48.dp,
+            spacing = 54.dp,
+            knurled = false,
+        )
 
         // ---- the deck ----
-        Row(Modifier.fillMaxWidth().height(116.dp).padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().height(104.dp).padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
             DeckButton("BAG", Modifier.weight(1f)) { openBag() }
             ShutterRelease(busy = body.busy) {
                 if (!body.busy && body.framesLeft > 0) { haptics.shutter(); mirrorUp = true }
@@ -280,6 +297,37 @@ private fun applyCrop(tv: android.view.TextureView) {
     val m = android.graphics.Matrix()
     m.setScale(9f / 8f * crop, crop, tv.width / 2f, tv.height / 2f)
     tv.setTransform(m)
+}
+
+fun shutterLabel(t: Float): String = if (t >= 0.5f) "%.0f\"".format(t) else "1/%.0f".format(1f / t)
+
+/**
+ * Vintage Click's meter: the shutter speeds on a card at the finder's left edge, the set speed
+ * lit, and a needle (with mass, so it swings) pointing at the speed the meter wants.
+ */
+@Composable
+private fun MeterCard(setPos: Float, meterPos: Float, stops: Float, modifier: Modifier) {
+    val needle by animateFloatAsState(meterPos.coerceIn(-0.6f, shutterSpeeds.size - 0.4f),
+        androidx.compose.animation.core.spring(dampingRatio = 0.55f, stiffness = 60f), label = "needle")
+    val measurer = androidx.compose.ui.text.rememberTextMeasurer()
+    Canvas(modifier.fillMaxHeight(0.62f).width(34.dp).padding(start = 4.dp)) {
+        drawRect(Color(0x99000000))
+        val n = shutterSpeeds.size
+        val step = size.height / n
+        fun y(i: Float) = size.height - (i + 0.5f) * step       // slow at the bottom, fast at the top
+        for ((i, sp) in shutterSpeeds.withIndex()) {
+            val on = kotlin.math.abs(i - setPos) < 0.5f
+            val t = measurer.measure(sp.first, androidx.compose.ui.text.TextStyle(
+                color = if (on) Palette.led else Palette.cream.copy(alpha = 0.55f), fontSize = 8.sp,
+                fontWeight = if (on) FontWeight.Bold else FontWeight.Normal))
+            drawText(t, topLeft = Offset(size.width - t.size.width - 2f, y(i.toFloat()) - t.size.height / 2f))
+        }
+        // the needle: a red pointer from the left edge
+        val ny = y(needle)
+        val over = stops > 0.3f; val under = stops < -0.3f
+        val c = if (over || under) Palette.led else Color(0xFF7CFF6B)
+        drawLine(c, Offset(0f, ny), Offset(size.width * 0.45f, ny), 3f)
+    }
 }
 
 @Composable

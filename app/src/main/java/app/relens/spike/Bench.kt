@@ -60,6 +60,7 @@ class Bench(private val ctx: Context, private val ui: (String) -> Unit) {
         // The app owns files/models (a folder adb creates is not listable by the app).
         File(dir, "models").mkdirs()
         if ("setup" in flags) { log("SETUP DONE"); log("BENCH DONE"); return }
+        if ("arprobe" in flags) { arProbe(); File(dir, "bench.txt").writeText(report.toString()); log("BENCH DONE"); return }
         if ("probe" in flags) { CameraProbe.report(ctx).forEach(::log); File(dir, "bench.txt").writeText(report.toString()); log("BENCH DONE"); return }
         if ("develop" in flags) { developOnce(flags); File(dir, "bench.txt").writeText(report.toString()); log("BENCH DONE"); return }
         val t0 = System.nanoTime()
@@ -295,6 +296,22 @@ class Bench(private val ctx: Context, private val ui: (String) -> Unit) {
         print.file.copyTo(File(outDir, "develop_${str("tag") ?: "print"}.jpg"), overwrite = true)
         File(print.file.parentFile, "last_depth.png").takeIf { it.exists() }?.copyTo(File(outDir, "depth_${str("tag") ?: "print"}.png"), overwrite = true)
         log("developed: ${print.timings}")
+    }
+
+    /** What ARCore offers on this phone: for Parallax capture (pose) and Raw Depth (a check). */
+    private fun arProbe() {
+        val av = runCatching { com.google.ar.core.ArCoreApk.getInstance().checkAvailability(ctx) }
+        log("ARCore availability: ${av.getOrNull() ?: av.exceptionOrNull()?.message}")
+        val s = runCatching { com.google.ar.core.Session(ctx, java.util.EnumSet.of(com.google.ar.core.Session.Feature.SHARED_CAMERA)) }
+        val session = s.getOrNull()
+        if (session == null) { log("ARCore session (shared camera) failed: ${s.exceptionOrNull()?.javaClass?.simpleName}: ${s.exceptionOrNull()?.message}") }
+        val plain = session ?: runCatching { com.google.ar.core.Session(ctx) }.onFailure { log("ARCore session failed: ${it.message}") }.getOrNull() ?: return
+        log("ARCore session ok, shared camera ${session != null}")
+        for (m in com.google.ar.core.Config.DepthMode.values()) log("  depth mode $m supported ${plain.isDepthModeSupported(m)}")
+        val filter = com.google.ar.core.CameraConfigFilter(plain)
+        for (c in plain.getSupportedCameraConfigs(filter))
+            log("  camera config: id ${c.cameraId} cpu ${c.imageSize} gpu ${c.textureSize} fps ${c.fpsRange} depth sensor ${c.depthSensorUsage} facing ${c.facingDirection}")
+        plain.close()
     }
 
     private fun save(b: Bitmap, f: File) {

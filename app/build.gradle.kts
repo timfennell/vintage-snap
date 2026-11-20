@@ -54,6 +54,8 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:$camerax")
     implementation("androidx.camera:camera-compose:$camerax")
     implementation("androidx.exifinterface:exifinterface:1.4.1")
+    // ARCore (optional on the phone): pose tracking for Parallax capture, Raw Depth as a check.
+    implementation("com.google.ar:core:1.57.0")
 
     // LiteRT (TFLite) 1.x: the classic Interpreter API and its GPU delegate.
     implementation("com.google.ai.edge.litert:litert:1.4.2")

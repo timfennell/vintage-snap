@@ -54,6 +54,8 @@ data class DevelopJob(
     val focalOverLong: Float = 0.68f,
     /** Autofocus locks from recent taps: measured distances at points of the frame. */
     val afSamples: List<app.relens.camera.AfSample> = emptyList(),
+    /** Stops over (+) or under (-) as the body's meter and shutter set it (0: as the phone metered). */
+    val exposureStops: Float = 0f,
 )
 
 class Print(
@@ -228,7 +230,7 @@ class Developer(private val context: Context) {
             tiltD = tiltD, keystone = Movements.keystone(job.lens, job.shiftMM),
             stock = job.stock, push = job.push, samples = 256, levelBias = -1f, filter = job.filter,
             tiltDeg = job.tiltDeg, flareGain = if (rp != null) 1f else 3f,
-            srcRect = srcRect, srcLinear = rp != null, exposure = exposure,
+            srcRect = srcRect, srcLinear = rp != null, exposure = exposure * Math.pow(2.0, job.exposureStops.toDouble()).toFloat(),
             pointBoost = if (rp != null) 0f else 8f)
         if (!job.publish) eng.dump = { name, tex, dw, dh, level ->
             if (name == "coc work L0") {
@@ -289,8 +291,11 @@ class Developer(private val context: Context) {
             eng.extraLights = (eng.extraLights ?: emptyList()) + extra
             if (uw !== raw0) raw0.recycle(); uw.recycle()
         }.onFailure { app.relens.Trace.w("ultra-wide map failed", it) }
+        // The lights' flare is exposed as the picture is.
+        val stopGain = Math.pow(2.0, job.exposureStops.toDouble()).toFloat()
+        eng.extraLights = eng.extraLights?.map { LightSource(it.x, it.y, it.radius, FloatArray(3) { c -> it.energy[c] * stopGain }, it.blur, it.pixels) }
         val out = eng.develop(src, dispLo, guideLo, w, h, look); lap("lens+film")
-        if (rp != null) app.relens.Trace.i("developed from RAW, exposure x%.2f".format(exposure))
+        Trace.i("exposure: %+.1f stops by the meter and shutter%s".format(job.exposureStops, if (rp != null) ", RAW matched x%.2f".format(exposure) else ""))
         app.relens.Trace.i("lights: " + eng.lights.joinToString { "(%.0f,%.0f r%.0f e%.0f blur%.0f)".format(it.x, it.y, it.radius, it.luma, it.blur) })
         val buf = ByteBuffer.allocateDirect(w * h * 4).order(ByteOrder.nativeOrder())
         g.readRgba8(out, w, h, buf); buf.position(0)

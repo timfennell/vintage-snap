@@ -28,6 +28,12 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.pow
 
+/** The shutter dial (Vintage Click's speeds): label, seconds. */
+val shutterSpeeds: List<Pair<String, Float>> = listOf(
+    "1" to 1f, "2" to 1f / 2, "4" to 1f / 4, "8" to 1f / 8, "15" to 1f / 15, "30" to 1f / 30,
+    "60" to 1f / 60, "125" to 1f / 125, "250" to 1f / 250, "500" to 1f / 500,
+    "1000" to 1f / 1000, "2000" to 1f / 2000, "4000" to 1f / 4000)
+
 /** A frame in the darkroom: developing, developed or failed. */
 class DarkroomEntry(val frame: Int, val label: String) {
     var preview by mutableStateOf<Bitmap?>(null)
@@ -60,6 +66,8 @@ class Body(app: Application) : AndroidViewModel(app) {
             if (!collimating) rig.manualFocus(focusM?.let { if (it.isInfinite()) 0f else 1f / it })
         }
     var stockIndex by mutableIntStateOf(prefs.getInt("stock", 1)); private set
+    /** The shutter dial: index into [shutterSpeeds] (fractional while turning). */
+    var shutterPos by mutableFloatStateOf(prefs.getFloat("shutter", 7f))
     /** The filter on the lens (index into lensFilters; 0 = none). */
     var filterIndex by mutableIntStateOf(prefs.getInt("filter", 0)); private set
     val filter get() = lensFilters[filterIndex]
@@ -84,6 +92,36 @@ class Body(app: Application) : AndroidViewModel(app) {
 
     val lens get() = lensBag[lensIndex]
 
+    // ---- exposure: the meter and the shutter (Vintage Click's CameraBody) ----
+    val shutterSeconds: Float get() {
+        val i = shutterPos.coerceIn(0f, (shutterSpeeds.size - 1).toFloat())
+        val a = i.toInt().coerceAtMost(shutterSpeeds.size - 2); val t = i - a
+        return shutterSpeeds[a].second * (shutterSpeeds[a + 1].second / shutterSpeeds[a].second).pow(t)
+    }
+    /** Reciprocity failure past 1/4 s: film answers less than the time suggests (meters don't know). */
+    private fun reciprocity(t: Float) = if (t <= 0.25f) 0f else (if (stock.blackAndWhite) 0.5f else 0.25f) * kotlin.math.log2(t / 0.25f)
+    /**
+     * Stops over (+) or under (-) for the film: the scene's EV as metered, against the EV of
+     * the f-number and speed at the rated EI, less the filter's light and reciprocity.
+     */
+    fun exposureStops(sceneEV: Float): Float {
+        val n = fNumber; val t = shutterSeconds
+        val ev = kotlin.math.log2(n * n / t) - kotlin.math.log2(ratedEI / 100f)
+        return sceneEV - ev - filter.stops - reciprocity(t)
+    }
+    /** Where on the shutter scale the meter's needle points (the speed for a correct exposure). */
+    fun meteredShutterPos(sceneEV: Float): Float {
+        val n = fNumber
+        // t for 0 stops (ignoring reciprocity, as a meter does)
+        val tStar = n * n / 2f.pow(sceneEV - filter.stops + kotlin.math.log2(ratedEI / 100f))
+        // fractional index by log time
+        val logs = shutterSpeeds.map { kotlin.math.log2(it.second) }
+        val lt = kotlin.math.log2(tStar)
+        if (lt >= logs.first()) return 0f - (lt - logs.first())
+        for (i in 0 until logs.size - 1) if (lt <= logs[i] && lt >= logs[i + 1]) return i + (logs[i] - lt) / (logs[i] - logs[i + 1])
+        return (logs.size - 1).toFloat() + (logs.last() - lt)
+    }
+
     // ---- collimating: each camera's focus readings against true distances ----
     /** Collimating: taps measure, the ring is set to the true distance (and doesn't drive the lens). */
     var collimating by mutableStateOf(false)
@@ -102,6 +140,7 @@ class Body(app: Application) : AndroidViewModel(app) {
         val m = focusM ?: run { collimationNote = "turn the ring to the target's distance"; return }
         val trueD = if (m.isInfinite()) 0f else 1f / m
         collimation.add(Pair(raw, trueD))
+        Trace.i("collimation target ${collimation.size}: camera read %.3f D (%.2f m raw), ring says %.2f m".format(raw, 1 / maxOf(raw, 1e-3f), m))
         val id = rig.currentCameraId ?: "0"
         val (o, k) = if (collimation.size >= 2) {
             val (r1, t1) = collimation[collimation.size - 2]; val (r2, t2) = collimation.last()
@@ -115,8 +154,9 @@ class Body(app: Application) : AndroidViewModel(app) {
         rig.afCalibration[id] = Pair(o, k)
         prefs.edit().putString("afcal_$id", "$o,$k").apply()
         Trace.i("collimated camera $id: reading = %.3f + %.3f x true (from ${collimation.size} targets)".format(o, k))
-        collimationNote = if (collimation.size >= 2) "camera $id collimated: offset %.2f, scale %.2f. Done.".format(o, k)
-            else "offset set (%.2f). A second target at another distance sets the scale.".format(o)
+        val got = "read %.2f m raw, set %.2f m".format(1 / maxOf(raw, 1e-3f), m)
+        collimationNote = if (collimation.size >= 2) "$got · camera $id collimated (offset %.2f, scale %.2f)".format(o, k)
+            else "$got · now a second target at another distance".format(o)
         if (collimation.size >= 2) { collimating = false; focusPos = Float.NaN }   // back to autofocus, corrected
     }
 
@@ -214,7 +254,7 @@ class Body(app: Application) : AndroidViewModel(app) {
 
     fun save() {
         prefs.edit().putInt("lens", lensIndex).putFloat("aperture", aperturePos).putFloat("focus", focusPos)
-            .putInt("stock", stockIndex).putInt("filter", filterIndex).putInt("push", push).putInt("frames", framesShot).putInt("roll", rollNumber).apply()
+            .putInt("stock", stockIndex).putFloat("shutter", shutterPos).putInt("filter", filterIndex).putInt("push", push).putInt("frames", framesShot).putInt("roll", rollNumber).apply()
     }
 
     fun shoot(onShot: () -> Unit = {}) {
@@ -227,6 +267,8 @@ class Body(app: Application) : AndroidViewModel(app) {
         val fx = focusX; val fy = focusY
         val tilt = floatArrayOf(tiltX, tiltY); val shift = floatArrayOf(shiftX, shiftY)
         val filter = filter
+        // the exposure at the shutter: the hero frame's metered brightness against the settings
+        val stops = (rig.lastEV ?: rig.sceneEV.value)?.let { exposureStops(it) } ?: 0f
         val moved = when (lens.movement) {
             is Movement.Tilt -> if (tiltX != 0f || tiltY != 0f) " · tilt %.0f°".format(kotlin.math.hypot(tiltX, tiltY)) else ""
             is Movement.Shift -> if (shiftX != 0f || shiftY != 0f) " · shift %.0f/%.0f mm".format(shiftX, shiftY) else ""
@@ -263,7 +305,7 @@ class Body(app: Application) : AndroidViewModel(app) {
                 val p = developer.develop(DevelopJob(exp.jpeg, exp.dng, fx, fy, exp.cameraFocusD, lens, n, fm, stock, push, frame, tilt, shift,
                     filter = filter, crop = framing.crop, focalOverLong = framing.camera.focalMM / framing.camera.sensorLongMM,
                     // the sweep's distances, measured on this very frame
-                    afSamples = swept))
+                    afSamples = swept, exposureStops = stops))
                 entry.preview = p.preview; entry.original = p.original
                 entry.status = if (p.uri != null) "in Pictures/Relens · ${p.timings}" else "saved in the app · ${p.timings}"
                 entry.done = true

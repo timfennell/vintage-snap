@@ -112,6 +112,12 @@ class Rig(private val context: Context) {
     private val _focusD = MutableStateFlow<Float?>(null)
     /** The phone lens's focus distance now, dioptres (the focus ring follows it). */
     val liveFocusD: StateFlow<Float?> = _focusD
+    private val _sceneEV = MutableStateFlow<Float?>(null)
+    /**
+     * The scene's brightness as the phone's own auto-exposure metered it, EV at ISO 100:
+     * log2(N^2 / t) - log2(ISO / 100), smoothed (a reflected-light meter, for the body's meter).
+     */
+    val sceneEV: StateFlow<Float?> = _sceneEV
     private val _framing = MutableStateFlow<Framing?>(null)
     val framing: StateFlow<Framing?> = _framing
     private val _error = MutableStateFlow<String?>(null)
@@ -133,6 +139,8 @@ class Rig(private val context: Context) {
     private var characteristics: CameraCharacteristics? = null
     private var texture: SurfaceTexture? = null
     @Volatile private var lastFocusD: Float? = null
+    /** The scene EV at the latest frame (unsmoothed): the hero frame's brightness at the shutter. */
+    @Volatile var lastEV: Float? = null; private set
     @Volatile private var lastUwResult: CaptureResult? = null
     @Volatile private var afWatch = false
     @Volatile private var manualWatch = false
@@ -281,6 +289,17 @@ class Rig(private val context: Context) {
         override fun onCaptureCompleted(s: CameraCaptureSession, r: CaptureRequest, result: TotalCaptureResult) {
             lastResult = result
             val own = if (logicalOpen) heroId?.let { result.physicalCameraTotalResults[it] } ?: result else result
+            // The meter: the phone's auto-exposure, as a scene brightness.
+            run {
+                val t = own.get(CaptureResult.SENSOR_EXPOSURE_TIME); val iso = own.get(CaptureResult.SENSOR_SENSITIVITY)
+                val n = own.get(CaptureResult.LENS_APERTURE) ?: 1.88f
+                if (t != null && iso != null && t > 0) {
+                    val ev = (Math.log((n * n) / (t / 1e9)) / Math.log(2.0) - Math.log(iso / 100.0) / Math.log(2.0)).toFloat()
+                    val prev = _sceneEV.value
+                    _sceneEV.value = if (prev == null) ev else prev + (ev - prev) * 0.15f
+                    lastEV = ev
+                }
+            }
             // After the ring moves: where the lens actually went (a few frames later).
             if (manualWatch && result.frameNumber % 15 == 0L) {
                 manualWatch = false
