@@ -20,6 +20,9 @@ class LightSource(val x: Float, val y: Float, val radius: Float, val energy: Flo
 object Flare {
     const val MAX_LIGHTS = 8
     const val ROWS = 4 + 3 * MAX_LIGHTS + 1      // lens, filter, 3 per light, the leak row
+    /** How much brighter than white a clipped light really is: a small lamp, a big window. */
+    var HOT_SMALL = 400f
+    var HOT_LARGE = 40f
 
     /** Joins bright tiles (8-neighbours) into lights; the [MAX_LIGHTS] brightest. */
     fun join(tw: Int, th: Int, energy: FloatArray, where: FloatArray): List<LightSource> {
@@ -58,7 +61,33 @@ object Flare {
     }
 
     /** Older and odd optics are single-coated: brighter, more colourful ghosts. */
-    fun singleCoated(l: Lens) = l.collection in listOf("Exotic", "Toys & Mods") || l.name.contains("Petzval") || l.name.contains("Hoga")
+    fun singleCoated(l: Lens) = l.collection in listOf("Exotic", "Toys & Mods", "Screw-Mount Classics") ||
+        listOf("Petzval", "Hoga", "Solnce", "Triplan", "f/0.95 Dream", "Noctar").any { l.name.contains(it) }
+
+    /**
+     * How prone each lens is to flare, after the real lens it is modelled on (Tim): the
+     * multi-coated magazine kit and the macros hold contrast; the single-coated screw-mount
+     * primes flare more; among the bokeh monsters the Soviet 58, the dream f/0.95 and the
+     * Trioplan-style 100 flare hard while the Noct-style 58 and the 85 stay moderate; the
+     * rangefinder's f/1.0 and pre-aspherical f/1.4s glow and flare; old exotics flare.
+     * Multiplies the lens's own flareBoost (the whacked lenses' gap already has its own).
+     */
+    fun flareProne(l: Lens): Float {
+        val byName = listOf(
+            "Solnce" to 2.2f, "f/0.95 Dream" to 2.0f, "Triplan" to 1.8f, "Noctar" to 2.2f, "Summilar 50mm" to 1.8f,
+            "Summilar 75mm" to 1.5f, "Summax 35mm" to 1.2f, "Petzval" to 1.8f, "Imago" to 1.5f, "Apollo" to 1.5f,
+            "Fisheye" to 1.5f, "Kor 13mm" to 1.3f, "Reflex" to 0.8f, "200mm f/2 White" to 0.6f, "Nocturne" to 1.0f,
+            "Kor 85mm f/1.4" to 0.9f, "135mm f/2 DC" to 0.9f, "Elmarit 90mm" to 0.9f, "Tele-Elmax" to 0.8f,
+        ).firstOrNull { l.name.contains(it.first) }?.second
+        return byName ?: when (l.collection) {
+            "Field Assignment" -> 0.7f
+            "Macro" -> 0.7f
+            "Screw-Mount Classics" -> 1.6f
+            "Toys & Mods" -> 1.4f
+            "Exotic" -> 1.3f
+            else -> 1f
+        }
+    }
     /** Dust and cleaning marks: every lens some, the old, rare and home-made more. */
     fun dustGrade(l: Lens) = when (l.collection) { "Toys & Mods" -> 3; "Exotic", "Screw-Mount Classics", "Bokeh Monsters" -> 2; else -> 1 }
     /** Seed bubbles in the glass: the old Soviet and Jena lenses'. */
@@ -87,7 +116,15 @@ object Flare {
             0.15f + (kotlin.math.abs(lens.curvatureRadial) + kotlin.math.abs(lens.curvatureTangential)) * 0.6f + kotlin.math.abs(lens.sphericalAberration) * 0.3f)
         row(3, if (filter.isNone) 0f else 1f, 0f, 0f, 0f)
         for ((i, s) in lights.withIndex()) {
-            val k = gain * lens.flareBoost / npx
+            // A lamp's face clips the sensor: what was measured is "white", while the light is
+            // tens of times brighter (Vintage Click's lights carry their true radiance). A
+            // clipped light gets that back: most for a small, compact source, less for a big
+            // bright area (a window), which would otherwise veil everything.
+            val perPx = s.luma / maxOf(s.pixels, 1)
+            val area = s.pixels / npx
+            val hot = if (perPx < 0.85f) 1f
+                else (HOT_SMALL * Math.pow((HOT_LARGE / HOT_SMALL).toDouble(), smoothstep(0.002f, 0.03f, area).toDouble()).toFloat())
+            val k = gain * lens.flareBoost * flareProne(lens) * hot / npx
             // Off the picture (found in the camera's wider frame): its flare fades as it goes,
             // rather than stopping at a line (Flare.swift).
             val u = s.x / w; val v = s.y / h

@@ -58,7 +58,15 @@ void main() {
         // green on a red row has red beside it, blue above and below
         rgb = c == 1 ? vec3(rowC, C, colC) : vec3(colC, C, rowC);
     }
-    rgb = max(rgb, 0.0) / max(uNeutral, vec3(1e-4));        // white balance
+    // Clipped highlights: once a channel reaches the sensor's white, the others can't be
+    // trusted against it, and white balance would lift red and blue over the clipped green
+    // (a lamp's face turns magenta). Near the clip, each balanced channel is held to the
+    // level where the first one clipped: blown highlights go white, as on film.
+    float rawMax = max(rgb.r, max(rgb.g, rgb.b));
+    vec3 nb = max(uNeutral, vec3(1e-4));
+    rgb = max(rgb, 0.0) / nb;                                    // white balance
+    float clipAt = 1.0 / max(nb.r, max(nb.g, nb.b));
+    rgb = mix(rgb, min(rgb, vec3(clipAt)), smoothstep(0.88, 0.99, rawMax));
     vec3 xyz = uCamToXyz * rgb;
     const mat3 XYZ_TO_SRGB_D50 = mat3(                         // Bradford-adapted D50 -> linear sRGB (columns)
         3.1338561, -0.9787684, 0.0719453,
