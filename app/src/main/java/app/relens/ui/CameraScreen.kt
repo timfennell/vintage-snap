@@ -434,7 +434,7 @@ private fun SharpBand(body: Body, modifier: Modifier) {
     val tilt = Movements.tiltDioptres(lens, floatArrayOf(body.tiltX, body.tiltY))
     val g = kotlin.math.hypot(tilt[0], tilt[1])
     if (g < 1e-4f) return
-    Canvas(modifier) {
+    Canvas(modifier.wireLayer()) {
         val hd = kotlin.math.hypot(size.width / 2, size.height / 2)
         // depth of field in dioptres either side (0.03 mm circle), over the plane's slope across the frame
         val f = lens.focalMM / 1000f
@@ -445,32 +445,40 @@ private fun SharpBand(body: Body, modifier: Modifier) {
         val along = Offset(-dir.y, dir.x)
         val c = Offset(body.focusX * size.width, body.focusY * size.height)
         val L = size.maxDimension * 1.5f
-        val band = androidx.compose.ui.graphics.Path().apply {
-            moveTo((c + dir * half - along * L).x, (c + dir * half - along * L).y)
-            lineTo((c + dir * half + along * L).x, (c + dir * half + along * L).y)
-            lineTo((c - dir * half + along * L).x, (c - dir * half + along * L).y)
-            lineTo((c - dir * half - along * L).x, (c - dir * half - along * L).y)
-            close()
-        }
-        drawPath(band, Color(0x22FF8A2A))
-        val dash = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(14f, 10f))
-        drawLine(Color(0xAAFF8A2A), c + dir * half - along * L, c + dir * half + along * L, 2f, pathEffect = dash)
-        drawLine(Color(0xAAFF8A2A), c - dir * half - along * L, c - dir * half + along * L, 2f, pathEffect = dash)
+        // as the parallax guide draws (Vintage Click's light heads): the band's edges in warm
+        // light, a faint cream line through the focus point
+        wire(c + dir * half - along * L, c + dir * half + along * L, WIRE_WARM)
+        wire(c - dir * half - along * L, c - dir * half + along * L, WIRE_WARM)
+        wire(c - along * L, c + along * L, WIRE_CREAM.copy(alpha = 0.3f))
     }
 }
 
 /** A shift lens's guides: verticals and horizontals to straighten buildings against. */
 @Composable
 private fun ShiftGuides(modifier: Modifier) {
-    Canvas(modifier) {
-        val c = Color(0x44EDE3D0)
-        for (k in 1..5) {
-            val x = size.width * k / 6; drawLine(c, Offset(x, 0f), Offset(x, size.height), 1f)
-        }
-        for (k in 1..3) {
-            val y = size.height * k / 4; drawLine(c, Offset(0f, y), Offset(size.width, y), 1f)
-        }
+    Canvas(modifier.wireLayer()) {
+        val c = WIRE_CREAM.copy(alpha = 0.32f)
+        for (k in 1..5) { val x = size.width * k / 6; wire(Offset(x, 0f), Offset(x, size.height), c) }
+        for (k in 1..3) { val y = size.height * k / 4; wire(Offset(0f, y), Offset(size.width, y), c) }
     }
+}
+
+/** The wireframe colours of the parallax guide (ParallaxCapture): warm cream light, and paler. */
+private val WIRE_WARM = Color(1.0f, 0.80f, 0.55f, 0.80f)
+private val WIRE_CREAM = Color(1.0f, 0.92f, 0.80f, 0.55f)
+
+/** Light added onto the finder, as the wireframes are, not paint. */
+private fun Modifier.wireLayer() = this.graphicsLayer {
+    compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen
+    blendMode = androidx.compose.ui.graphics.BlendMode.Plus
+}
+
+/** A line as Vintage Click's wireframes draw it: a faint wide glow, a softer middle, then a fine core. */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.wire(a: Offset, b: Offset, colour: Color) {
+    val cap = androidx.compose.ui.graphics.StrokeCap.Round
+    drawLine(colour.copy(alpha = colour.alpha * 0.16f), a, b, 8.dp.toPx(), cap = cap)
+    drawLine(colour.copy(alpha = colour.alpha * 0.35f), a, b, 3.dp.toPx(), cap = cap)
+    drawLine(colour, a, b, 1.2.dp.toPx(), cap = cap)
 }
 
 /**
