@@ -75,6 +75,7 @@ fun LightTableScreen(body: Body, onBack: () -> Unit, openBench: () -> Unit, init
     BackHandler(onBack = onBack)
     var scale by remember { mutableFloatStateOf(initialScale) }
     var pan by remember { mutableStateOf(Offset.Zero) }
+    var viewing by remember { mutableStateOf<DarkroomEntry?>(null) }
     val measurer = rememberTextMeasurer()
     // The session's frames by roll, oldest first, cut into strips of six.
     val byRoll = body.darkroom.groupBy { it.roll }.toSortedMap().mapValues { (_, l) -> l.sortedBy { it.frame } }
@@ -116,6 +117,13 @@ fun LightTableScreen(body: Body, onBack: () -> Unit, openBench: () -> Unit, init
                             pan = if (ns == 1f) Offset.Zero else p - (p - pan) * (ns / scale)
                             scale = ns
                         },
+                        onTap = { p ->
+                            val q = toSheet(p)
+                            for ((i, st) in strips.withIndex()) {
+                                val r = stripRect(i, st.size)
+                                for ((j, e) in st.withIndex()) if (e.preview != null && frameRect(r, j).contains(q)) { viewing = e; return@detectTapGestures }
+                            }
+                        },
                         onLongPress = { p ->
                             val q = toSheet(p)
                             for ((i, st) in strips.withIndex()) {
@@ -152,11 +160,61 @@ fun LightTableScreen(body: Body, onBack: () -> Unit, openBench: () -> Unit, init
         val developing = body.darkroom.count { !it.done && it.preview == null }
         val foot = listOfNotNull(rolls.ifEmpty { null }, "${body.darkroom.size} frames",
             if (developing > 0) "$developing in the darkroom" else null,
-            if (scale >= 2f) "loupe %.1fx".format(scale) else "pinch to look closer", "hold a frame to mark it").joinToString("  ·  ")
+            if (scale >= 2f) "loupe %.1fx".format(scale) else "pinch to look closer", "tap a frame to see it", "hold to mark it").joinToString("  ·  ")
         Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color(0xE6141312)).navigationBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp)) {
             Text(foot, color = Palette.cream, fontSize = 11.sp, modifier = Modifier.align(Alignment.CenterStart))
             Text("bench ›", color = Palette.dim, fontSize = 11.sp, modifier = Modifier.align(Alignment.CenterEnd).clickable(onClick = openBench))
         }
+        viewing?.let { e -> PrintView(e) { viewing = null } }
+    }
+}
+
+/**
+ * A frame held up on its own: the print, full screen; hold it to see the phone's own
+ * picture (what the lens and film made of it); tap to put it back.
+ */
+@Composable
+private fun PrintView(e: DarkroomEntry, onClose: () -> Unit) {
+    BackHandler(onBack = onClose)
+    var big by remember(e) { mutableStateOf<Bitmap?>(null) }
+    var showOriginal by remember { mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(e) {
+        big = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            e.file?.takeIf { it.exists() }?.let { f -> runCatching {
+                val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                android.graphics.BitmapFactory.decodeFile(f.absolutePath, o)
+                var ss = 1; while (maxOf(o.outWidth, o.outHeight) / (ss * 2) >= 2400) ss *= 2
+                android.graphics.BitmapFactory.decodeFile(f.absolutePath, android.graphics.BitmapFactory.Options().apply { inSampleSize = ss })
+            }.getOrNull() }
+        }
+    }
+    // after a restart the phone's picture isn't in memory: the negative it was shot as (uncropped)
+    var negative by remember(e) { mutableStateOf<Bitmap?>(null) }
+    androidx.compose.runtime.LaunchedEffect(e) {
+        if (e.original != null) return@LaunchedEffect
+        negative = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching {
+            val dir = e.file?.parentFile?.parentFile?.let { java.io.File(it, "negatives") } ?: return@runCatching null
+            val f = dir.listFiles { x -> x.name.startsWith("R%03d_F%02d_".format(e.roll, e.frame)) && x.name.count { it == '.' } == 1 && x.name.endsWith(".jpg") }
+                ?.maxByOrNull { it.lastModified() } ?: return@runCatching null
+            val b = android.graphics.BitmapFactory.decodeFile(f.absolutePath, android.graphics.BitmapFactory.Options().apply { inSampleSize = 2 })
+            val deg = when (androidx.exifinterface.media.ExifInterface(f).getAttributeInt(androidx.exifinterface.media.ExifInterface.TAG_ORIENTATION, 1)) {
+                androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+                androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+                androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+                else -> 0f }
+            if (deg == 0f) b else Bitmap.createBitmap(b, 0, 0, b.width, b.height, android.graphics.Matrix().apply { postRotate(deg) }, true)
+        }.getOrNull() }
+    }
+    val source = e.original ?: negative
+    val shown = (if (showOriginal) source else null) ?: big ?: e.preview
+    Box(Modifier.fillMaxSize().background(Color(0xF2050505))
+        .pointerInput(e) { detectTapGestures(onTap = { onClose() }, onPress = { if (source != null) { showOriginal = true; tryAwaitRelease(); showOriginal = false } }) },
+        contentAlignment = Alignment.Center) {
+        shown?.let { androidx.compose.foundation.Image(it.asImageBitmap(), null, contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+            modifier = Modifier.fillMaxSize().padding(12.dp)) }
+        Text((if (showOriginal) "the phone's own picture · " else "") + e.label + if (source != null && !showOriginal) "  ·  hold to see the phone's picture" else "",
+            color = Palette.cream, fontSize = 11.sp,
+            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp))
     }
 }
 

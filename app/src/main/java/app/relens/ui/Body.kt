@@ -38,6 +38,8 @@ val shutterSpeeds: List<Pair<String, Float>> = listOf(
 class DarkroomEntry(val frame: Int, val label: String, val roll: Int = 0, val stock: String = "", val bw: Boolean = false) {
     /** Ringed on the light table as a keeper (in red china marker). */
     var marked by mutableStateOf(false)
+    /** The print's file (for the full view). */
+    var file: File? = null
     var preview by mutableStateOf<Bitmap?>(null)
     var original by mutableStateOf<Bitmap?>(null)
     var status by mutableStateOf("developing…")
@@ -257,7 +259,7 @@ class Body(app: Application) : AndroidViewModel(app) {
             }
             val o = android.graphics.BitmapFactory.Options().apply { inSampleSize = 2 }
             e.preview = android.graphics.BitmapFactory.decodeFile(f.absolutePath, o)
-            e.status = "saved"; e.done = true
+            e.status = "saved"; e.done = true; e.file = f
             e.marked = isMarked(e.roll, e.frame)
             loaded += e
         }
@@ -444,7 +446,7 @@ class Body(app: Application) : AndroidViewModel(app) {
                     // the sweep's distances, measured on this very frame
                     afSamples = swept, exposureStops = stops, saveDng = dngOut))
                 if (lockRaw != null && p.arFocusD != null) learnFocus(heroCam, lockRaw, p.arFocusD)
-                entry.preview = p.preview; entry.original = p.original
+                entry.preview = p.preview; entry.original = p.original; entry.file = p.file
                 // the light table finds it again after a restart
                 runCatching {
                     File(p.file.parentFile, p.file.nameWithoutExtension + ".json").writeText(org.json.JSONObject()
