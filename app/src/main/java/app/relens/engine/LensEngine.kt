@@ -81,6 +81,8 @@ class LensEngine(private val gl: Gl) {
     var lights: List<LightSource> = emptyList(); private set
     /** Lights found beforehand over a larger frame (the camera's uncropped one), in this frame's pixels. */
     var extraLights: List<LightSource>? = null
+    /** What lies behind the foreground (rgb, alpha = how much to trust it), from a parallax capture; 0: none. */
+    var plateTex = 0
 
     /** Finds the lights in an RGBA8 picture (sRGB): tile energies above the threshold, joined. */
     fun findLights(tex: Int, w: Int, h: Int, srgb: Boolean = true, threshold: Float = 0.9f): List<LightSource> {
@@ -243,6 +245,8 @@ class LensEngine(private val gl: Gl) {
             GLES30.glBindBufferBase(GLES31.GL_UNIFORM_BUFFER, 0, ubo)
             gl.sampler(p, "uWork", 0, work)
             gl.sampler(p, "uTiles", 1, tilesA)
+            if (plateTex != 0) gl.sampler(p, "uPlate", 2, plateTex)
+            gl.u1i(p, "uHasPlate", if (plateTex != 0) 1 else 0)
             gl.image(0, lin, GLES30.GL_RGBA16F)       // lin is free again: the blur goes there
             gl.u1i(p, "uN", n)
             gl.u1f(p, "uMaxLevel", (levels - 1).toFloat())

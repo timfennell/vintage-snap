@@ -28,6 +28,8 @@ uniform float uHalfDiag;
 uniform vec4 uLens;              // (blades, blade rotation, cat's eye, soap bubble)
 uniform vec2 uLens2;             // (central obstruction, open = N wide open / N)
 uniform ivec2 uOffset;           // this strip's origin (the frame is gathered in strips)
+uniform sampler2D uPlate;        // what lies behind the foreground (rgb; a: trust), from the parallax side frames
+uniform int uHasPlate;
 
 float shape_norm(vec2 l, vec2 q) {
     float r = length(l);
@@ -116,6 +118,11 @@ void main() {
     vec3 col = ownC / ownW;
     if (behN > 0.0) {
         vec3 beh = behW > 1e-6 ? behC / behW : behAny / behN;
+        // Seen from the side frames: the real background behind this surface, where there is one.
+        if (uHasPlate == 1) {
+            vec4 pl = textureLod(uPlate, pc * inv, 0.0);
+            beh = mix(beh, pl.rgb, pl.a);
+        }
         col = mix(beh, col, clamp(ownCov, 0.0, 1.0));
     }
     if (nearW > 1e-6) col = mix(col, nearC / nearW, clamp(nearCov, 0.0, 1.0));

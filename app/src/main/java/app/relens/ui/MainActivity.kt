@@ -83,7 +83,7 @@ class MainActivity : ComponentActivity() {
                     val job = app.relens.engine.DevelopJob(java.io.File(dir, "$neg.jpg"), java.io.File(dir, "$neg.dng").takeIf { it.exists() },
                         intent.getFloatExtra("fx", 0.5f), intent.getFloatExtra("fy", 0.5f), null, lens,
                         intent.getFloatExtra("f", lens.maxAperture), fm, stock, 0, 0, publish = false,
-                        crop = intent.getFloatExtra("crop", 0f), focalOverLong = 5.56f / 8.19f, saveDng = intent.getBooleanExtra("dng", false))
+                        crop = intent.getFloatExtra("crop", 0f), focalOverLong = 5.56f / 8.19f, saveDng = intent.getBooleanExtra("dng", false), plate = !intent.getBooleanExtra("noplate", false))
                     val r = runCatching { body.developer.develop(job) }
                     r.getOrNull()?.file?.copyTo(java.io.File(getExternalFilesDir("tests"), "redevelop_$neg.jpg"), overwrite = true)
                     android.util.Log.i("Relens", "redevelop $neg: ${r.getOrNull()?.timings ?: r.exceptionOrNull()?.message}")

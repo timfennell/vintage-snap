@@ -58,6 +58,8 @@ data class DevelopJob(
     val exposureStops: Float = 0f,
     /** Also save a linear DNG of the relensed picture (before the film) beside the print. */
     val saveDng: Boolean = false,
+    /** Use the parallax side frames for what lies behind the foreground (off: compare). */
+    val plate: Boolean = true,
 )
 
 class Print(
@@ -231,6 +233,13 @@ class Developer(private val context: Context) {
             dispA = 0f; dispB = (camD ?: (1f / 1.5f)) / maxOf(dTap, 0.02f)
         }
         val subjectD = maxOf(dispA + dispB * dTap, 0.02f)
+        // What lies behind the foreground, from the parallax side frames (for the blur's edges).
+        eng.plateTex = 0
+        ar?.takeIf { job.plate }?.plate(dm, dispA, dispB, photo.bmp)?.let { pl ->
+            val t = g.texture(dm.w, dm.h, GLES30.GL_RGBA16F)
+            g.upload(t, dm.w, dm.h, GLES30.GL_RGBA, GLES30.GL_FLOAT, floatBuffer(pl))
+            eng.plateTex = t; lap("plate")
+        }
         if (!job.publish) {
             // Bench: the calibrated depth as a picture (near white, 0.25 m ... 8 m on a log scale).
             val vis = DepthMap(dm.w, dm.h, FloatArray(dm.data.size) {
@@ -327,6 +336,7 @@ class Developer(private val context: Context) {
         app.relens.Trace.i("lights: " + eng.lights.joinToString { "(%.0f,%.0f r%.0f e%.0f blur%.0f)".format(it.x, it.y, it.radius, it.luma, it.blur) })
         val buf = ByteBuffer.allocateDirect(w * h * 4).order(ByteOrder.nativeOrder())
         g.readRgba8(out, w, h, buf); buf.position(0)
+        if (eng.plateTex != 0) { g.deleteTextures(eng.plateTex); eng.plateTex = 0 }
         g.deleteTextures(src, dispLo, guideLo, out)
         val print = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { it.copyPixelsFromBuffer(buf) }
         lap("readback")

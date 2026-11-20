@@ -27,7 +27,12 @@ import kotlin.math.sqrt
  *    and ARCore decides which parts of the scene are near and far.
  */
 class ArDepth private constructor(private val fx: FloatArray, private val fy: FloatArray,
-                                  private val disp: FloatArray, private val wt: FloatArray, val match: Float) {
+                                  private val disp: FloatArray, private val wt: FloatArray, val match: Float,
+                                  private val geo: Geo? = null) {
+    /** How the parallax frames sit against the print: for the background plate. */
+    private class Geo(val dir: File, val frames: JSONObject, val rot: Int, val dx: Float, val dy: Float,
+                      val fullW: Int, val fullH: Int, val crop: Rect, val heroF: Float,
+                      val afx: Float, val afy: Float, val acx: Float, val acy: Float)
     val size get() = fx.size
 
     /** ARCore's own measurement near (fx, fy) on the print: the median disparity (1/m) of the
@@ -89,6 +94,144 @@ class ArDepth private constructor(private val fx: FloatArray, private val fy: Fl
             size, match, b, a, 1 / maxOf(a + b, 1e-3f), 1 / maxOf(a, 1e-3f), moved))
         return floatArrayOf(b, a)
     }
+
+    /**
+     * What lies behind the foreground, from the side frames (the disocclusion fill): for each
+     * point of the depth map's grid, the background's distance there (the farthest depth
+     * near it: behind a foreground edge the background carries on), that point found in the
+     * left and right frames (which saw round the foreground from either side), and of the
+     * two the one nearer the local background's colour. Colours are matched to the hero
+     * picture where all views see the same thing. Returns RGBA floats at dm.w x dm.h (linear,
+     * the hero's exposure; alpha: how far behind the background is, 0 where nothing is in
+     * front), or null.
+     */
+    fun plate(dm: DepthMap, dispA: Float, dispB: Float, photo: Bitmap): FloatArray? = runCatching {
+        val g = geo ?: return null
+        val c = g.frames.getJSONObject("centre")
+        val sides = listOf("left", "right").mapNotNull { n -> g.frames.optJSONObject(n)?.let { n to it } }
+        if (sides.isEmpty()) return null
+        fun pose(j: JSONObject) = FloatArray(16) { j.getJSONArray("pose").getDouble(it).toFloat() }
+        val pc = pose(c)
+        // each side: centre camera -> side camera, its intrinsics, its picture (linear, small)
+        class Side(val T: FloatArray, val k: FloatArray, val w: Int, val h: Int, val px: FloatArray)
+        val sv = sides.mapNotNull { (n, j) ->
+            val b = BitmapFactory.decodeFile(File(g.dir, "$n.jpg").absolutePath, BitmapFactory.Options().apply { inSampleSize = 2 }) ?: return@mapNotNull null
+            val inv = FloatArray(16); android.opengl.Matrix.invertM(inv, 0, pose(j), 0)
+            val T = FloatArray(16); android.opengl.Matrix.multiplyMM(T, 0, inv, 0, pc, 0)
+            val s = j.getInt("width") / b.width.toFloat()
+            val foc = j.getJSONArray("focal"); val pp = j.getJSONArray("principal")
+            val k = floatArrayOf(foc.getDouble(0).toFloat() / s, foc.getDouble(1).toFloat() / s, pp.getDouble(0).toFloat() / s, pp.getDouble(1).toFloat() / s)
+            val ip = IntArray(b.width * b.height); b.getPixels(ip, 0, b.width, 0, 0, b.width, b.height)
+            val lin = FloatArray(ip.size * 3)
+            for (i in ip.indices) { val q = ip[i]
+                lin[i * 3] = srgbToLin(((q shr 16) and 255) / 255f); lin[i * 3 + 1] = srgbToLin(((q shr 8) and 255) / 255f); lin[i * 3 + 2] = srgbToLin((q and 255) / 255f) }
+            Side(T, k, b.width, b.height, lin).also { b.recycle() }
+        }
+        if (sv.isEmpty()) return null
+        val w = dm.w; val h = dm.h
+        // metric disparity, and the background's: the smallest disparity (farthest) nearby,
+        // as wide as the largest blur could reach (a twentieth of the frame)
+        val disp = FloatArray(w * h) { maxOf(dispA + dispB * dm.data[it], 1e-3f) }
+        val rad = maxOf(2, w / 20)
+        val tmp = FloatArray(w * h); val far = FloatArray(w * h)
+        for (y in 0 until h) for (x in 0 until w) { var m = Float.MAX_VALUE
+            for (k in maxOf(0, x - rad)..minOf(w - 1, x + rad)) m = minOf(m, disp[y * w + k]); tmp[y * w + x] = m }
+        for (y in 0 until h) for (x in 0 until w) { var m = Float.MAX_VALUE
+            for (k in maxOf(0, y - rad)..minOf(h - 1, y + rad)) m = minOf(m, tmp[k * w + x]); far[y * w + x] = m }
+        // the hero picture, linear, at the grid
+        val ps = Bitmap.createScaledBitmap(photo, w, h, true)
+        val hp = IntArray(w * h); ps.getPixels(hp, 0, w, 0, 0, w, h); if (ps !== photo) ps.recycle()
+        val hero = FloatArray(w * h * 3) { i -> val q = hp[i / 3]; srgbToLin(((q shr (16 - 8 * (i % 3))) and 255) / 255f) }
+
+        val pIn = FloatArray(4); val pOut = FloatArray(4)
+        fun look(s: Side, fx: Float, fy: Float, z: Float, out: FloatArray): Boolean {
+            // print fraction -> upright-normalised -> the centre camera's sensor -> a point at z
+            val ux = (g.crop.left + fx * g.crop.width() - g.fullW / 2f) / g.heroF - g.dx
+            val uy = (g.crop.top + fy * g.crop.height() - g.fullH / 2f) / g.heroF - g.dy
+            val (sx, sy) = when (g.rot) { 90 -> Pair(uy, -ux); 180 -> Pair(-ux, -uy); 270 -> Pair(-uy, ux); else -> Pair(ux, uy) }
+            pIn[0] = sx * z; pIn[1] = -sy * z; pIn[2] = -z; pIn[3] = 1f
+            android.opengl.Matrix.multiplyMV(pOut, 0, s.T, 0, pIn, 0)
+            val d = -pOut[2]; if (d < 0.05f) return false
+            val u = s.k[2] + s.k[0] * pOut[0] / d; val v = s.k[3] - s.k[1] * pOut[1] / d
+            val xi = u.toInt(); val yi = v.toInt()
+            if (xi < 0 || yi < 0 || xi >= s.w || yi >= s.h) return false
+            val o = (yi * s.w + xi) * 3
+            out[0] = s.px[o]; out[1] = s.px[o + 1]; out[2] = s.px[o + 2]
+            return true
+        }
+        // colour: each side's gain against the hero where nothing is in front (own depth = background)
+        val gains = sv.map { s ->
+            val sh = DoubleArray(3); val ss = DoubleArray(3); val v = FloatArray(3)
+            for (y in 0 until h step 4) for (x in 0 until w step 4) {
+                val i = y * w + x
+                if (disp[i] > far[i] * 1.05f) continue
+                if (!look(s, (x + 0.5f) / w, (y + 0.5f) / h, 1f / disp[i], v)) continue
+                for (ch in 0..2) { sh[ch] += hero[i * 3 + ch]; ss[ch] += v[ch] }
+            }
+            FloatArray(3) { ch -> if (ss[ch] > 1e-6) (sh[ch] / ss[ch]).toFloat().coerceIn(0.2f, 5f) else 1f }
+        }
+        val out = FloatArray(w * h * 4)
+        val a = FloatArray(3); val b = FloatArray(3)
+        var filled = 0
+        for (y in 0 until h) for (x in 0 until w) {
+            val i = y * w + x
+            val behind = 1f - far[i] / disp[i]                    // 0: this is the background
+            if (behind < 0.12f) {
+                for (ch in 0..2) out[i * 4 + ch] = hero[i * 3 + ch]; out[i * 4 + 3] = 0f; continue
+            }
+            // the local background's colour: the hero's pixels nearby that are background
+            var br = 0f; var bg = 0f; var bb = 0f; var bn = 0f
+            for (dy in -rad..rad step maxOf(1, rad / 3)) for (dx in -rad..rad step maxOf(1, rad / 3)) {
+                val xx = x + dx; val yy = y + dy
+                if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue
+                val j = yy * w + xx
+                if (disp[j] > far[i] * 1.08f) continue
+                br += hero[j * 3]; bg += hero[j * 3 + 1]; bb += hero[j * 3 + 2]; bn++
+            }
+            val z = 1f / far[i]
+            if (bn == 0f) { for (ch in 0..2) out[i * 4 + ch] = hero[i * 3 + ch]; out[i * 4 + 3] = 0f; continue }
+            val lb0 = br / bn; val lb1 = bg / bn; val lb2 = bb / bn
+            // A side's sample counts only if it plainly looks like the background here and not
+            // like the foreground in front (an edge seen a centimetre off still shows the
+            // foreground): otherwise the blur keeps its own guess.
+            var bestErr = Float.MAX_VALUE; var got = false
+            for ((si, s) in sv.withIndex()) {
+                if (!look(s, (x + 0.5f) / w, (y + 0.5f) / h, z, a)) continue
+                for (ch in 0..2) a[ch] *= gains[si][ch]
+                val dB = kotlin.math.abs(a[0] - lb0) + kotlin.math.abs(a[1] - lb1) + kotlin.math.abs(a[2] - lb2)
+                val dF = kotlin.math.abs(a[0] - hero[i * 3]) + kotlin.math.abs(a[1] - hero[i * 3 + 1]) + kotlin.math.abs(a[2] - hero[i * 3 + 2])
+                if (dF < dB * 1.5f + 0.03f) continue
+                if (dB < bestErr) { bestErr = dB; got = true; b[0] = a[0]; b[1] = a[1]; b[2] = a[2] }
+            }
+            if (!got) { out[i * 4] = lb0; out[i * 4 + 1] = lb1; out[i * 4 + 2] = lb2; out[i * 4 + 3] = 0f; continue }
+            for (ch in 0..2) out[i * 4 + ch] = b[ch]
+            out[i * 4 + 3] = 0.75f * smoothstep(0.12f, 0.3f, behind)
+            filled++
+        }
+        // smooth it (it's seen behind blur, and the side frames are a little off): two box passes
+        val r2 = 3
+        val sm = FloatArray(w * h * 4)
+        for (pass in 0..1) {
+            val src = if (pass == 0) out else sm; val dst = if (pass == 0) sm else out
+            for (y in 0 until h) for (x in 0 until w) {
+                var acc0 = 0f; var acc1 = 0f; var acc2 = 0f; var acc3 = 0f; var n = 0
+                for (k in -r2..r2) {
+                    val xx = if (pass == 0) (x + k).coerceIn(0, w - 1) else x
+                    val yy = if (pass == 0) y else (y + k).coerceIn(0, h - 1)
+                    val j = (yy * w + xx) * 4
+                    acc0 += src[j]; acc1 += src[j + 1]; acc2 += src[j + 2]; acc3 += src[j + 3]; n++
+                }
+                val o = (y * w + x) * 4
+                dst[o] = acc0 / n; dst[o + 1] = acc1 / n; dst[o + 2] = acc2 / n; dst[o + 3] = acc3 / n
+            }
+        }
+        Trace.i("background plate: %dx%d, %d points filled from the side frames (gains L %s, R %s)".format(w, h, filled,
+            gains.getOrNull(0)?.joinToString("/") { "%.2f".format(it) } ?: "-", gains.getOrNull(1)?.joinToString("/") { "%.2f".format(it) } ?: "-"))
+        out
+    }.onFailure { Trace.w("background plate failed", it) }.getOrNull()
+
+    private fun smoothstep(a: Float, b: Float, x: Float): Float { val t = ((x - a) / (b - a)).coerceIn(0f, 1f); return t * t * (3 - 2 * t) }
+    private fun srgbToLin(c: Float) = if (c <= 0.04045f) c / 12.92f else Math.pow(((c + 0.055f) / 1.055f).toDouble(), 2.4).toFloat()
 
     companion object {
         /**
@@ -178,7 +321,8 @@ class ArDepth private constructor(private val fx: FloatArray, private val fy: Fl
             }
             Trace.i("ARCore depth: turn ${best.rot}°, offset %.3f, %.3f, match %.2f, %d of %d samples on the print".format(
                 best.dx, best.dy, best.score, fxs.size, total))
-            ArDepth(fxs.toFloatArray(), fys.toFloatArray(), ds.toFloatArray(), ws.toFloatArray(), best.score)
+            ArDepth(fxs.toFloatArray(), fys.toFloatArray(), ds.toFloatArray(), ws.toFloatArray(), best.score,
+                Geo(dir, frames, best.rot, best.dx, best.dy, fullW, fullH, crop, heroF, afx, afy, acx, acy))
         }.onFailure { Trace.w("ARCore depth not read", it) }.getOrNull()
 
         private class Reg(val rot: Int, val dx: Float, val dy: Float, val score: Float)
