@@ -50,6 +50,9 @@ data class PhoneCamera(
     val focusCalibration: Int = 0,
 )
 
+/** One autofocus lock after a tap: where (fractions of the lens's crop), the corrected distance (dioptres), when. */
+data class AfSample(val fx: Float, val fy: Float, val dioptres: Float, val cameraId: String, val timeMs: Long)
+
 /** How a lens is shot: which camera, how much of its frame (the crop factor), and what that leaves. */
 data class Framing(val camera: PhoneCamera, val crop: Float) {
     /** The print's long side in pixels (3:2: the short side is 2/3 of it). */
@@ -133,6 +136,27 @@ class Rig(private val context: Context) {
     @Volatile private var lastUwResult: CaptureResult? = null
     @Volatile private var afWatch = false
     private var lastAfState = -1
+    private var tapX = 0.5f; private var tapY = 0.5f
+
+    /**
+     * Each camera's focus-distance calibration: reading = offset + scale x true dioptres.
+     * "Approximate" readings can be well off: the Nothing's periscope locks focus right but
+     * reads a chair at 3 m (0.33 D) as 1.13 D and a table at 5 m (0.20 D) as 0.86 D, so
+     * offset 0.45, scale 2.0 (Tim's measurement, 2026-11-19). Others: as read.
+     */
+    val afCalibration = mutableMapOf("3" to Pair(0.45f, 2.0f))
+    fun corrected(cameraId: String, raw: Float): Float {
+        val (o, k) = afCalibration[cameraId] ?: return raw
+        return maxOf((raw - o) / k, 0f)
+    }
+    /** The lens command for a true distance (dioptres): the calibration the other way. */
+    fun command(cameraId: String?, trueD: Float): Float {
+        val (o, k) = afCalibration[cameraId] ?: return trueD
+        return o + k * trueD
+    }
+
+    /** Recent autofocus locks after taps (calibration samples for the depth map). */
+    val afSamples = java.util.concurrent.CopyOnWriteArrayList<AfSample>()
     @Volatile private var lastHeroResult: CaptureResult? = null
     @Volatile private var lastResult: TotalCaptureResult? = null
     /** Tap focus region (sensor coordinates) or manual focus (dioptres); else continuous AF. */
@@ -191,6 +215,7 @@ class Rig(private val context: Context) {
                     .getOutputSizes(ImageFormat.RAW_SENSOR).maxBy { it.width * it.height }
                 rawReader = ImageReader.newInstance(rs.width, rs.height, ImageFormat.RAW_SENSOR, 2)
             }
+            if (heroId != cam.id) afSamples.clear()
             heroId = cam.id
             logicalOpen = useLogical && logicalId != null
             if (logicalOpen && cam.id != "2") uwReader = ImageReader.newInstance(1280, 960, ImageFormat.YUV_420_888, 2)
@@ -254,9 +279,17 @@ class Rig(private val context: Context) {
             if (afWatch && af != lastAfState) {
                 lastAfState = af
                 app.relens.Trace.i("AF state $af, lens at %s".format(own.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { "%.2f D (%.2f m)".format(it, 1 / maxOf(it, 1e-3f)) } ?: "-"))
+                if (af == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED) {
+                    own.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { raw ->
+                        val id = heroId ?: "0"
+                        afSamples.add(AfSample(tapX, tapY, corrected(id, raw), id, System.currentTimeMillis()))
+                        while (afSamples.size > 12) afSamples.removeAt(0)
+                    }
+                }
                 if (af == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED || af == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED) afWatch = false
             }
-            own.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { d ->
+            own.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { rawD ->
+                val d = corrected(heroId ?: "0", rawD)
                 lastFocusD = d
                 val prev = _focusD.value
                 if (prev == null || kotlin.math.abs(d - prev) > 0.02f * max(prev, 0.2f)) _focusD.value = d
@@ -276,7 +309,7 @@ class Rig(private val context: Context) {
             when {
                 md != null -> {
                     set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
-                    set(CaptureRequest.LENS_FOCUS_DISTANCE, md.coerceIn(0f, _framing.value?.camera?.minFocusD ?: 10f))
+                    set(CaptureRequest.LENS_FOCUS_DISTANCE, command(heroId, md).coerceIn(0f, _framing.value?.camera?.minFocusD ?: 10f))
                 }
                 reg != null -> {
                     set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
@@ -317,6 +350,7 @@ class Rig(private val context: Context) {
         afRegion = MeteringRectangle(Rect(max(a.left, cx - half), max(a.top, cy - half),
             min(a.right, cx + half), min(a.bottom, cy + half)), MeteringRectangle.METERING_WEIGHT_MAX - 1)
         afWatch = true
+        tapX = fx; tapY = fy
         app.relens.Trace.i("tap %.2f,%.2f on camera ${fr.camera.id} (crop %.2f): full frame %.2f,%.2f -> sensor %.2f,%.2f -> region %s of %s".format(
             fx, fy, fr.crop, ux, uy, sx, sy, afRegion?.rect, a))
         safely("focus") {

@@ -202,7 +202,9 @@ class Body(app: Application) : AndroidViewModel(app) {
                     entry.status = "no depth model: run scripts/install.sh"; return@launch
                 }
                 val p = developer.develop(DevelopJob(exp.jpeg, exp.dng, fx, fy, exp.cameraFocusD, lens, n, fm, stock, push, frame, tilt, shift,
-                    filter = filter, crop = framing.crop, focalOverLong = framing.camera.focalMM / framing.camera.sensorLongMM))
+                    filter = filter, crop = framing.crop, focalOverLong = framing.camera.focalMM / framing.camera.sensorLongMM,
+                    // taps from the last half minute on this camera: distance samples for the depth map
+                    afSamples = rig.afSamples.filter { System.currentTimeMillis() - it.timeMs < 30_000 && it.cameraId == framing.camera.id }))
                 entry.preview = p.preview; entry.original = p.original
                 entry.status = if (p.uri != null) "in Pictures/Relens · ${p.timings}" else "saved in the app · ${p.timings}"
                 entry.done = true

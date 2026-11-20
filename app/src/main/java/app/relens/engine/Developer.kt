@@ -12,6 +12,7 @@ import android.provider.MediaStore
 import android.util.Log
 import androidx.exifinterface.media.ExifInterface
 import app.relens.film.FilmStock
+import app.relens.Trace
 import app.relens.optics.Lens
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
@@ -51,6 +52,8 @@ data class DevelopJob(
     val crop: Float = 0f,
     /** The camera's focal length over its sensor's long side (the uncropped frame). */
     val focalOverLong: Float = 0.68f,
+    /** Autofocus locks from recent taps: measured distances at points of the frame. */
+    val afSamples: List<app.relens.camera.AfSample> = emptyList(),
 )
 
 class Print(
@@ -167,7 +170,24 @@ class Developer(private val context: Context) {
                 sharp?.takeIf { (ringD / maxOf(fitA + fitB * it.first, 1e-3f)) in 0.2f..5f }?.let { Pair(it.first, ringD) }
                     ?: run { if (sharp != null) app.relens.Trace.w("sharpest depth disagrees with the ring: fit kept"); null }
             }
-            if (anchor != null && anchor.first - dFar > 0.05f) {
+            // Tim's idea: every tap measured a distance at a point. With two or more at different
+            // depths, they fix scale and shift directly (a weighted line through them, the
+            // shutter's own focus point included); Metric3D only fills in otherwise.
+            val pts = job.afSamples.map { Pair(dm.medianAround(it.fx, it.fy), it.dioptres) } +
+                listOfNotNull(anchor)
+            val spread = (pts.maxOfOrNull { it.first } ?: 0f) - (pts.minOfOrNull { it.first } ?: 0f)
+            if (pts.size >= 2 && spread > 0.08f) {
+                val mx = pts.map { it.first }.average(); val my = pts.map { it.second }.average()
+                var sxy = 0.0; var sxx = 0.0
+                for ((x, y) in pts) { sxy += (x - mx) * (y - my); sxx += (x - mx) * (x - mx) }
+                val b = (sxy / maxOf(sxx, 1e-9)).toFloat()
+                if (b > 0f) {
+                    dispB = b; dispA = (my - b * mx).toFloat()
+                    // keep the shutter's focus point exactly on its distance
+                    anchor?.let { dispA = it.second - dispB * it.first }
+                    Trace.i("depth from ${pts.size} focus samples: " + pts.joinToString { "(rel %.2f, %.2f m)".format(it.first, 1 / maxOf(it.second, 1e-3f)) })
+                }
+            } else if (anchor != null && anchor.first - dFar > 0.05f) {
                 dispB = maxOf((anchor.second - farD) / (anchor.first - dFar), 1e-3f)
                 dispA = anchor.second - dispB * anchor.first
             } else if (anchor != null) {
