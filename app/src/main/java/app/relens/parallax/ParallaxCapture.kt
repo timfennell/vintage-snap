@@ -314,14 +314,22 @@ class ParallaxCapture(private val ctx: Context, val dir: File, subjectM: Float,
             put("focal", JSONArray(intr.focalLength.toList())); put("principal", JSONArray(intr.principalPoint.toList()))
             put("pose", JSONArray(pm.toList())); put("displayPose", JSONArray(dm.toList()))
         }
-        // ARCore's own depth at the centre: a check on the stereo depth later.
-        if (name == "centre") runCatching {
+        // ARCore's own depth (it needs the glide's motion: empty at the centre, filled in by the
+        // sides); the developer carries the points into the hero's view by these poses.
+        runCatching {
             frame.acquireRawDepthImage16Bits().use { d ->
                 val b = d.planes[0].buffer; val a = ByteArray(b.remaining()); b.get(a)
-                File(dir, "centre.depth16").writeBytes(a)
+                File(dir, "$name.depth16").writeBytes(a)
                 meta.put("depth16", JSONObject().put("width", d.width).put("height", d.height).put("rowStride", d.planes[0].rowStride))
             }
-        }.onFailure { Trace.i("parallax: no raw depth yet (${it.javaClass.simpleName})") }
+        }.onFailure { Trace.i("parallax: no raw depth at $name (${it.javaClass.simpleName})") }
+        runCatching {
+            frame.acquireRawDepthConfidenceImage().use { d ->
+                val b = d.planes[0].buffer; val a = ByteArray(b.remaining()); b.get(a)
+                File(dir, "$name.conf8").writeBytes(a)
+                meta.put("conf8", JSONObject().put("width", d.width).put("height", d.height).put("rowStride", d.planes[0].rowStride))
+            }
+        }
         shots[name] = meta
         saver.execute {
             runCatching {

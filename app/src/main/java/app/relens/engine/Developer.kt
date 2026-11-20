@@ -130,6 +130,10 @@ class Developer(private val context: Context) {
             upload(g, src, photo.bmp)
         }
         val dm = est.depth
+        // A parallax capture's own measured depth (ARCore), when there is one: it makes the
+        // relative depth metric and corrects it region by region (before it goes to the GPU).
+        val arFit = ArDepth.load(job.jpeg, photo.bmp, full.bmp.width, full.bmp.height, crop, job.focalOverLong)
+            ?.calibrate(dm)?.also { lap("ar depth") }
         val dispLo = g.texture(dm.w, dm.h, GLES30.GL_R32F, linear = false)
         g.upload(dispLo, dm.w, dm.h, GLES30.GL_RED, GLES30.GL_FLOAT, floatBuffer(dm.data))
         val guide = Bitmap.createScaledBitmap(est.seen, dm.w, dm.h, true)
@@ -147,7 +151,23 @@ class Developer(private val context: Context) {
         val dTap = dm.medianAround(job.focusX, job.focusY)
         val camD = job.cameraFocusD?.takeIf { it > 0.05f }
         var dispA: Float; var dispB: Float
-        if (metricFile.exists()) {
+        if (arFit != null) {
+            // Measured: ARCore's line, with the focus point pinned exactly on its distance when
+            // the two agree (within half again: a lock elsewhere, or a ring set off the subject, doesn't).
+            dispB = arFit[0]; dispA = arFit[1]
+            val fitTap = dispA + dispB * dTap
+            val anchor: Pair<Float, Float>? = if (job.focusM == null) camD?.let { Pair(dTap, it) }
+            else {
+                val ringD = if (job.focusM.isInfinite()) 0f else 1f / job.focusM
+                Sharpness.peak(est.seen, dm)?.let { Pair(it.first, ringD) }
+            }
+            val agree = anchor != null && (anchor.second / maxOf(dispA + dispB * anchor.first, 1e-3f)) in 0.67f..1.5f
+            if (anchor != null && agree) dispA = anchor.second - dispB * anchor.first
+            Trace.i("depth from ARCore: tap at %.2f m%s".format(1 / maxOf(fitTap, 1e-3f),
+                anchor?.let { " · focus %.2f m %s".format(1 / maxOf(it.second, 1e-3f), if (agree) "(pinned)" else "(disagrees: ARCore kept)") } ?: ""))
+            val minRel = dm.data.minOrNull() ?: 0f
+            dispA = maxOf(dispA, 1f / 60f - dispB * minRel)
+        } else if (metricFile.exists()) {
             val md = (metric ?: MetricDepth(metricFile).also { metric = it }).estimate(photo.bmp, focalOverLong); lap("metric")
             val ab = MetricDepth.fit(dm, md)
             val fitB = maxOf(ab[0], 1e-3f); val fitA = ab[1]
