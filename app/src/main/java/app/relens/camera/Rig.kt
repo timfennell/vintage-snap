@@ -135,6 +135,7 @@ class Rig(private val context: Context) {
     @Volatile private var lastFocusD: Float? = null
     @Volatile private var lastUwResult: CaptureResult? = null
     @Volatile private var afWatch = false
+    @Volatile private var manualWatch = false
     private var lastAfState = -1
     private var tapX = 0.5f; private var tapY = 0.5f
 
@@ -274,6 +275,12 @@ class Rig(private val context: Context) {
         override fun onCaptureCompleted(s: CameraCaptureSession, r: CaptureRequest, result: TotalCaptureResult) {
             lastResult = result
             val own = if (logicalOpen) heroId?.let { result.physicalCameraTotalResults[it] } ?: result else result
+            // After the ring moves: where the lens actually went (a few frames later).
+            if (manualWatch && result.frameNumber % 15 == 0L) {
+                manualWatch = false
+                app.relens.Trace.i("ring result: AF mode ${result.get(CaptureResult.CONTROL_AF_MODE)}, lens reads %s".format(
+                    own.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { "%.2f D raw (%.2f m corrected)".format(it, 1 / maxOf(corrected(heroId ?: "0", it), 1e-3f)) } ?: "-"))
+            }
             // After a tap: each autofocus state change and where the lens ends up.
             val af = result.get(CaptureResult.CONTROL_AF_STATE) ?: -1
             if (afWatch && af != lastAfState) {
@@ -371,6 +378,10 @@ class Rig(private val context: Context) {
         if (dioptres == manualD && session != null) return@post
         manualD = dioptres
         if (dioptres == null) afRegion = null
+        manualWatch = dioptres != null
+        app.relens.Trace.i("ring: %s -> lens command %s on camera $heroId".format(
+            dioptres?.let { "%.2f m".format(1 / maxOf(it, 1e-3f)) } ?: "AF",
+            dioptres?.let { "%.2f D".format(command(heroId, it).coerceIn(0f, _framing.value?.camera?.minFocusD ?: 10f)) } ?: "-"))
         repeat()
     }
 
