@@ -48,6 +48,11 @@ data class Look(
     val pointBoost: Float = 8f,
     /** The filter on the lens. */
     val filter: LensFilter = lensFilters[0],
+    /** Flare from the lights found in the picture; [flareGain] restores clipped JPEG light (RAW ~1). */
+    val flare: Boolean = true,
+    val flareGain: Float = 3f,
+    /** A tilt lens's tilt, degrees (a whacked lens's leak opens on the side it's rocked away from). */
+    val tiltDeg: FloatArray = floatArrayOf(0f, 0f),
 ) {
     val focusM: Float get() = 1f / maxOf(focusD, 1e-3f)
 
@@ -68,6 +73,8 @@ data class Look(
  */
 class LensEngine(private val gl: Gl) {
     val timings = LinkedHashMap<String, Double>()
+    /** The lights the last development found (for the darkroom). */
+    var lights: List<LightSource> = emptyList(); private set
     /** Debug: called after a pass with (pass, texture, w, h, level). */
     var dump: ((String, Int, Int, Int, Int) -> Unit)? = null
     /** Debug: no mip chain (to isolate mip problems). */
@@ -240,6 +247,36 @@ class LensEngine(private val gl: Gl) {
             gl.deleteTextures(lin); lin = sm
         }
         dump?.invoke("gather", lin, w, h, 0)
+        lights = emptyList()
+        if (look.flare && (look.lens.flareBoost > 0f || look.lens.leak > 0f)) timed("lights + flare") {
+            // Find the lights: tile energies above a threshold, joined on the CPU.
+            val ltw = (w + 15) / 16; val lth = (h + 15) / 16
+            val eTex = gl.texture(ltw, lth, GLES30.GL_RGBA32F, linear = false)
+            val wTex = gl.texture(ltw, lth, GLES30.GL_RGBA32F, linear = false)
+            var p = gl.use("lights")
+            gl.sampler(p, "uWork", 0, work)
+            gl.u1f(p, "uThreshold", 0.9f)
+            gl.image(0, eTex, GLES30.GL_RGBA32F)
+            GLES31.glBindImageTexture(1, wTex, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA32F)
+            gl.dispatch(ltw, lth)
+            gl.finish()
+            val e = gl.readFloat(eTex, ltw, lth); val wh = gl.readFloat(wTex, ltw, lth)
+            gl.deleteTextures(eTex, wTex)
+            lights = Flare.join(ltw, lth, e, wh)
+            val rows = Flare.rows(lights, w, h, look.lens, look.fNumber, look.filter, look.tiltDeg, look.flareGain)
+            if (lights.isNotEmpty() || look.lens.leak > 0f) {
+                val fo = gl.texture(w, h, GLES30.GL_RGBA16F)
+                p = gl.use("flare")
+                gl.sampler(p, "uIn", 0, lin)
+                gl.sampler(p, "uWork", 1, work)
+                gl.image(0, fo, GLES30.GL_RGBA16F)
+                gl.u4fv(p, "uF", rows)
+                val stripRows = max(64, (1_000_000 / w) / 8 * 8)
+                var y = 0
+                while (y < h) { gl.u2i(p, "uOffset", 0, y); gl.dispatch(w, min(stripRows, h - y)); GLES30.glFlush(); y += stripRows }
+                gl.deleteTextures(lin); lin = fo
+            }
+        }
         val fl = look.filter
         if (!fl.isNone) timed("filter") {
             val fo = gl.texture(w, h, GLES30.GL_RGBA16F)

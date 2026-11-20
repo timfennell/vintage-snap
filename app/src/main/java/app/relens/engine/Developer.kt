@@ -145,6 +145,7 @@ class Developer(private val context: Context) {
         val look = Look(job.lens, job.fNumber, dispA = dispA, dispB = dispB, focusD = focusD, viewFocal = viewFocal,
             tiltD = tiltD, keystone = Movements.keystone(job.lens, job.shiftMM),
             stock = job.stock, push = job.push, samples = 256, levelBias = -1f, filter = job.filter,
+            tiltDeg = job.tiltDeg, flareGain = if (job.dng != null) 1f else 3f,
             pointBoost = if (job.dng != null) 0f else 8f)
         if (!job.publish) eng.dump = { name, tex, dw, dh, level ->
             if (name == "coc work L0") {
@@ -158,6 +159,7 @@ class Developer(private val context: Context) {
             }
         } else eng.dump = null
         val out = eng.develop(src, dispLo, guideLo, w, h, look); lap("lens+film")
+        Log.i("Relens", "lights: " + eng.lights.joinToString { "(%.0f,%.0f r%.0f e%.0f blur%.0f)".format(it.x, it.y, it.radius, it.luma, it.blur) })
         val buf = ByteBuffer.allocateDirect(w * h * 4).order(ByteOrder.nativeOrder())
         g.readRgba8(out, w, h, buf); buf.position(0)
         g.deleteTextures(src, dispLo, guideLo, out)
