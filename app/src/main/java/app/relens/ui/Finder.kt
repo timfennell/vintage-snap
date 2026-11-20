@@ -55,19 +55,56 @@ uniform float k;
 uniform float ca;
 
 half3 at(float2 p) { return image.eval(p).rgb; }
+half3 lin(half3 c) { return c * c; }               // near enough sRGB -> linear for a glow
+half3 srgb(half3 c) { return sqrt(max(c, half3(0))); }
 
-// the picture's light just inside its edge nearest p, spread along the edge (a glow, not a copy)
-half3 edgeLight(float2 p) {
-    float2 e = clamp(p, inner.xy + 2.0, inner.zw - 2.0);
-    float2 inward = normalize((inner.xy + inner.zw) * 0.5 - e);
-    float2 along = float2(-inward.y, inward.x);
+// Vintage Click's surround (Shaders.swift `surround`): the lit screen glows past its
+// mask. Each point of the dark surround gathers light from a patch just inside the
+// picture's nearest edge, a patch that widens and moves inward the further out the
+// point is, so the glow blooms (soft and broad) rather than copying the edge.
+half3 bloom(float2 q, float dist) {
+    float h = inner.w - inner.y;
+    float2 e = clamp(q, inner.xy + 3.0, inner.zw - 3.0);
+    float spread = h * 0.05 + dist * 1.2;
+    float2 inward = normalize((inner.xy + inner.zw) * 0.5 - e + 1e-3);
+    float2 centre = e + inward * spread * 0.6;
     half3 s = half3(0);
-    for (int i = -3; i <= 3; i++) {
-        float2 q = e + along * float(i) * 10.0 + inward * 4.0;
-        q = clamp(q, inner.xy + 1.0, inner.zw - 1.0);
-        s += at(q);
+    for (int i = 0; i < 16; i++) {
+        float r = sqrt((float(i) + 0.5) / 16.0);
+        float a = float(i) * 2.39996323;
+        float2 t = clamp(centre + float2(cos(a), sin(a)) * r * spread, inner.xy + 1.0, inner.zw - 1.0);
+        s += lin(at(t));
     }
-    return s / 7.0;
+    s /= 16.0;
+    // a tight halo hugging the glass and a broad faint one reaching well out; bright
+    // light (a window, a lamp near the edge) carries further
+    float lum = dot(s, half3(0.2126, 0.7152, 0.0722));
+    float halo = 0.30 * exp(-dist / (h * 0.025)) + 0.10 * exp(-dist / (h * 0.11))
+               + 0.25 * smoothstep(0.15, 0.8, lum) * exp(-dist / (h * 0.07));
+    return s * halo;
+}
+
+// The eyepiece's inner walls: dark, a little glossy, standing round the glass. Each
+// wall mirrors the picture beside it (reflected across the glass's edge, so the
+// corners show it doubly), the reflection blurring and dimming the further it is
+// from the glass, as a reflection in a matt-black tunnel does.
+half3 walls(float2 q, float dist) {
+    float h = inner.w - inner.y;
+    float2 m = q;
+    if (q.x < inner.x) m.x = inner.x + (inner.x - q.x);
+    if (q.x > inner.z) m.x = inner.z - (q.x - inner.z);
+    if (q.y < inner.y) m.y = inner.y + (inner.y - q.y);
+    if (q.y > inner.w) m.y = inner.w - (q.y - inner.w);
+    float blur = 2.0 + dist * 0.45;
+    half3 s = half3(0);
+    for (int i = 0; i < 12; i++) {
+        float r = sqrt((float(i) + 0.5) / 12.0);
+        float a = float(i) * 2.39996323;
+        float2 t = clamp(m + float2(cos(a), sin(a)) * r * blur, inner.xy + 1.0, inner.zw - 1.0);
+        s += lin(at(t));
+    }
+    s /= 12.0;
+    return s * (0.20 * exp(-dist / (h * 0.045)));
 }
 
 half4 main(float2 p) {
@@ -79,17 +116,17 @@ half4 main(float2 p) {
     float2 sr = c + (p - c) * (1.0 - k * (1.0 + ca * 40.0) * r2);
     float2 sg = c + (p - c) * (1.0 - k * r2);
     float2 sb = c + (p - c) * (1.0 - k * (1.0 - ca * 40.0) * r2);
-    half3 col = half3(at(sr).r, at(sg).g, at(sb).b);
-    // outside the picture: the surround, lit by flare spilling from the picture's edge
-    float2 q = sg;
+    // outside the glass: judged where the eye looks (p), not through the pincushion,
+    // which folds far points back into the picture
+    float2 q = p;
     float2 outv = max(max(inner.xy - q, q - inner.zw), float2(0));
     float dist = length(outv);
+    half3 col = half3(at(sr).r, at(sg).g, at(sb).b);
     if (dist > 0.0) {
-        half3 e = edgeLight(q);
-        float lum = dot(e, half3(0.2126, 0.7152, 0.0722));
-        // only bright light spills far; everything casts a little
-        float spill = 0.55 * exp(-dist / (0.025 * size.y)) + 0.25 * smoothstep(0.5, 1.0, lum) * exp(-dist / (0.10 * size.y));
-        col = col + e * spill;
+        // the surround: a faintly grainy black catching the bloom, with a soft lip at the glass
+        float g = 0.012 + 0.006 * fract(sin(dot(floor(p / 3.0), float2(12.9898, 78.233))) * 43758.5453);
+        half3 sur = srgb(lin(half3(g, g, g * 1.05)) + bloom(q, dist) + walls(q, dist));
+        col = mix(col, sur, smoothstep(0.0, 1.5, dist));
     }
     return half4(col, 1.0);
 }
@@ -106,6 +143,7 @@ fun Modifier.eyepiece(innerInset: Dp): Modifier {
         shader.setFloatUniform("inner", inset, inset, size.width - inset, size.height - inset)
         shader.setFloatUniform("k", 0.018f)
         shader.setFloatUniform("ca", 0.0035f)
+        clip = true
         renderEffect = RenderEffect.createRuntimeShaderEffect(shader, "image").asComposeRenderEffect()
     }
 }

@@ -109,8 +109,9 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 6.dp), contentAlignment = Alignment.Center) {
           // The eyepiece: a dark surround round the picture, seen through a little pincushion,
           // with light from the picture's edge spilling into it (Finder.kt).
-          Box(Modifier.aspectRatio(2f / 3f + 0.02f).clip(RoundedCornerShape(10.dp)).background(Color.Black)
-              .eyepiece(innerInset = 10.dp).padding(10.dp)) {
+          // The surround is the body's own black, wide enough for the bloom to spread into.
+          Box(Modifier.aspectRatio(2f / 3f + 0.035f).background(Palette.leather)
+              .eyepiece(innerInset = 20.dp).padding(20.dp)) {
             Box(Modifier.fillMaxSize().clip(RoundedCornerShape(3.dp)).background(Color.Black)) {
                 val shiftView = Movements.keystone(lens, floatArrayOf(body.shiftX, body.shiftY))
                 Finder(body, framing?.crop ?: 1f, Modifier.fillMaxSize()
