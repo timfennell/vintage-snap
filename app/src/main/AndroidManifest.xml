@@ -8,6 +8,8 @@
 
     <application
         android:label="Relens"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:largeHeap="true"
         android:hardwareAccelerated="true">
         <!-- ARCore is optional: Parallax capture uses it where the phone has it. -->
