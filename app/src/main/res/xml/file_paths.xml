@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Prints (and their DNGs) handed to other apps: share, or open in an editor. -->
+<paths>
+    <external-files-path name="prints" path="prints/" />
+</paths>

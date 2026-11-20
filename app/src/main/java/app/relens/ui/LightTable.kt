@@ -207,15 +207,63 @@ private fun PrintView(e: DarkroomEntry, onClose: () -> Unit) {
     }
     val source = e.original ?: negative
     val shown = (if (showOriginal) source else null) ?: big ?: e.preview
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    var sharing by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxSize().background(Color(0xF2050505))
-        .pointerInput(e) { detectTapGestures(onTap = { onClose() }, onPress = { if (source != null) { showOriginal = true; tryAwaitRelease(); showOriginal = false } }) },
+        .pointerInput(e) { detectTapGestures(onTap = { if (sharing) sharing = false else onClose() }, onLongPress = { sharing = true }) },
         contentAlignment = Alignment.Center) {
         shown?.let { androidx.compose.foundation.Image(it.asImageBitmap(), null, contentScale = androidx.compose.ui.layout.ContentScale.Fit,
             modifier = Modifier.fillMaxSize().padding(12.dp)) }
-        Text((if (showOriginal) "the phone's own picture · " else "") + e.label + if (source != null && !showOriginal) "  ·  hold to see the phone's picture" else "",
+        // before / after: the phone's own picture against the print
+        if (source != null) Text(if (showOriginal) "AFTER" else "BEFORE", color = Palette.cream, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp,
+            modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(12.dp).clip(RoundedCornerShape(4.dp))
+                .background(Color(0x55000000)).clickable { showOriginal = !showOriginal }.padding(horizontal = 12.dp, vertical = 6.dp))
+        Text((if (showOriginal) "the phone's own picture · " else "") + e.label + "  ·  hold to share",
             color = Palette.cream, fontSize = 11.sp,
             modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp))
+        if (sharing) ShareSheet(e, Modifier.align(Alignment.BottomCenter)) { action ->
+            sharing = false
+            action?.let { (file, mime, open) -> handOff(ctx, file, mime, open) }
+        }
     }
+}
+
+/**
+ * Long-press on a print: hand it on. Share (Instagram, Photos, a message: Android's share
+ * sheet) or open in another app (an editor: Snapseed takes the DNG), the print or its DNG.
+ */
+@Composable
+private fun ShareSheet(e: DarkroomEntry, modifier: Modifier, onPick: (Triple<java.io.File, String, Boolean>?) -> Unit) {
+    val jpg = e.file?.takeIf { it.exists() }
+    val dng = jpg?.let { java.io.File(it.parentFile, it.nameWithoutExtension + ".dng") }?.takeIf { it.exists() }
+    androidx.compose.foundation.layout.Column(modifier.fillMaxWidth().navigationBarsPadding().padding(12.dp)
+        .clip(RoundedCornerShape(10.dp)).background(Color(0xF0141312)).padding(vertical = 6.dp)) {
+        @Composable fun item(label: String, sub: String, pick: Triple<java.io.File, String, Boolean>?) {
+            androidx.compose.foundation.layout.Column(Modifier.fillMaxWidth()
+                .then(if (pick != null) Modifier.clickable { onPick(pick) } else Modifier).padding(horizontal = 16.dp, vertical = 10.dp)) {
+                Text(label, color = if (pick != null) Palette.cream else Palette.dim, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Text(sub, color = Palette.dim, fontSize = 10.sp)
+            }
+        }
+        item("Share the print", "Instagram, Photos, a message…", jpg?.let { Triple(it, "image/jpeg", false) })
+        item("Open the print in…", "an editor or viewer", jpg?.let { Triple(it, "image/jpeg", true) })
+        item("Share the DNG", if (dng != null) "the relensed raw, no film look · %d MB".format(dng.length() / 1_000_000) else "no DNG for this frame (the light table's DNG switch was off)",
+            dng?.let { Triple(it, "image/x-adobe-dng", false) })
+        item("Open the DNG in…", "Snapseed, Lightroom…", dng?.let { Triple(it, "image/x-adobe-dng", true) })
+        item("Cancel", "", null)
+    }
+}
+
+/** Hands [file] to another app: the share sheet, or (open) an app that views or edits it. */
+private fun handOff(ctx: android.content.Context, file: java.io.File, mime: String, open: Boolean) {
+    runCatching {
+        val uri = androidx.core.content.FileProvider.getUriForFile(ctx, "app.relens.files", file)
+        val intent = if (open) android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(uri, mime)
+            else android.content.Intent(android.content.Intent.ACTION_SEND).setType(mime).putExtra(android.content.Intent.EXTRA_STREAM, uri)
+        intent.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        if (!open) intent.clipData = android.content.ClipData.newRawUri(file.name, uri)
+        ctx.startActivity(android.content.Intent.createChooser(intent, if (open) "Open with" else "Share").addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+    }.onFailure { app.relens.Trace.w("hand-off failed", it) }
 }
 
 /** One strip of film on the glass: punched base, rebate printing, the frames, dust, keepers. */

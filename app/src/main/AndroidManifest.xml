@@ -29,6 +29,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- Prints handed to other apps (share, open in): one file at a time, read-only. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="app.relens.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" />
+        </provider>
         <!-- The performance spike (also: adb shell am start -n app.relens/.spike.BenchActivity). -->
         <activity
             android:name=".spike.BenchActivity"
