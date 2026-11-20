@@ -337,6 +337,27 @@ private fun MeterCard(setPos: Float, meterPos: Float, modifier: Modifier) {
     val measurer = androidx.compose.ui.text.rememberTextMeasurer()
     val cream = Color(0xFFFFE6C7); val red = Color(0xFFFF6647); val green = Color(0xE673F2B3)
     val needleRed = Color(0xFFE6140D)
+    // A dark backing under the scale and a solid needle, drawn normally: light alone can't
+    // show against a bright scene (a white wall), so the scale gets a faint smoked strip
+    // to sit on, as the game's finder is dark round it.
+    Canvas(modifier.fillMaxSize()) {
+        val u = 8.dp.toPx()
+        val cardW = 3.6f * u; val cardH = size.height * 0.66f
+        val card = androidx.compose.ui.geometry.Rect(Offset(1.0f * u, (size.height - cardH) / 2), androidx.compose.ui.geometry.Size(cardW, cardH))
+        drawRoundRect(Color.Black.copy(alpha = 0.42f), Offset(card.left - 0.3f * u, card.top - 0.3f * u),
+            androidx.compose.ui.geometry.Size(card.width + 2.2f * u, card.height + 0.6f * u), androidx.compose.ui.geometry.CornerRadius(0.7f * u))
+        val cap = 2.0f * u; val n = shutterSpeeds.size
+        val step = (card.height - 2 * cap) / n
+        fun y(i: Float) = card.top + cap + (n - 1 - i + 0.5f) * step
+        val pivot = Offset(card.left - 9f * u, card.center.y)
+        val aim = Offset(card.left + 0.1f * u, y(needle))
+        val reach = (card.left + 1.15f * u - pivot.x) / (aim.x - pivot.x)
+        val tip = pivot + (aim - pivot) * reach
+        val fade = Brush.horizontalGradient(0f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.6f), startX = 0f, endX = 3.5f * u)
+        drawLine(fade, pivot, tip, 0.42f * u, cap = androidx.compose.ui.graphics.StrokeCap.Round)
+        val red = Brush.horizontalGradient(0f to Color.Transparent, 1f to Color(0xFFE6140D), startX = 0f, endX = 3.5f * u)
+        drawLine(red, pivot, tip, maxOf(1.5f, 0.2f * u), cap = androidx.compose.ui.graphics.StrokeCap.Round)
+    }
     Canvas(modifier.fillMaxSize().graphicsLayer {
         // projected light: it adds to the image under it
         compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen

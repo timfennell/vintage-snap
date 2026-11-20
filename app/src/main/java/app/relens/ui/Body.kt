@@ -218,6 +218,14 @@ class Body(app: Application) : AndroidViewModel(app) {
     }
 
     init {
+        // The first focus learning (2026-11-20) paired a stale lock reading with each shot:
+        // forget its pairs and put camera 0 back where Tim's collimation left it.
+        if (!prefs.getBoolean("aflearn_v2", false)) {
+            val e = prefs.edit()
+            if (prefs.contains("afsamples_0")) e.putString("afcal_0", "0.902,1.579")
+            for (id in listOf("0", "2", "3")) e.remove("afsamples_$id")
+            e.putBoolean("aflearn_v2", true).apply()
+        }
         // Saved collimations: "afcal_<camera>" = "offset,scale".
         for (id in listOf("0", "2", "3")) prefs.getString("afcal_$id", null)?.split(",")?.mapNotNull { it.toFloatOrNull() }
             ?.takeIf { it.size == 2 }?.let { rig.afCalibration[id] = Pair(it[0], it[1]) }
@@ -339,8 +347,8 @@ class Body(app: Application) : AndroidViewModel(app) {
                 val framing = rig.framing.value ?: error("no camera for this lens")
                 val exp = rig.shoot(File(getApplication<Application>().getExternalFilesDir("negatives"), ""), name)
                 framesShot = frame; save()
-                // the lens's own reading at the shutter's autofocus lock (the sweep's locks come after)
-                val lockRaw = if (fm == null) rig.lastLockRaw else null
+                // the lens's own reading in this very frame (on autofocus: where it focused for it)
+                val lockRaw = if (fm == null) exp.rawFocusD?.takeIf { it > 0.02f } else null
                 val heroCam = framing.camera.id
                 // The rangefinder sweep while the camera is still held as it was: distances at a few
                 // well-textured points of this very frame, kept only if the camera didn't turn.

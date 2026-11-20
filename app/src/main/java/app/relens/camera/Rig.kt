@@ -695,7 +695,8 @@ class Rig(private val context: Context) {
                     ri.close()
                 }
                 lastShotResult = result
-                done.complete(Exposure(jpeg, dng.takeIf { it.exists() && it.length() > 0 }, focusD))
+                done.complete(Exposure(jpeg, dng.takeIf { it.exists() && it.length() > 0 }, focusD,
+                    result?.get(CaptureResult.LENS_FOCUS_DISTANCE)))
             } catch (t: Throwable) { done.completeExceptionally(t) }
         }
         uwReader?.setOnImageAvailableListener({ r ->
