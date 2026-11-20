@@ -30,6 +30,18 @@ class ArDepth private constructor(private val fx: FloatArray, private val fy: Fl
                                   private val disp: FloatArray, private val wt: FloatArray, val match: Float) {
     val size get() = fx.size
 
+    /** ARCore's own measurement near (fx, fy) on the print: the median disparity (1/m) of the
+     *  samples within [r], or null with fewer than six there. */
+    fun disparityAround(fx: Float, fy: Float, r: Float = 0.05f): Float? {
+        val v = ArrayList<Float>()
+        for (i in 0 until size) {
+            val dx = this.fx[i] - fx; val dy = (this.fy[i] - fy) * 1.5f       // the print is 2:3
+            if (dx * dx + dy * dy < r * r) v += disp[i]
+        }
+        if (v.size < 6) return null
+        v.sort(); return v[v.size / 2]
+    }
+
     /**
      * Corrects [dm] in place (its data stay relative, so a + b x data is the metric
      * disparity) and returns (b, a), or null when there is too little to go on.

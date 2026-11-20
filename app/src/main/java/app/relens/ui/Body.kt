@@ -160,6 +160,38 @@ class Body(app: Application) : AndroidViewModel(app) {
     }
 
     /** Records the last lock against the ring's distance; with two, fits offset and scale. */
+    /**
+     * Collimating by itself: each parallax frame shot on autofocus pairs the lens's own
+     * reading at the lock with ARCore's measured distance at that point. The last ten pairs
+     * per camera fix its calibration (reading = offset + scale x true dioptres): a line
+     * once they span distances, else just the offset, keeping the scale.
+     */
+    private fun learnFocus(id: String, raw: Float, trueD: Float) {
+        if (trueD !in 0.05f..6f || raw <= 0f) return
+        val key = "afsamples_$id"
+        val pts = (prefs.getString(key, "") ?: "").split(";").mapNotNull { e ->
+            e.split(":").mapNotNull { it.toFloatOrNull() }.takeIf { it.size == 2 }?.let { Pair(it[0], it[1]) }
+        }.toMutableList()
+        pts += Pair(raw, trueD)
+        while (pts.size > 10) pts.removeAt(0)
+        prefs.edit().putString(key, pts.joinToString(";") { "${it.first}:${it.second}" }).apply()
+        val ts = pts.map { it.second }
+        var k = rig.afCalibration[id]?.second ?: 1f
+        if (pts.size >= 2 && (ts.max() - ts.min()) >= 0.25f) {
+            val mt = ts.average(); val mr = pts.map { it.first }.average()
+            var sxy = 0.0; var sxx = 0.0
+            for ((r, t) in pts) { sxy += (t - mt) * (r - mr); sxx += (t - mt) * (t - mt) }
+            val fitK = (sxy / sxx).toFloat()
+            if (fitK in 0.5f..3.5f) k = fitK
+        }
+        val o = pts.map { it.first - k * it.second }.average().toFloat()
+        val old = rig.afCalibration[id]
+        rig.afCalibration[id] = Pair(o, k)
+        prefs.edit().putString("afcal_$id", "$o,$k").apply()
+        Trace.i("focus calibration from parallax, camera $id: read %.3f D at a measured %.2f m; now reading = %.3f + %.3f x true (%d pairs; was %s)".format(
+            raw, 1 / trueD, o, k, pts.size, old?.let { "%.3f + %.3f".format(it.first, it.second) } ?: "none"))
+    }
+
     fun collimateSet() {
         val raw = rig.lastLockRaw ?: run { collimationNote = "tap a target first"; return }
         val m = focusM ?: run { collimationNote = "turn the ring to the target's distance"; return }
@@ -307,6 +339,9 @@ class Body(app: Application) : AndroidViewModel(app) {
                 val framing = rig.framing.value ?: error("no camera for this lens")
                 val exp = rig.shoot(File(getApplication<Application>().getExternalFilesDir("negatives"), ""), name)
                 framesShot = frame; save()
+                // the lens's own reading at the shutter's autofocus lock (the sweep's locks come after)
+                val lockRaw = if (fm == null) rig.lastLockRaw else null
+                val heroCam = framing.camera.id
                 // The rangefinder sweep while the camera is still held as it was: distances at a few
                 // well-textured points of this very frame, kept only if the camera didn't turn.
                 sweeping = true
@@ -345,6 +380,7 @@ class Body(app: Application) : AndroidViewModel(app) {
                     filter = filter, crop = framing.crop, focalOverLong = framing.camera.focalMM / framing.camera.sensorLongMM,
                     // the sweep's distances, measured on this very frame
                     afSamples = swept, exposureStops = stops, saveDng = dngOut))
+                if (lockRaw != null && p.arFocusD != null) learnFocus(heroCam, lockRaw, p.arFocusD)
                 entry.preview = p.preview; entry.original = p.original
                 entry.status = if (p.uri != null) "in Pictures/Vintage Snap · ${p.timings}" else "saved in the app · ${p.timings}"
                 entry.done = true
