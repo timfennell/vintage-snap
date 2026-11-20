@@ -191,6 +191,15 @@ class Rig(private val context: Context) {
     /** Which open this is: callbacks from an earlier camera or session are ignored. */
     @Volatile private var generation = 0
 
+    /** Closes the camera for another user (ARCore, for parallax capture); returns once it is closed. */
+    suspend fun release() {
+        val d = CompletableDeferred<Unit>()
+        handler.post { close(); d.complete(Unit) }
+        d.await()
+    }
+    /** Opens the mounted lens's camera again after [release]. */
+    fun reacquire() = handler.post { if (texture != null && device == null) _framing.value?.let { open(it) } }
+
     fun attach(t: SurfaceTexture) = handler.post { texture = t; _framing.value?.let { open(it) } }
     fun detach() = handler.post { close(); texture = null }
 

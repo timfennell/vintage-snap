@@ -83,6 +83,27 @@ class Body(app: Application) : AndroidViewModel(app) {
     var shiftX by mutableFloatStateOf(0f)
     var shiftY by mutableFloatStateOf(0f)
     var busy by mutableStateOf(false); private set
+    /** Parallax capture: after each shot, ARCore guides two side frames for measured depth. */
+    val parallaxAvailable: Boolean = runCatching {
+        com.google.ar.core.ArCoreApk.getInstance().checkAvailability(app).isSupported
+    }.getOrDefault(false)
+    var parallaxOn by mutableStateOf(prefs.getBoolean("parallax", false)); private set
+    fun toggleParallax() { parallaxOn = !parallaxOn; prefs.edit().putBoolean("parallax", parallaxOn).apply() }
+    /** The capture in progress (the finder shows it), or null. */
+    var parallax by mutableStateOf<app.relens.parallax.ParallaxCapture?>(null); private set
+    /** Testing from the Mac: a parallax capture on its own, into [dir] (no hero shot, no roll). */
+    fun parallaxTest(dir: File, subjectM: Float) {
+        viewModelScope.launch {
+            val pc = app.relens.parallax.ParallaxCapture(getApplication(), dir, subjectM) { onParallaxFire() }
+            rig.release(); parallax = pc
+            val ok = runCatching { pc.run() }.onFailure { Trace.e("parallax test failed", it) }.getOrDefault(false)
+            parallax = null; rig.reacquire()
+            Trace.i("parallax test: $ok")
+        }
+    }
+    /** Plays the shutter as each side frame is taken (set by the screen, which owns the sounds). */
+    var onParallaxFire: () -> Unit = {}
+
     /** The rangefinder sweep after the shot: the finder asks the photographer to hold steady. */
     var sweeping by mutableStateOf(false); private set
     private val steadiness = Sweep.Steadiness(app)
@@ -298,6 +319,18 @@ class Body(app: Application) : AndroidViewModel(app) {
                     swept = emptyList()
                 } else Trace.i("sweep kept: drift %.2f degrees (allowed %.2f)".format(steadiness.degrees, fov / 12f))
                 sweeping = false
+                // Parallax: two guided side frames, the main camera lent to ARCore meanwhile.
+                if (parallaxOn && parallaxAvailable) {
+                    val subjectM = fm?.takeIf { it.isFinite() } ?: exp.cameraFocusD?.takeIf { it > 0.05f }?.let { 1f / it } ?: 2f
+                    val pc = app.relens.parallax.ParallaxCapture(getApplication(),
+                        File(getApplication<Application>().getExternalFilesDir("negatives"), "$name.par"), subjectM) { onParallaxFire() }
+                    rig.release()
+                    parallax = pc
+                    val ok = runCatching { pc.run() }.onFailure { Trace.e("parallax failed", it) }.getOrDefault(false)
+                    parallax = null
+                    rig.reacquire()
+                    if (!ok) message = "parallax not finished: this frame uses single-shot depth"
+                }
                 onShot()
                 busy = false
                 darkroom.add(0, entry)

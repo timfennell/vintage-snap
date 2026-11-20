@@ -90,6 +90,10 @@ class MainActivity : ComponentActivity() {
                 }
             }, 3000)
         }
+        // --ef parallaxtest <subject m>: the parallax guide on its own, into files/tests/par.
+        if (intent.hasExtra("parallaxtest")) window.decorView.postDelayed({
+            body.parallaxTest(java.io.File(getExternalFilesDir("tests"), "par"), intent.getFloatExtra("parallaxtest", 1.5f))
+        }, 4000)
         if (intent.hasExtra("logicaltest")) window.decorView.postDelayed({ lifecycleScope.launch { body.rig.logicalTest() } }, 9000)
         // Testing from the Mac: --es rawtest "<lens name part>": a RAW-only capture to a test folder (no roll, no gallery).
         intent.getStringExtra("rawtest")?.let { want ->

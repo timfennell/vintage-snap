@@ -78,6 +78,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
     val rigError by body.rig.error.collectAsState()
     val raw = framing?.camera?.raw == true
     val lens = body.lens
+    body.onParallaxFire = { haptics.sounds.play(Sounds.Event.SHUTTER, 0.8f) }
     // The mirror: up for the exposure, the finder black; down again, the picture back.
     var mirrorUp by remember { mutableStateOf(false) }
     // The mirror stays up while the frame is taken and the rangefinder sweep runs (hold steady),
@@ -85,7 +86,8 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
     LaunchedEffect(mirrorUp) {
         if (mirrorUp) {
             kotlinx.coroutines.delay(150)
-            while (body.busy || body.sweeping) kotlinx.coroutines.delay(30)
+            // (the parallax glide needs the finder: the mirror comes down for it)
+            while ((body.busy || body.sweeping) && body.parallax == null) kotlinx.coroutines.delay(30)
             mirrorUp = false
         }
     }
@@ -166,7 +168,8 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                 sceneEV?.let { ev -> MeterCard(body.shutterPos, body.meteredShutterPos(ev), Modifier.fillMaxSize()) }
                 rigError?.let { Text(it, color = Palette.led, fontSize = 11.sp, modifier = Modifier.align(Alignment.Center).padding(16.dp)) }
                 if (blackout > 0f) Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = blackout)))
-                if (mirrorUp && (body.busy || body.sweeping)) Text("HOLD STEADY", color = Palette.led, fontSize = 16.sp,
+                body.parallax?.let { pc -> ParallaxFinder(pc, Modifier.fillMaxSize()) }
+                if (mirrorUp && (body.busy || body.sweeping) && body.parallax == null) Text("HOLD STEADY", color = Palette.led, fontSize = 16.sp,
                     fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, modifier = Modifier.align(Alignment.Center))
             }
           }
@@ -253,7 +256,13 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
 
         // ---- the deck ----
         Row(Modifier.fillMaxWidth().height(104.dp).padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
-            DeckButton("BAG", Modifier.weight(1f)) { openBag() }
+            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                DeckButton("BAG", Modifier) { openBag() }
+                if (body.parallaxAvailable) {
+                    Spacer(Modifier.width(12.dp))
+                    ParallaxSwitch(body.parallaxOn) { body.toggleParallax(); haptics.click() }
+                }
+            }
             ShutterRelease(busy = body.busy) {
                 if (!body.busy && body.framesLeft > 0) { haptics.shutter(); mirrorUp = true }
                 body.shoot(onShot = { haptics.advance() })
@@ -574,4 +583,55 @@ fun dofMarks(lens: Lens, n: Float, s: Float): List<Pair<Float, Color>> {
     val near = s * (h - f) / (h + s - 2 * f)
     val far = if (s < h) s * (h - f) / (h - s) else Float.POSITIVE_INFINITY
     return listOf(positionFor(lens, near) to Palette.orange, positionFor(lens, far) to Palette.orange)
+}
+
+/**
+ * The parallax switch on the deck: a small lever, its lamp amber when on. On, each
+ * shot is followed by the guided left and right frames (ParallaxCapture).
+ */
+@Composable
+private fun ParallaxSwitch(on: Boolean, onToggle: () -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable(onClick = onToggle).padding(4.dp)) {
+        Canvas(Modifier.size(10.dp)) {
+            if (on) drawCircle(Brush.radialGradient(listOf(Palette.amber.copy(alpha = 0.55f), Color.Transparent)), size.minDimension * 0.9f)
+            drawCircle(if (on) Palette.amber else Color(0xFF2A2622), size.minDimension / 2.6f)
+        }
+        Spacer(Modifier.height(4.dp))
+        // the lever: up for on
+        Box(Modifier.size(width = 22.dp, height = 34.dp).clip(RoundedCornerShape(11.dp)).background(Color(0xFF0A0A09))
+            .border(1.dp, Palette.panelHi, RoundedCornerShape(11.dp))) {
+            Box(Modifier.align(if (on) Alignment.TopCenter else Alignment.BottomCenter).padding(3.dp).size(16.dp).clip(CircleShape)
+                .background(Brush.radialGradient(listOf(Palette.chromeHi, Palette.chromeLo))))
+        }
+        Spacer(Modifier.height(4.dp))
+        Text("PARALLAX", color = if (on) Palette.amber else Palette.dim, fontSize = 7.sp, letterSpacing = 1.sp)
+    }
+}
+
+/**
+ * The finder during parallax capture: ARCore's view (in a TextureView, so the eyepiece
+ * still bends and blooms it), the ghost camera's wireframes drawn over it, and the
+ * hint in the finder's own lettering. ✕ gives up (the frame keeps single-shot depth).
+ */
+@Composable
+private fun ParallaxFinder(pc: app.relens.parallax.ParallaxCapture, modifier: Modifier) {
+    val hint by pc.hint.collectAsState()
+    val phase by pc.phase.collectAsState()
+    Box(modifier.background(Color.Black)) {
+        androidx.compose.ui.viewinterop.AndroidView(modifier = Modifier.fillMaxSize(), factory = { ctx ->
+            android.view.TextureView(ctx).apply { surfaceTextureListener = pc.loop }
+        })
+        val step = when (phase) {
+            app.relens.parallax.ParallaxCapture.Phase.LEFT -> "1 / 2 · LEFT"
+            app.relens.parallax.ParallaxCapture.Phase.RIGHT -> "2 / 2 · RIGHT"
+            app.relens.parallax.ParallaxCapture.Phase.DONE -> "PARALLAX ✓"
+            else -> "PARALLAX"
+        }
+        Text(step, color = Color(0xFFFFEBCC), fontSize = 12.sp, letterSpacing = 2.sp,
+            modifier = Modifier.align(Alignment.TopStart).padding(12.dp))
+        Text("✕", color = Color(0xFFFFEBCC), fontSize = 18.sp,
+            modifier = Modifier.align(Alignment.TopEnd).clickable { pc.cancel() }.padding(12.dp))
+        Text(hint, color = Color(0xFFFFEBCC), fontSize = 15.sp,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 22.dp))
+    }
 }
