@@ -348,6 +348,21 @@ half4 main(float2 p) {
     col *= 1.0 - 0.35 * t * r2 * r2;
     float outside = smoothstep(0.97, 1.04, r);
     col = mix(col, half3(0.02, 0.02, 0.025), outside * t);
+    // The lit glass blooms past its edge into the dark: the light just inside the rim,
+    // gathered along it (soft, not a copy), spreading out a tight halo and a broad glow.
+    if (r > 0.9) {
+        float2 dir = d / max(r, 1e-4);
+        float2 tang = float2(-dir.y, dir.x);
+        half3 rim = half3(0);
+        for (int i = -3; i <= 3; i++) {
+            float2 q = c + (dir * 0.9 + tang * float(i) * 0.07) * R;
+            rim += image.eval(q).rgb;
+        }
+        rim /= 7.0;
+        float out_ = max(r - 0.985, 0.0);
+        float bloom = 0.55 * exp(-out_ / 0.035) + 0.22 * exp(-out_ / 0.16);
+        col += rim * rim * half3(1.0, 0.97, 0.92) * bloom * t * smoothstep(0.9, 0.99, r);
+    }
     col += half3(0.10) * t * exp(-pow((r - 0.985) / 0.012, 2.0)) * (0.6 + 0.4 * d.y * -1.0);
     return half4(col, 1.0);
 }
