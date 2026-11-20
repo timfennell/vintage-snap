@@ -1,7 +1,8 @@
-// Joint bilateral upsampling: the depth network's low-resolution disparity to
-// full resolution, edges taken from the full-resolution picture, so the blur
-// boundary follows the subject's outline (hair, twigs) rather than the
-// network's 14-pixel patches.
+// Joint bilateral upsampling: the depth network's disparity to full resolution,
+// edges taken from the full-resolution picture in colour (not just brightness),
+// so the blur boundary follows the subject's outline rather than the network's
+// 14-pixel patches. A 6 x 6 window of network pixels; refine.comp then snaps
+// what's left to the picture's edges at full resolution.
 uniform sampler2D uDispLo;       // R32F, texelFetch only (not filterable)
 uniform sampler2D uGuideLo;      // RGBA8: the picture the network saw
 uniform sampler2D uSrc;          // RGBA16F: full-resolution linear picture
@@ -10,6 +11,8 @@ uniform float uSigmaRange;
 uniform vec4 uWarp;              // the same shift-lens warp as linearize
 uniform vec2 uWarpFZ;
 
+vec3 percept(vec3 lin) { return sqrt(max(lin, 0.0)); }
+
 void main() {
     ivec2 p = ivec2(gl_GlobalInvocationID.xy);
     ivec2 sz = imageSize(uOut);
@@ -17,17 +20,18 @@ void main() {
     ivec2 lo = textureSize(uDispLo, 0);
     vec2 fp = shift_uv(vec2(p) + 0.5, vec2(sz), uWarp, uWarpFZ) * vec2(lo) - 0.5;
     ivec2 b = ivec2(floor(fp));
-    float g = sqrt(luma(texelFetch(uSrc, p, 0).rgb));     // roughly perceptual
+    vec3 g = percept(texelFetch(uSrc, p, 0).rgb);
     float acc = 0.0, wsum = 0.0;
     float inv2s = 1.0 / (2.0 * uSigmaRange * uSigmaRange);
-    for (int y = -1; y <= 2; y++) {
-        for (int x = -1; x <= 2; x++) {
+    for (int y = -2; y <= 3; y++) {
+        for (int x = -2; x <= 3; x++) {
             ivec2 t = clamp(b + ivec2(x, y), ivec2(0), lo - 1);
             vec2 d = vec2(t) - fp;
-            float ws = exp(-0.5 * dot(d, d));
-            float gl = sqrt(luma(to_lin(texelFetch(uGuideLo, t, 0).rgb)));
-            float wr = exp(-(g - gl) * (g - gl) * inv2s);
-            float w = ws * wr + 1e-5 * ws;
+            float ws = exp(-0.35 * dot(d, d));
+            vec3 gl = percept(to_lin(texelFetch(uGuideLo, t, 0).rgb));
+            vec3 dc = g - gl;
+            float wr = exp(-dot(dc, dc) * inv2s);
+            float w = ws * wr + 1e-6 * ws;
             acc += texelFetch(uDispLo, t, 0).r * w;
             wsum += w;
         }

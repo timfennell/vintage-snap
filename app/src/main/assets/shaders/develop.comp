@@ -54,14 +54,17 @@ vec3 film_look(vec3 lin, vec3 halo, vec2 px, uint seed, float lines) {
     // Grain: strongest in the midtones, finer on slower stocks.
     float size = uF[7].y * lines / 1080.0;
     vec2 g = px / max(size, 0.5);
-    float amp = uF[5].w * 0.16;
+    // Vintage Click develops ~2000-line frames; a 4000-line print shows the same
+    // grain as more, smaller-looking speckle at 100 %. Ease its amplitude by the
+    // square root of the extra lines so it reads as grain, not noise.
+    float amp = uF[5].w * 0.16 * clamp(sqrt(2048.0 / lines), 0.55, 1.0);
     float mono = value_noise(g, seed) + value_noise(g * 2.1 + 17.0, seed + 1u) * 0.5 - 0.75;
     vec3 n;
     if (bw) n = vec3(mono);
     else {
         vec3 chroma = vec3(value_noise(g + 31.0, seed + 2u), value_noise(g + 57.0, seed + 3u),
                            value_noise(g + 83.0, seed + 4u)) - 0.5;
-        n = mono + 0.35 * chroma;
+        n = mono + 0.15 * chroma;   // dye clouds: mostly luminance, a little colour
     }
     y += amp * n * 4.0 * y * (1.0 - y);
     return clamp(y, 0.0, 1.0);

@@ -26,7 +26,7 @@ adb shell rm -rf $DEV/out $DEV/bench.txt
 have=$(adb shell ls $DEV/models 2>/dev/null || true)
 for f in "$MODELS"/da2s_fp32_392x518.onnx "$MODELS"/da2s_fp16_392x518.onnx \
          "$MODELS"/qai_tflite/depth_anything_v2-tflite-float/depth_anything_v2.tflite \
-         ${QNN:+"$MODELS"/da2s_qai_w8a16_518x518.onnx} ${EXTRA_MODELS:-}; do
+         ${QNN:+"$MODELS"/da2s_qai_w8a16_518x518.onnx}; do
   n=$(basename "$f")
   if ! grep -qx "$n" <<<"$have"; then echo "push $n"; adb push "$f" $DEV/models/ >/dev/null; fi
 done

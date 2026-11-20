@@ -43,6 +43,8 @@ data class DevelopJob(
     val tiltDeg: FloatArray = floatArrayOf(0f, 0f),
     /** A shift lens's shift, mm: right and up. */
     val shiftMM: FloatArray = floatArrayOf(0f, 0f),
+    /** Copy the print into the gallery (the bench's test developments don't). */
+    val publish: Boolean = true,
 )
 
 class Print(
@@ -64,7 +66,12 @@ class Developer(private val context: Context) {
     private var engine: LensEngine? = null
     private var depth: DepthEstimator? = null
 
-    val modelFile: File get() = File(context.getExternalFilesDir(null), "models/da2s_fp32_392x518.onnx")
+    /** The depth model: the 1036 px export (5.6 s, resolves chair legs) if present, else the 518 px one. */
+    val modelFile: File get() {
+        val dir = File(context.getExternalFilesDir(null), "models")
+        return listOf("da2s_fp32_770x1036.onnx", "da2s_fp32_392x518.onnx").map { File(dir, it) }.firstOrNull { it.exists() }
+            ?: File(dir, "da2s_fp32_770x1036.onnx")
+    }
 
     suspend fun develop(job: DevelopJob): Print = withContext(dispatcher) {
         val t = LinkedHashMap<String, Long>()
@@ -101,7 +108,8 @@ class Developer(private val context: Context) {
         }
         val look = Look(job.lens, job.fNumber, dispA = 0f, dispB = dispB, focusD = focusD,
             tiltD = tiltD, keystone = Movements.keystone(job.lens, job.shiftMM),
-            stock = job.stock, push = job.push, samples = 96)
+            stock = job.stock, push = job.push, samples = 256, levelBias = -1f,
+            pointBoost = if (job.dng != null) 0f else 8f)
         val out = eng.develop(src, dispLo, guideLo, w, h, look); lap("lens+film")
         val buf = ByteBuffer.allocateDirect(w * h * 4).order(ByteOrder.nativeOrder())
         g.readRgba8(out, w, h, buf); buf.position(0)
@@ -113,7 +121,7 @@ class Developer(private val context: Context) {
         val file = File(context.getExternalFilesDir("prints"), "$name.jpg")
         file.outputStream().use { print.compress(Bitmap.CompressFormat.JPEG, 95, it) }
         writeExif(file, job, look)
-        val uri = runCatching { publish(file, name) }.onFailure { Log.w("Relens", "gallery save failed", it) }.getOrNull()
+        val uri = if (!job.publish) null else runCatching { publish(file, name) }.onFailure { Log.w("Relens", "gallery save failed", it) }.getOrNull()
         lap("save")
         val ps = 1440f / maxOf(w, h)
         val preview = Bitmap.createScaledBitmap(print, (w * ps).toInt(), (h * ps).toInt(), true)

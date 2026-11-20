@@ -60,6 +60,7 @@ class Bench(private val ctx: Context, private val ui: (String) -> Unit) {
         // The app owns files/models (a folder adb creates is not listable by the app).
         File(dir, "models").mkdirs()
         if ("setup" in flags) { log("SETUP DONE"); log("BENCH DONE"); return }
+        if ("develop" in flags) { developOnce(flags); File(dir, "bench.txt").writeText(report.toString()); log("BENCH DONE"); return }
         val t0 = System.nanoTime()
         try {
             body(flags)
@@ -265,6 +266,31 @@ class Bench(private val ctx: Context, private val ui: (String) -> Unit) {
         log("ESTIMATE preview re-render (lens+film only, N=48): %.0f ms".format(summary["preview N=48"] ?: Double.NaN))
         log("ESTIMATE full-res export: depth %.0f + GPU/readback/encode %.0f = %.1f s".format(depthMs, exp12, (depthMs + exp12) / 1000))
         log("ESTIMATE 2x export GPU (N=96): %.1f s".format((summary["2x N=96"] ?: Double.NaN) / 1000))
+    }
+
+    /**
+     * The app's own developer on files/input.jpg, settings from flags:
+     *   lens=<name part> f=<f-number> fx=, fy= (focus point) subject=<m> focusm=<m>
+     *   stock=<name part> tilt=x:y shift=x:y
+     * The print lands in files/out/ (not the gallery).
+     */
+    private fun developOnce(flags: Set<String>) {
+        fun str(k: String) = flags.firstOrNull { it.startsWith("$k=") }?.removePrefix("$k=")?.replace('_', ' ')
+        fun num(k: String) = str(k)?.toFloatOrNull()
+        fun pair(k: String) = str(k)?.split(":")?.map { it.toFloat() }?.toFloatArray() ?: floatArrayOf(0f, 0f)
+        val lens = lensBag.first { it.name.contains(str("lens") ?: "Ohi Kor 50mm f/1.4", ignoreCase = true) }
+        val stock = filmStocks.first { it.name.contains(str("stock") ?: "Portrait 400", ignoreCase = true) }
+        val job = app.relens.engine.DevelopJob(
+            jpeg = File(dir, "input.jpg"), dng = null,
+            focusX = num("fx") ?: 0.5f, focusY = num("fy") ?: 0.5f,
+            cameraFocusD = num("subject")?.let { 1f / it },
+            lens = lens, fNumber = num("f") ?: lens.maxAperture, focusM = num("focusm"),
+            stock = stock, push = 0, frame = 1, tiltDeg = pair("tilt"), shiftMM = pair("shift"), publish = false)
+        log("develop ${lens.name} f/${job.fNumber} on ${stock.name}, focus ${job.focusX},${job.focusY}")
+        val dev = app.relens.engine.Developer(ctx)
+        val print = kotlinx.coroutines.runBlocking { dev.develop(job) }
+        print.file.copyTo(File(outDir, "develop_${str("tag") ?: "print"}.jpg"), overwrite = true)
+        log("developed: ${print.timings}")
     }
 
     private fun save(b: Bitmap, f: File) {

@@ -40,6 +40,10 @@ data class Look(
     val push: Int = 0,
     val exposure: Float = 1f,
     val samples: Int = 96,
+    /** Mip level offset for the gather: 0 for the preview, -1 for a print (finer, less smearing). */
+    val levelBias: Float = 0f,
+    /** A JPEG's clipped point lights are restored this much (0 for RAW, which isn't clipped). */
+    val pointBoost: Float = 8f,
 ) {
     val focusM: Float get() = 1f / maxOf(focusD, 1e-3f)
 
@@ -88,8 +92,8 @@ class LensEngine(private val gl: Gl) {
     fun develop(src: Int, dispLo: Int, guideLo: Int, w: Int, h: Int, look: Look): Int {
         timings.clear()
         val levels = if (singleLevel) 1 else min(7, floor(log2(max(w, h).toFloat())).toInt() + 1)
-        val lin = gl.texture(w, h, GLES30.GL_RGBA16F)
-        val disp = gl.texture(w, h, GLES30.GL_R32F, linear = false)
+        var lin = gl.texture(w, h, GLES30.GL_RGBA16F)
+        var disp = gl.texture(w, h, GLES30.GL_R32F, linear = false)
         val work = gl.texture(w, h, GLES30.GL_RGBA16F, levels = levels)
         val tw = (w + 15) / 16; val th = (h + 15) / 16
         val tilesA = gl.texture(tw, th, GLES30.GL_R32F, linear = false)
@@ -106,7 +110,7 @@ class LensEngine(private val gl: Gl) {
             gl.sampler(p, "uSrc", 0, src)
             gl.image(0, lin, GLES30.GL_RGBA16F)
             gl.u1f(p, "uGain", look.exposure)
-            gl.u1f(p, "uHighlight", 2f)   // JPEG only; small clipped points become hot, big areas barely change
+            gl.u1f(p, "uHighlight", 0f)   // point lights are restored in the coc pass instead
             gl.dispatch(w, h)
         }
         dump?.invoke("linearize", lin, w, h, 0)
@@ -118,8 +122,26 @@ class LensEngine(private val gl: Gl) {
             gl.sampler(p, "uGuideLo", 1, guideLo)
             gl.sampler(p, "uSrc", 2, lin)
             gl.image(0, disp, GLES30.GL_R32F)
-            gl.u1f(p, "uSigmaRange", 0.06f)
+            gl.u1f(p, "uSigmaRange", 0.08f)
             gl.dispatch(w, h)
+        }
+        timed("depth edge snap") {
+            // a-trous cross-bilateral at full resolution, steps 1, 2, 4 (disp -> tmp -> disp ...)
+            val tmp = gl.texture(w, h, GLES30.GL_R32F, linear = false)
+            val p = gl.use("refine")
+            gl.u1f(p, "uSigmaRange", 0.05f)
+            var from = disp; var to = tmp
+            for (step in intArrayOf(1, 2, 4)) {
+                gl.sampler(p, "uDisp", 0, from)
+                gl.sampler(p, "uSrc", 1, lin)
+                gl.u1i(p, "uStep", step)
+                gl.image(0, to, GLES30.GL_R32F)
+                gl.dispatch(w, h)
+                val t = from; from = to; to = t
+            }
+            if (from != disp) {     // odd number of passes: the result is in tmp; swap names
+                gl.deleteTextures(disp); disp = from
+            } else gl.deleteTextures(tmp)
         }
         dump?.invoke("jbu disp", disp, w, h, 0)
         val maxCoc = h * 0.08f
@@ -132,6 +154,7 @@ class LensEngine(private val gl: Gl) {
             gl.u1f(p, "uFocusD", look.focusD)
             // A pinhole has no focus: the same blur everywhere (its spot on film).
             gl.u1f(p, "uBaseCoc", if (look.lens.isPinhole) pinholeRadiusPx(look.lens, w) else 0f)
+            gl.u1f(p, "uPointBoost", look.pointBoost)
             gl.u2f(p, "uTiltD", look.tiltD[0], look.tiltD[1])
             gl.u1f(p, "uCocPerD", cocRadiusPxPerDioptre(look.lens, look.fNumber, look.focusM, w))
             gl.u1f(p, "uMaxCoc", maxCoc)
@@ -182,6 +205,7 @@ class LensEngine(private val gl: Gl) {
             gl.image(0, lin, GLES30.GL_RGBA16F)       // lin is free again: the blur goes there
             gl.u1i(p, "uN", n)
             gl.u1f(p, "uMaxLevel", (levels - 1).toFloat())
+            gl.u1f(p, "uLevelBias", look.levelBias)
             gl.u2f(p, "uAxis", axisX, axisY)
             gl.u1f(p, "uHalfDiag", halfDiag)
             val l = look.lens
@@ -199,6 +223,18 @@ class LensEngine(private val gl: Gl) {
             }
         }
         GLES30.glDeleteBuffers(1, intArrayOf(ubo), 0)
+        timed("smooth") {
+            // The gather wrote into lin; smooth it into a fresh texture, then swap.
+            val sm = gl.texture(w, h, GLES30.GL_RGBA16F)
+            val p = gl.use("smooth")
+            gl.sampler(p, "uIn", 0, lin)
+            gl.sampler(p, "uWork", 1, work)
+            gl.image(0, sm, GLES30.GL_RGBA16F)
+            val rows = max(64, (3_000_000 / w) / 8 * 8)
+            var y = 0
+            while (y < h) { gl.u2i(p, "uOffset", 0, y); gl.dispatch(w, min(rows, h - y)); GLES30.glFlush(); y += rows }
+            gl.deleteTextures(lin); lin = sm
+        }
         dump?.invoke("gather", lin, w, h, 0)
         timed("film develop") {
             val p = gl.use("develop")

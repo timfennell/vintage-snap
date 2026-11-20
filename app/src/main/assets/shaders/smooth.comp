@@ -1,0 +1,31 @@
+// After the gather: blurred regions are smooth by nature, so their sampling
+// noise (sparkles where the foreground layer's coverage is uncertain) can be
+// averaged away without losing anything. Each pixel averages a small disc
+// (up to 4 px, a fifth of its own blur) of the gathered picture, taking only
+// neighbours whose blur is alike (so a sharp edge next to a blurred one stays
+// sharp). In-focus pixels pass through.
+uniform sampler2D uIn;           // RGBA16F gathered picture (texelFetch)
+uniform sampler2D uWork;         // rgb + signed coc (texelFetch, level 0)
+layout(rgba16f, binding = 0) writeonly uniform image2D uOut;
+uniform ivec2 uOffset;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy) + uOffset;
+    ivec2 sz = imageSize(uOut);
+    if (p.x >= sz.x || p.y >= sz.y) return;
+    vec4 c0 = texelFetch(uIn, p, 0);
+    float coc0 = texelFetch(uWork, p, 0).a;
+    float r = clamp(abs(coc0) * 0.2, 0.0, 4.0);
+    if (r < 1.0) { imageStore(uOut, p, c0); return; }
+    vec3 acc = c0.rgb; float wsum = 1.0;
+    for (int k = 0; k < 12; k++) {
+        float a = float(k) * 0.5236 + 0.26;
+        float rr = (k % 2 == 0) ? r : r * 0.5;
+        ivec2 q = clamp(p + ivec2(round(rr * vec2(cos(a), sin(a)))), ivec2(0), sz - 1);
+        float cq = texelFetch(uWork, q, 0).a;
+        float w = exp(-abs(cq - coc0) / max(1.0, 0.25 * abs(coc0)));
+        acc += texelFetch(uIn, q, 0).rgb * w;
+        wsum += w;
+    }
+    imageStore(uOut, p, vec4(acc / wsum, 1.0));
+}

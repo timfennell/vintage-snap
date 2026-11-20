@@ -12,6 +12,7 @@ uniform vec2 uTiltD;             // dioptres of focus change at the frame's half
 uniform float uCocPerD;          // blur radius px per dioptre
 uniform float uMaxCoc;           // cap, px
 uniform float uBaseCoc;          // blur everywhere (a pinhole's spot), px
+uniform float uPointBoost;       // JPEG: how much hotter a small clipped light is restored (0 = RAW, none)
 uniform vec2 uAxis;              // optical axis, px
 uniform float uHalfDiag;         // px
 
@@ -24,5 +25,26 @@ void main() {
     float coc = uCocPerD * (uFocusD + dot(uTiltD, q) - D);
     coc = clamp(coc, -uMaxCoc, uMaxCoc);
     coc = coc >= 0.0 ? coc + uBaseCoc : coc - uBaseCoc;
-    imageStore(uOut, p, vec4(texelFetch(uSrc, p, 0).rgb, coc));
+    vec3 c = texelFetch(uSrc, p, 0).rgb;
+    // Point lights: a JPEG clips a lamp's face to white, so its blur comes out a
+    // dim smudge. Where a clipped pixel is much brighter than its surroundings
+    // (a small light, not a bright wall or window), give it back the energy it
+    // had, so it opens into a proper bokeh disc.
+    if (uPointBoost > 0.0) {
+        float m = max(c.r, max(c.g, c.b));
+        if (m > 0.85) {
+            float ring = 0.0;
+            for (int k = 0; k < 12; k++) {
+                float a = float(k) * 0.5236;
+                float r = (k < 6) ? 6.0 : 18.0;
+                ivec2 q = clamp(p + ivec2(round(r * vec2(cos(a), sin(a)))), ivec2(0), sz - 1);
+                vec3 n = texelFetch(uSrc, q, 0).rgb;
+                ring += max(n.r, max(n.g, n.b));
+            }
+            ring /= 12.0;
+            float small = smoothstep(0.75, 0.25, ring / m);      // 1 = isolated light
+            c *= 1.0 + uPointBoost * small * smoothstep(0.85, 1.0, m);
+        }
+    }
+    imageStore(uOut, p, vec4(c, coc));
 }

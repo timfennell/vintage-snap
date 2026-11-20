@@ -1,0 +1,28 @@
+// Edge snapping at full resolution: a cross-bilateral (a-trous) pass on the
+// disparity, weighted by colour likeness to the centre pixel. Run with step 1,
+// 2, 4: a depth edge that still sits a few pixels off the real outline moves
+// onto it, and flat regions smooth out without crossing edges.
+uniform sampler2D uDisp;         // R32F (texelFetch)
+uniform sampler2D uSrc;          // RGBA16F linear picture
+uniform int uStep;
+uniform float uSigmaRange;
+layout(r32f, binding = 0) writeonly uniform image2D uOut;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 sz = imageSize(uOut);
+    if (p.x >= sz.x || p.y >= sz.y) return;
+    vec3 g = sqrt(max(texelFetch(uSrc, p, 0).rgb, 0.0));
+    float inv2s = 1.0 / (2.0 * uSigmaRange * uSigmaRange);
+    float acc = 0.0, wsum = 0.0;
+    for (int y = -2; y <= 2; y++) {
+        for (int x = -2; x <= 2; x++) {
+            ivec2 q = clamp(p + ivec2(x, y) * uStep, ivec2(0), sz - 1);
+            vec3 dc = sqrt(max(texelFetch(uSrc, q, 0).rgb, 0.0)) - g;
+            float w = exp(-dot(dc, dc) * inv2s) * exp(-0.25 * float(x * x + y * y));
+            acc += texelFetch(uDisp, q, 0).r * w;
+            wsum += w;
+        }
+    }
+    imageStore(uOut, p, vec4(acc / wsum));
+}

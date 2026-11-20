@@ -1,15 +1,28 @@
-// Depth of field by gathering: each pixel looks over the largest blur that can
-// reach it (the dilated tiles) and takes each sample's light if the pixel lies
-// inside that sample's own bokeh, the lens's aperture image scaled by the
-// sample's blur and clipped into a cat's eye by the barrel where it sits in the
-// field (Shaders.swift `pupil`). Samples are read from the mip level matching
-// the patch of image each stands for, so a big blur stays smooth with few taps.
+// Depth of field by gathering, in two layers.
+//
+// Each pixel looks over the largest blur that can reach it (the dilated tiles)
+// and takes each sample's light if the pixel lies inside that sample's own
+// bokeh: the lens's aperture image, scaled by the sample's blur and clipped
+// into a cat's eye by the barrel where it sits in the field (Shaders.swift
+// `pupil`).
+//
+// Samples nearer than the pixel (a blurred foreground spilling over it) go to
+// a FOREGROUND layer with its own coverage; everything else to the BACKGROUND.
+// The print is the background with the foreground laid over it at its
+// coverage. So a blurred foreground edge melts softly over a sharp subject,
+// and a blurred background is never smeared over the subject (or the subject
+// over it): no cut-out edges, no halos.
+//
+// Samples come from the mip level matching the patch of image each stands for
+// (finer at export, to keep edges from smearing), with the pattern turned and
+// jittered differently at every pixel (fine grain, not rings).
 uniform sampler2D uWork;         // rgb + signed coc, mipmapped
 uniform sampler2D uTiles;        // R32F dilated tile reach (texelFetch)
 layout(rgba16f, binding = 0) writeonly uniform image2D uOut;
 layout(std140, binding = 0) uniform Pattern { vec4 uPat[256]; };
 uniform int uN;
 uniform float uMaxLevel;
+uniform float uLevelBias;        // mip level offset (export: -1, finer)
 uniform vec2 uAxis;
 uniform float uHalfDiag;
 uniform vec4 uLens;              // (blades, blade rotation, cat's eye, soap bubble)
@@ -26,6 +39,12 @@ float shape_norm(vec2 l, vec2 q) {
         n = r * cos(a) / cos(PI / uLens.x);
     }
     return max(n, length(l * uLens2.y + uLens.z * q));
+}
+
+float hash12(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
 }
 
 void main() {
@@ -47,25 +66,33 @@ void main() {
     if (R < 0.75) { imageStore(uOut, p, vec4(c0.rgb, 1.0)); return; }
 
     float area = PI * R * R / float(uN);
-    float lvl = clamp(0.5 * log2(area), 0.0, uMaxLevel);
+    float lvl = clamp(0.5 * log2(area) + uLevelBias, 0.0, uMaxLevel);
     vec2 inv = 1.0 / vec2(sz);
-    // The pattern turned a different way at each pixel (noise, not blocks).
-    float rot = fract(52.9829189 * fract(dot(pc, vec2(0.06711056, 0.00583715)))) * 2.0 * PI;
+    float rot = hash12(pc) * 2.0 * PI;
     mat2 turn = mat2(cos(rot), sin(rot), -sin(rot), cos(rot));
+    float jit = hash12(pc + 17.31);          // radial jitter of the whole pattern
 
     float r0 = max(abs(coc0), 0.5);
     float w0 = 1.0 / (PI * r0 * r0);
-    vec3 acc = c0.rgb * w0;
-    float wsum = w0;
+    vec3 back = c0.rgb * w0;
+    float backW = w0;
+    vec3 front = vec3(0.0);
+    float frontW = 0.0, cover = 0.0;
     float soapNorm = 1.0 / (1.0 + uLens.w * 0.25);
+    float rings = sqrt(float(uN) / PI);
     for (int j = 0; j < uN; j++) {
-        vec2 v = turn * uPat[j].xy * R;
+        vec2 u = uPat[j].xy;
+        // push each point a little in or out within its ring (keeps the area even)
+        float ru = length(u);
+        if (ru > 1e-4) u *= clamp(ru + (jit - 0.5) / rings, 0.02, 1.0) / ru;
+        vec2 v = turn * u * R;
         vec2 ps = pc + v;
         vec4 c = textureLod(uWork, ps * inv, lvl);
-        float rs = abs(c.a);
-        // Behind this pixel: no wider than its own blur (eased, not switched), so
-        // a sharp subject keeps its edge against a blurred background.
-        rs = mix(rs, min(rs, abs(coc0)), smoothstep(0.0, 1.0, c.a - coc0));
+        float cs = c.a;
+        float rs = abs(cs);
+        bool nearer = cs < coc0 - 1.0;       // in front of this pixel by more than a pixel of blur
+        // Behind this pixel: no wider than its own blur (eased), so it can't smear over it.
+        if (!nearer) rs = mix(rs, min(rs, abs(coc0)), smoothstep(0.0, 1.0, cs - coc0));
         rs = max(rs, 0.5);
         vec2 l = -v / rs;
         vec2 q = (ps - uAxis) / uHalfDiag;
@@ -74,8 +101,17 @@ void main() {
         cov *= clamp((lr - uLens2.x) * rs + 0.5, 0.0, 1.0);
         float rim = (1.0 + uLens.w * pow(min(lr, 1.0), 6.0)) * soapNorm;
         float w = cov * rim * area / (PI * rs * rs);
-        acc += c.rgb * w;
-        wsum += w;
+        if (nearer) {
+            front += c.rgb * w;
+            frontW += w;
+            cover += cov * area / (PI * rs * rs);
+        } else {
+            back += c.rgb * w;
+            backW += w;
+        }
     }
-    imageStore(uOut, p, vec4(acc / wsum, 1.0));
+    vec3 b = back / backW;
+    vec3 col = b;
+    if (frontW > 1e-6) col = mix(b, front / frontW, clamp(cover, 0.0, 1.0));
+    imageStore(uOut, p, vec4(col, 1.0));
 }

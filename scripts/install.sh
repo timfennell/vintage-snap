@@ -16,9 +16,10 @@ if ! adb shell ls -ld $DEV/models 2>/dev/null | grep -q " u0_"; then
   adb shell am start -W -n $PKG/.ui.MainActivity >/dev/null
   sleep 2
 fi
-if ! adb shell ls $DEV/models/da2s_fp32_392x518.onnx >/dev/null 2>&1; then
+# The 1036 px depth model (static shape: scripts/fix_shapes.py da2s_fp32.onnx 770 1036).
+if ! adb shell ls $DEV/models/da2s_fp32_770x1036.onnx >/dev/null 2>&1; then
   echo "pushing the depth model (99 MB)"
-  adb push "$MODELS/da2s_fp32_392x518.onnx" $DEV/models/ >/dev/null
+  adb push "$MODELS/da2s_fp32_770x1036.onnx" $DEV/models/ >/dev/null
 fi
 adb shell am start -n $PKG/.ui.MainActivity >/dev/null
 echo "Relens installed and started"
