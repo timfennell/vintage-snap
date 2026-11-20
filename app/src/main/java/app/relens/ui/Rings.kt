@@ -138,14 +138,14 @@ fun BarrelRing(
 /** The cylinder: dark at its edges, a soft highlight along it, knurled grip bands. */
 private fun DrawScope.drawBarrel(knurled: Boolean) {
     drawRect(Brush.verticalGradient(
-        0f to Color(0xFF0B0B0A), 0.18f to Color(0xFF2B2A28), 0.42f to Color(0xFF3A3936),
-        0.6f to Color(0xFF242321), 1f to Color(0xFF080807)))
+        0f to Color(0xFF050505), 0.18f to Color(0xFF161514), 0.42f to Color(0xFF201F1D),
+        0.6f to Color(0xFF121110), 1f to Color(0xFF040403)))
     if (knurled) {
         val band = size.height * 0.16f
         val step = 7f
         var x = 0f
         while (x < size.width) {
-            drawLine(Color(0x33FFFFFF), Offset(x, size.height - band), Offset(x + 3f, size.height), 1.2f)
+            drawLine(Color(0x1FFFFFFF), Offset(x, size.height - band), Offset(x + 3f, size.height), 1.2f)
             drawLine(Color(0x55000000), Offset(x + 2f, size.height - band), Offset(x + 5f, size.height), 1.2f)
             x += step
         }

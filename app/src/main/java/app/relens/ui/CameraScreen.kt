@@ -156,7 +156,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                     is Movement.Shift -> ShiftGuides(Modifier.fillMaxSize())
                     Movement.None -> {}
                 }
-                sceneEV?.let { ev -> MeterCard(body.shutterPos, body.meteredShutterPos(ev), body.exposureStops(ev), Modifier.align(Alignment.CenterStart)) }
+                sceneEV?.let { ev -> MeterCard(body.shutterPos, body.meteredShutterPos(ev), Modifier.fillMaxSize()) }
                 rigError?.let { Text(it, color = Palette.led, fontSize = 11.sp, modifier = Modifier.align(Alignment.Center).padding(16.dp)) }
                 if (blackout > 0f) Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = blackout)))
                 if (mirrorUp && (body.busy || body.sweeping)) Text("HOLD STEADY", color = Palette.led, fontSize = 16.sp,
@@ -305,32 +305,74 @@ private fun applyCrop(tv: android.view.TextureView) {
 
 fun shutterLabel(t: Float): String = if (t >= 0.5f) "%.0f\"".format(t) else "1/%.0f".format(1f / t)
 
-/**
- * Vintage Click's meter: the shutter speeds on a card at the finder's left edge, the set speed
- * lit, and a needle (with mass, so it swings) pointing at the speed the meter wants.
- */
 @Composable
-private fun MeterCard(setPos: Float, meterPos: Float, stops: Float, modifier: Modifier) {
-    val needle by animateFloatAsState(meterPos.coerceIn(-0.6f, shutterSpeeds.size - 0.4f),
-        androidx.compose.animation.core.spring(dampingRatio = 0.55f, stiffness = 60f), label = "needle")
+/**
+ * The light meter, as in Vintage Click's finder (ViewfinderHUD.drawPlate and the
+ * shader's meter_light): a scale of shutter speeds cast as light beside the image,
+ * a faint cream bar with red caps (M at the foot), fast speeds in cream and the
+ * slow ones (1/30 and longer) in red, each tick aimed at the needle's pivot, which
+ * sits off the frame to the left; a green tab at the set speed; and the needle, lit
+ * red with a soft glow, swinging in from the dark edge to the speed the meter
+ * wants. It has mass: it overshoots a little and settles.
+ */
+private fun MeterCard(setPos: Float, meterPos: Float, modifier: Modifier) {
+    val needle by animateFloatAsState(meterPos.coerceIn(-1.5f, shutterSpeeds.size + 0.5f),
+        androidx.compose.animation.core.spring(dampingRatio = 0.71f, stiffness = 60f), label = "needle")
     val measurer = androidx.compose.ui.text.rememberTextMeasurer()
-    Canvas(modifier.fillMaxHeight(0.62f).width(34.dp).padding(start = 4.dp)) {
-        drawRect(Color(0x99000000))
+    val cream = Color(0xFFFFE6C7); val red = Color(0xFFFF6647); val green = Color(0xE673F2B3)
+    val needleRed = Color(0xFFE6140D)
+    Canvas(modifier.fillMaxSize().graphicsLayer {
+        // projected light: it adds to the image under it
+        compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen
+        blendMode = androidx.compose.ui.graphics.BlendMode.Plus
+    }) {
+        val u = 8.dp.toPx()
+        val cardW = 3.6f * u; val cardH = size.height * 0.66f
+        val card = androidx.compose.ui.geometry.Rect(Offset(1.0f * u, (size.height - cardH) / 2), androidx.compose.ui.geometry.Size(cardW, cardH))
+        val cap = 2.0f * u
         val n = shutterSpeeds.size
-        val step = size.height / n
-        fun y(i: Float) = size.height - (i + 0.5f) * step       // slow at the bottom, fast at the top
+        val step = (card.height - 2 * cap) / n
+        fun y(i: Float) = card.top + cap + (n - 1 - i + 0.5f) * step         // fast at the top
+        val pivot = Offset(card.left - 9f * u, card.center.y)
+        val corner = androidx.compose.ui.geometry.CornerRadius(0.5f * u)
+        drawRoundRect(cream.copy(alpha = 0.16f), card.topLeft, card.size, corner)
+        val capSize = androidx.compose.ui.geometry.Size(cardW, cap * 0.8f)
+        drawRoundRect(red.copy(alpha = 0.75f), card.topLeft, capSize, androidx.compose.ui.geometry.CornerRadius(0.4f * u))
+        drawRoundRect(red.copy(alpha = 0.75f), Offset(card.left, card.bottom - cap * 0.8f), capSize, androidx.compose.ui.geometry.CornerRadius(0.4f * u))
+        val m = measurer.measure("M", androidx.compose.ui.text.TextStyle(color = Color.Black.copy(alpha = 0.55f), fontSize = (1.0f * u).toSp(),
+            fontFamily = Futuraish, fontWeight = FontWeight.SemiBold))
+        drawText(m, topLeft = Offset(card.center.x - m.size.width / 2f, card.bottom - cap * 0.4f - m.size.height / 2f))
+        val fontPx = minOf(step * 0.58f, cardW * 0.27f)
         for ((i, sp) in shutterSpeeds.withIndex()) {
-            val on = kotlin.math.abs(i - setPos) < 0.5f
-            val t = measurer.measure(sp.first, androidx.compose.ui.text.TextStyle(
-                color = if (on) Palette.led else Palette.cream.copy(alpha = 0.55f), fontSize = 8.sp,
-                fontWeight = if (on) FontWeight.Bold else FontWeight.Normal))
-            drawText(t, topLeft = Offset(size.width - t.size.width - 2f, y(i.toFloat()) - t.size.height / 2f))
+            val slow = sp.second >= 1f / 30
+            val c = if (slow) red else cream
+            val yy = y(i.toFloat())
+            val t = measurer.measure(sp.first, androidx.compose.ui.text.TextStyle(color = c, fontSize = fontPx.toSp(),
+                fontFamily = Futuraish, fontWeight = FontWeight.Medium,
+                shadow = androidx.compose.ui.graphics.Shadow(c.copy(alpha = 0.5f), Offset.Zero, 0.5f * u)))
+            drawText(t, topLeft = Offset(card.right - t.size.width - 0.35f * u, yy - t.size.height / 2f))
+            // a tick at each mark, along the needle's line when it points there
+            val p0 = Offset(card.left + 0.1f * u, yy)
+            val d = p0 - pivot
+            val dir = d / d.getDistance()
+            drawLine(c.copy(alpha = 0.85f), p0, p0 + dir * (0.9f * u), 0.13f * u)
         }
-        // the needle: a red pointer from the left edge
-        val ny = y(needle)
-        val over = stops > 0.3f; val under = stops < -0.3f
-        val c = if (over || under) Palette.led else Color(0xFF7CFF6B)
-        drawLine(c, Offset(0f, ny), Offset(size.width * 0.45f, ny), 3f)
+        // the green tab at the set speed, pointing out of the scale
+        val ty = y(setPos)
+        val tab = androidx.compose.ui.graphics.Path().apply {
+            moveTo(card.right - 0.2f * u, ty - 0.45f * step); lineTo(card.right + 1.4f * u, ty - 0.25f * step)
+            lineTo(card.right + 1.4f * u, ty + 0.25f * step); lineTo(card.right - 0.2f * u, ty + 0.45f * step); close()
+        }
+        drawPath(tab, green)
+        // the needle: aimed through the reading's tick, ending just past the ticks
+        val aim = Offset(card.left + 0.1f * u, y(needle))
+        val reach = (card.left + 1.15f * u - pivot.x) / (aim.x - pivot.x)
+        val tip = pivot + (aim - pivot) * reach
+        // lit only inside the frame: it fades in from the edge, swinging out of the dark
+        val lit = Brush.horizontalGradient(0f to Color.Transparent, 1f to needleRed, startX = 0f, endX = 3.5f * u)
+        val litGlow = Brush.horizontalGradient(0f to Color.Transparent, 1f to needleRed.copy(alpha = 0.25f), startX = 0f, endX = 3.5f * u)
+        drawLine(litGlow, pivot, tip, 0.9f * u, cap = androidx.compose.ui.graphics.StrokeCap.Round)
+        drawLine(lit, pivot, tip, maxOf(1.5f, 0.2f * u), cap = androidx.compose.ui.graphics.StrokeCap.Round)
     }
 }
 
@@ -415,7 +457,7 @@ private fun ShutterRelease(busy: Boolean, onRelease: () -> Unit) {
     val src = remember { MutableInteractionSource() }
     val pressed by src.collectIsPressedAsState()
     val s by animateFloatAsState(if (pressed) 0.9f else 1f, label = "shutter")
-    Box(Modifier.size(92.dp).clip(CircleShape).background(Brush.radialGradient(listOf(Color(0xFF2E2D2B), Color(0xFF111110)))),
+    Box(Modifier.size(92.dp).clip(CircleShape).background(Brush.radialGradient(listOf(Color(0xFF1A1918), Color(0xFF080808)))),
         contentAlignment = Alignment.Center) {
         Box(Modifier.size(64.dp).scale(s).clip(CircleShape)
             .background(Brush.linearGradient(listOf(Palette.chromeHi, Palette.chromeLo, Palette.chromeHi)))
