@@ -176,7 +176,7 @@ fun FilmScreen(body: Body, haptics: Haptics, onBack: () -> Unit) {
 /** The darkroom: prints as they come out. Hold a print to see the camera's own picture. */
 @Composable
 fun DarkroomScreen(body: Body, onBack: () -> Unit, openBench: () -> Unit) {
-    Panel("DARKROOM", "prints are saved to Pictures/Relens · hold a print to see the negative's source", onBack) {
+    Panel("DARKROOM", "prints are saved to Pictures/Vintage Snap · hold a print to see the negative's source", onBack) {
         if (body.darkroom.isEmpty()) {
             Text("Nothing developed yet this session.", color = Palette.dim, modifier = Modifier.padding(12.dp))
         }

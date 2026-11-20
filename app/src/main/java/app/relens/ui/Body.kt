@@ -342,7 +342,7 @@ class Body(app: Application) : AndroidViewModel(app) {
                     // the sweep's distances, measured on this very frame
                     afSamples = swept, exposureStops = stops))
                 entry.preview = p.preview; entry.original = p.original
-                entry.status = if (p.uri != null) "in Pictures/Relens · ${p.timings}" else "saved in the app · ${p.timings}"
+                entry.status = if (p.uri != null) "in Pictures/Vintage Snap · ${p.timings}" else "saved in the app · ${p.timings}"
                 entry.done = true
             } catch (t: Throwable) {
                 busy = false

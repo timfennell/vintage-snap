@@ -323,7 +323,7 @@ class Developer(private val context: Context) {
         val print = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { it.copyPixelsFromBuffer(buf) }
         lap("readback")
 
-        val name = "RELENS_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + "_%02d".format(job.frame)
+        val name = "VINTAGESNAP_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + "_%02d".format(job.frame)
         val file = File(context.getExternalFilesDir("prints"), "$name.jpg")
         file.outputStream().use { print.compress(Bitmap.CompressFormat.JPEG, 95, it) }
         writeExif(file, job, look)
@@ -396,7 +396,7 @@ class Developer(private val context: Context) {
         fun ascii(t: String) = t.replace('·', '-').replace('°', ' ').filter { it.code in 32..126 }
         runCatching {
             val e = ExifInterface(f)
-            e.setAttribute(ExifInterface.TAG_MAKE, "Relens")
+            e.setAttribute(ExifInterface.TAG_MAKE, "Vintage Snap")
             e.setAttribute(ExifInterface.TAG_LENS_MAKE, job.lens.name.substringBefore(' '))
             e.setAttribute(ExifInterface.TAG_LENS_MODEL, ascii(job.lens.name))
             e.setAttribute(ExifInterface.TAG_F_NUMBER, "%.1f".format(job.fNumber))
@@ -413,7 +413,7 @@ class Developer(private val context: Context) {
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, "$name.jpg")
             put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-            put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Relens")
+            put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Vintage Snap")
             put(MediaStore.Images.Media.IS_PENDING, 1)
         }
         val cr = context.contentResolver

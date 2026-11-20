@@ -1,4 +1,4 @@
-# Relens (working name)
+# Vintage Snap
 
 An Android app that relenses real phone photos with the simulated lenses and
 film stocks of [Vintage Click](https://github.com/timfennell/vintage-click):
