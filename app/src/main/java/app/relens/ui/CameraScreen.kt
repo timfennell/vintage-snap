@@ -224,9 +224,9 @@ private fun SharpBand(body: Body, modifier: Modifier) {
     Canvas(modifier) {
         val hd = kotlin.math.hypot(size.width / 2, size.height / 2)
         // depth of field in dioptres either side (0.03 mm circle), over the plane's slope across the frame
-        val f = lens.focalMM / 1000f
+        val f = VIEW_FOCAL_MM / 1000f
         val s = body.focusM?.takeIf { it.isFinite() } ?: 2f
-        val dofD = 0.00003f / ((f / body.fNumber) * f / (1 - f / s))
+        val dofD = 0.00003f / ((lens.focalMM / 1000f / body.fNumber) * f / (1 - f / s))
         val half = (dofD / g * hd).coerceIn(4f, size.maxDimension)
         val dir = Offset(tilt[0] / g, tilt[1] / g)              // the way focus changes
         val along = Offset(-dir.y, dir.x)
@@ -319,6 +319,9 @@ private fun FinderOverlay(fx: Float, fy: Float, modifier: Modifier) {
     }
 }
 
+/** The phone camera's 35 mm-equivalent focal length (Nothing main camera: 0.68 of the long side x 36 mm). */
+const val VIEW_FOCAL_MM = 0.68f * 36f
+
 /** The focus ring's position (in scale marks) for a distance, interpolating in dioptres. */
 fun positionFor(lens: Lens, m: Float): Float {
     val marks = lens.focusMarks
@@ -333,8 +336,10 @@ fun positionFor(lens: Lens, m: Float): Float {
 /** The DoF scale: the near and far limits (35 mm, 0.03 mm circle) as orange ticks on the focus ring. */
 fun dofMarks(lens: Lens, n: Float, s: Float): List<Pair<Float, Color>> {
     if (s.isInfinite() || lens.isPinhole) return emptyList()
-    val f = lens.focalMM / 1000f
-    val h = f * f / (n * 0.00003f) + f
+    // Equivalent framing (Optics.cocRadiusPxPerDioptre): the lens's pupil, the phone's focal length.
+    val f = VIEW_FOCAL_MM / 1000f
+    val ne = n * VIEW_FOCAL_MM / lens.focalMM
+    val h = f * f / (ne * 0.00003f) + f
     val near = s * (h - f) / (h + s - 2 * f)
     val far = if (s < h) s * (h - f) / (h - s) else Float.POSITIVE_INFINITY
     return listOf(positionFor(lens, near) to Palette.orange, positionFor(lens, far) to Palette.orange)

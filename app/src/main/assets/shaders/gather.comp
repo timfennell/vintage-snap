@@ -72,12 +72,17 @@ void main() {
     mat2 turn = mat2(cos(rot), sin(rot), -sin(rot), cos(rot));
     float jit = hash12(pc + 17.31);          // radial jitter of the whole pattern
 
+    // Three layers, each with its own colour and coverage: NEARER things (spilling
+    // over this pixel), this pixel's OWN surface, and things BEHIND it. A blurred
+    // surface is partly transparent near its edge (its light spreads over its whole
+    // disc), so its own layer fades there and what is behind shows through; an
+    // in-focus surface (tiny disc, huge coverage) stays opaque.
     float r0 = max(abs(coc0), 0.5);
+    float tol = max(1.0, 0.15 * abs(coc0));
     float w0 = 1.0 / (PI * r0 * r0);
-    vec3 back = c0.rgb * w0;
-    float backW = w0;
-    vec3 front = vec3(0.0);
-    float frontW = 0.0, cover = 0.0;
+    vec3 nearC = vec3(0.0), ownC = c0.rgb * w0, behC = vec3(0.0), behAny = vec3(0.0);
+    float nearW = 0.0, ownW = w0, behW = 0.0, behN = 0.0;
+    float nearCov = 0.0, ownCov = area * w0, behCov = 0.0;
     float soapNorm = 1.0 / (1.0 + uLens.w * 0.25);
     float rings = sqrt(float(uN) / PI);
     for (int j = 0; j < uN; j++) {
@@ -90,9 +95,9 @@ void main() {
         vec4 c = textureLod(uWork, ps * inv, lvl);
         float cs = c.a;
         float rs = abs(cs);
-        bool nearer = cs < coc0 - 1.0;       // in front of this pixel by more than a pixel of blur
+        int layer = cs < coc0 - tol ? 0 : (cs > coc0 + tol ? 2 : 1);
         // Behind this pixel: no wider than its own blur (eased), so it can't smear over it.
-        if (!nearer) rs = mix(rs, min(rs, abs(coc0)), smoothstep(0.0, 1.0, cs - coc0));
+        if (layer == 2) rs = mix(rs, min(rs, abs(coc0)), smoothstep(0.0, 1.0, cs - coc0));
         rs = max(rs, 0.5);
         vec2 l = -v / rs;
         vec2 q = (ps - uAxis) / uHalfDiag;
@@ -100,18 +105,19 @@ void main() {
         float lr = length(l);
         cov *= clamp((lr - uLens2.x) * rs + 0.5, 0.0, 1.0);
         float rim = (1.0 + uLens.w * pow(min(lr, 1.0), 6.0)) * soapNorm;
-        float w = cov * rim * area / (PI * rs * rs);
-        if (nearer) {
-            front += c.rgb * w;
-            frontW += w;
-            cover += cov * area / (PI * rs * rs);
-        } else {
-            back += c.rgb * w;
-            backW += w;
-        }
+        float spread = area / (PI * rs * rs);
+        float w = cov * rim * spread;
+        if (layer == 0) { nearC += c.rgb * w; nearW += w; nearCov += cov * spread; }
+        else if (layer == 1) { ownC += c.rgb * w; ownW += w; ownCov += cov * spread; }
+        else { behC += c.rgb * w; behW += w; behCov += cov * spread; behAny += c.rgb; behN += 1.0; }
     }
-    vec3 b = back / backW;
-    vec3 col = b;
-    if (frontW > 1e-6) col = mix(b, front / frontW, clamp(cover, 0.0, 1.0));
+    // Behind: what covers this pixel; failing that, the nearby background's colour
+    // (the part hidden behind this surface is unknown: its neighbours stand in).
+    vec3 col = ownC / ownW;
+    if (behN > 0.0) {
+        vec3 beh = behW > 1e-6 ? behC / behW : behAny / behN;
+        col = mix(beh, col, clamp(ownCov, 0.0, 1.0));
+    }
+    if (nearW > 1e-6) col = mix(col, nearC / nearW, clamp(nearCov, 0.0, 1.0));
     imageStore(uOut, p, vec4(col, 1.0));
 }

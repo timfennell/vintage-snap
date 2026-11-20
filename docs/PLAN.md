@@ -97,6 +97,28 @@ degrade gracefully (fewer gather samples while a ring turns, full quality when i
   from the camera's focus distance (`LENS_FOCUS_DISTANCE` in the capture
   result) and the subject's size.
 
+## Parallax capture (milestone 1b, Tim's design, 2026-11-19)
+
+For still subjects: a hero shot plus two flanking frames give measured depth
+(and the background hidden behind foreground edges).
+
+- ARCore (Shared Camera on Camera2) tracks the phone's metric pose. After the
+  hero shot the finder shows a ghosted, world-locked AR frame at the left
+  target (baseline ~ subject distance / 15); the live frame slides toward it
+  and, when position and angle line up (~1.5 cm, < 5 degrees), the frame goes
+  green and the camera fires by itself; then the ghost moves to the right
+  target and the same again. Chimes and colour, no vibration during the
+  glide (it disturbs ARCore's tracking).
+- Depth: rectify hero/left and hero/right with ARCore's poses (refined by
+  feature matching), a permissive stereo network (RAFT-Stereo MIT /
+  CREStereo or HITNet Apache-2.0) gives metric disparity; fused with Depth
+  Anything's edges (local scale/shift fit), ARCore Raw Depth as a check.
+  MASt3R / DUSt3R are CC BY-NC-SA: not shippable in a GPL app.
+- The side views fill in the background revealed around blurred foreground
+  edges (disocclusion), instead of guessing it.
+- Single-shot mode (people, pets, anything moving) stays: Depth Anything +
+  Metric3D + the autofocus anchor.
+
 ## Milestones
 
 1. **Capture**: Camera2 RAW_SENSOR to DNG (and JPEG fallback), the 3 rear

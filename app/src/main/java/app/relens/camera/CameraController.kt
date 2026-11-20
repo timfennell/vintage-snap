@@ -27,7 +27,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
 import java.io.File
-import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -53,6 +52,19 @@ class CameraController(private val context: Context) {
     private var camera: Camera? = null
     private var capture: ImageCapture? = null
     @Volatile private var lastFocusD: Float? = null
+
+    private val orientation = object : android.view.OrientationEventListener(context) {
+        override fun onOrientationChanged(deg: Int) {
+            if (deg == ORIENTATION_UNKNOWN) return
+            val r = when (deg) {
+                in 45 until 135 -> android.view.Surface.ROTATION_270
+                in 135 until 225 -> android.view.Surface.ROTATION_180
+                in 225 until 315 -> android.view.Surface.ROTATION_90
+                else -> android.view.Surface.ROTATION_0
+            }
+            capture?.targetRotation = r
+        }
+    }
 
     private val fourThree = ResolutionSelector.Builder()
         .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY).build()
@@ -88,17 +100,47 @@ class CameraController(private val context: Context) {
                 .build()
             capture = cap
             camera = provider.bindToLifecycle(owner, selector, preview, cap)
+            // The body is drawn upright always; the picture follows how the phone is held.
+            orientation.enable()
             Log.i("Relens", "camera bound, RAW+JPEG $raw, formats $formats")
         }, ContextCompat.getMainExecutor(context))
     }
 
-    /** Focus on a point of the viewfinder surface (surface pixels, from the viewfinder's transformer). */
+    /**
+     * Focus on a point of the viewfinder surface (surface pixels, from the
+     * viewfinder's transformer), and stay there until the next tap: the app
+     * develops for this point, so the phone lens must not wander back to the centre.
+     */
     fun focusAt(x: Float, y: Float) {
         val req = _surface.value ?: return
+        manualFocus(null)
         val f = SurfaceOrientedMeteringPointFactory(req.resolution.width.toFloat(), req.resolution.height.toFloat())
-        val action = FocusMeteringAction.Builder(f.createPoint(x, y))
-            .setAutoCancelDuration(5, TimeUnit.SECONDS).build()
+        val action = FocusMeteringAction.Builder(f.createPoint(x, y)).disableAutoCancel().build()
         camera?.cameraControl?.startFocusAndMetering(action)
+    }
+
+    private var manualD: Float? = null
+
+    /**
+     * The focus ring driving the phone's own lens: [dioptres] = 1 / metres (0 =
+     * infinity), within what the lens can reach; null hands focus back to autofocus.
+     */
+    @OptIn(ExperimentalCamera2Interop::class)
+    fun manualFocus(dioptres: Float?) {
+        val cam = camera ?: return
+        if (dioptres == manualD) return
+        manualD = dioptres
+        val c2 = androidx.camera.camera2.interop.Camera2CameraControl.from(cam.cameraControl)
+        val b = androidx.camera.camera2.interop.CaptureRequestOptions.Builder()
+        if (dioptres == null) {
+            b.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+        } else {
+            val minFocusD = androidx.camera.camera2.interop.Camera2CameraInfo.from(cam.cameraInfo)
+                .getCameraCharacteristic(android.hardware.camera2.CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 10f
+            b.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
+            b.setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, dioptres.coerceIn(0f, minFocusD))
+        }
+        c2.setCaptureRequestOptions(b.build())
     }
 
     @SuppressLint("RestrictedApi")

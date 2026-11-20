@@ -290,6 +290,7 @@ class Bench(private val ctx: Context, private val ui: (String) -> Unit) {
         val dev = app.relens.engine.Developer(ctx)
         val print = kotlinx.coroutines.runBlocking { dev.develop(job) }
         print.file.copyTo(File(outDir, "develop_${str("tag") ?: "print"}.jpg"), overwrite = true)
+        File(print.file.parentFile, "last_depth.png").takeIf { it.exists() }?.copyTo(File(outDir, "depth_${str("tag") ?: "print"}.png"), overwrite = true)
         log("developed: ${print.timings}")
     }
 

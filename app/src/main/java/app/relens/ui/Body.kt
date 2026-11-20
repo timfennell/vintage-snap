@@ -46,7 +46,14 @@ class Body(app: Application) : AndroidViewModel(app) {
     /** The aperture ring, in stops of the lens's own scale (fractional while turning). */
     var aperturePos by mutableFloatStateOf(prefs.getFloat("aperture", 0f))
     /** The focus ring, in marks of the lens's scale (fractional); NaN = follow the tapped subject. */
-    var focusPos by mutableFloatStateOf(prefs.getFloat("focus", Float.NaN))
+    private var _focusPos = mutableFloatStateOf(prefs.getFloat("focus", Float.NaN))
+    var focusPos: Float
+        get() = _focusPos.floatValue
+        set(v) {
+            _focusPos.floatValue = v
+            // The phone's own lens follows the ring, so it focuses where the print will.
+            camera.manualFocus(focusM?.let { if (it.isInfinite()) 0f else 1f / it })
+        }
     var stockIndex by mutableIntStateOf(prefs.getInt("stock", 1)); private set
     var push by mutableIntStateOf(prefs.getInt("push", 0)); private set
     var framesShot by mutableIntStateOf(prefs.getInt("frames", 0)); private set

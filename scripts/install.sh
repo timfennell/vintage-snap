@@ -21,5 +21,10 @@ if ! adb shell ls $DEV/models/da2s_fp32_770x1036.onnx >/dev/null 2>&1; then
   echo "pushing the depth model (99 MB)"
   adb push "$MODELS/da2s_fp32_770x1036.onnx" $DEV/models/ >/dev/null
 fi
+# Metric3D v2 ViT-S (BSD-2): calibrates the depth scale (onnx-community/metric3d-vit-small).
+if ! adb shell ls $DEV/models/metric3d_vits.onnx >/dev/null 2>&1; then
+  echo "pushing the metric depth model (150 MB)"
+  adb push "$MODELS/metric3d_vits.onnx" $DEV/models/ >/dev/null
+fi
 adb shell am start -n $PKG/.ui.MainActivity >/dev/null
 echo "Relens installed and started"

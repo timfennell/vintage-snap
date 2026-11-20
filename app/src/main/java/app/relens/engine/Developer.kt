@@ -65,6 +65,10 @@ class Developer(private val context: Context) {
     private var gl: Gl? = null
     private var engine: LensEngine? = null
     private var depth: DepthEstimator? = null
+    private var metric: MetricDepth? = null
+    val metricFile: File get() = File(context.getExternalFilesDir(null), "models/metric3d_vits.onnx")
+    /** The phone camera's focal length over its sensor's long side (the Nothing main camera: 5.56 / 8.19 mm). */
+    var viewFocal = 0.68f
 
     /** The depth model: the 1036 px export (5.6 s, resolves chair legs) if present, else the 518 px one. */
     val modelFile: File get() {
@@ -93,11 +97,41 @@ class Developer(private val context: Context) {
         val guideLo = g.texture(dm.w, dm.h, GLES30.GL_RGBA8)
         upload(g, guideLo, guide)
 
-        // Scene scale: the network's disparity is relative. Anchor it on the camera's
-        // own focus distance at the tapped point (disparity ~ 1 / distance, far ~ 0).
-        val dTap = maxOf(dm.medianAround(job.focusX, job.focusY), 0.02f)
-        val subjectD = job.cameraFocusD?.takeIf { it > 0.05f } ?: (1f / 1.5f)
-        val dispB = subjectD / dTap
+        // Scene scale: Depth Anything's disparity is relative (unknown scale and shift).
+        // Fit it to Metric3D's metres over the frame, then let the camera's own focus
+        // distance at the tapped point set the scale (it measured that one).
+        val dTap = dm.medianAround(job.focusX, job.focusY)
+        val camD = job.cameraFocusD?.takeIf { it > 0.05f }
+        var dispA: Float; var dispB: Float
+        if (metricFile.exists()) {
+            val md = (metric ?: MetricDepth(metricFile).also { metric = it }).estimate(photo.bmp, viewFocal); lap("metric")
+            val ab = MetricDepth.fit(dm, md)
+            dispB = maxOf(ab[0], 1e-3f); dispA = ab[1]
+            val fitTap = dispA + dispB * dTap
+            if (camD != null) {
+                // The camera measured the subject: pass through it exactly; the fit gives the slope.
+                Log.i("Relens", "AF %.2f m, fit %.2f m at the tap".format(1 / camD, 1 / maxOf(fitTap, 1e-3f)))
+                dispA = camD - dispB * dTap
+            }
+            // Nothing beyond 60 m (a fit's shift can push the far end past infinity).
+            val minRel = dm.data.minOrNull() ?: 0f
+            dispA = maxOf(dispA, 1f / 60f - dispB * minRel)
+        } else {
+            // No metric model: disparity ~ 1 / distance with the far end at infinity.
+            dispA = 0f; dispB = (camD ?: (1f / 1.5f)) / maxOf(dTap, 0.02f)
+        }
+        val subjectD = maxOf(dispA + dispB * dTap, 0.02f)
+        if (!job.publish) {
+            // Bench: the calibrated depth as a picture (near white, 0.25 m ... 8 m on a log scale).
+            val vis = DepthMap(dm.w, dm.h, FloatArray(dm.data.size) {
+                val z = 1f / maxOf(dispA + dispB * dm.data[it], 1f / 8f)
+                (1f - kotlin.math.ln(z / 0.25f) / kotlin.math.ln(32f)).coerceIn(0f, 1f)
+            })
+            File(context.getExternalFilesDir("prints"), "last_depth.png").outputStream().use {
+                depthToBitmap(vis).compress(Bitmap.CompressFormat.PNG, 100, it)
+            }
+            Log.i("Relens", "subject at the tap %.2f m".format(1 / subjectD))
+        }
         val tiltD = Movements.tiltDioptres(job.lens, job.tiltDeg)
         var focusD = job.focusM?.let { if (it.isInfinite()) 0f else 1f / it } ?: subjectD
         // On the subject: with a tilted plane, keep the tapped point (not the frame's centre) sharp.
@@ -106,10 +140,21 @@ class Developer(private val context: Context) {
             val qx = (job.focusX * w - w / 2f) / hd; val qy = (job.focusY * h - h / 2f) / hd
             focusD -= tiltD[0] * qx + tiltD[1] * qy
         }
-        val look = Look(job.lens, job.fNumber, dispA = 0f, dispB = dispB, focusD = focusD,
+        val look = Look(job.lens, job.fNumber, dispA = dispA, dispB = dispB, focusD = focusD, viewFocal = viewFocal,
             tiltD = tiltD, keystone = Movements.keystone(job.lens, job.shiftMM),
             stock = job.stock, push = job.push, samples = 256, levelBias = -1f,
             pointBoost = if (job.dng != null) 0f else 8f)
+        if (!job.publish) eng.dump = { name, tex, dw, dh, level ->
+            if (name == "coc work L0") {
+                // Bench: the signed blur radius along a horizontal line at the focus point and at 70 % down.
+                val f = g.readFloat(tex, dw, dh, level)
+                for (fy in floatArrayOf(job.focusY, 0.7f)) {
+                    val y = (fy * dh).toInt().coerceIn(0, dh - 1)
+                    Log.i("Relens", "coc at y=%.2f: ".format(fy) + (0 until 20).joinToString(" ") { i ->
+                        "%.0f".format(f[4 * (y * dw + i * dw / 20) + 3]) })
+                }
+            }
+        } else eng.dump = null
         val out = eng.develop(src, dispLo, guideLo, w, h, look); lap("lens+film")
         val buf = ByteBuffer.allocateDirect(w * h * 4).order(ByteOrder.nativeOrder())
         g.readRgba8(out, w, h, buf); buf.position(0)

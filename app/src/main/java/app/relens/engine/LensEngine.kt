@@ -153,10 +153,10 @@ class LensEngine(private val gl: Gl) {
             gl.u2f(p, "uDispToD", look.dispA, look.dispB)
             gl.u1f(p, "uFocusD", look.focusD)
             // A pinhole has no focus: the same blur everywhere (its spot on film).
-            gl.u1f(p, "uBaseCoc", if (look.lens.isPinhole) pinholeRadiusPx(look.lens, w) else 0f)
+            gl.u1f(p, "uBaseCoc", if (look.lens.isPinhole) pinholeRadiusPx(look.lens, maxOf(w, h), look.viewFocal * 36f) else 0f)
             gl.u1f(p, "uPointBoost", look.pointBoost)
             gl.u2f(p, "uTiltD", look.tiltD[0], look.tiltD[1])
-            gl.u1f(p, "uCocPerD", cocRadiusPxPerDioptre(look.lens, look.fNumber, look.focusM, w))
+            gl.u1f(p, "uCocPerD", cocRadiusPxPerDioptre(look.lens, look.fNumber, look.focusM, maxOf(w, h), look.viewFocal * 36f))
             gl.u1f(p, "uMaxCoc", maxCoc)
             gl.u2f(p, "uAxis", axisX, axisY)
             gl.u1f(p, "uHalfDiag", halfDiag)
