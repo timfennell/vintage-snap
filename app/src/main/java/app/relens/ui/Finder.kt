@@ -50,9 +50,11 @@ val Futuraish = FontFamily(
 private const val EYEPIECE_AGSL = """
 uniform shader image;
 uniform float2 size;
-uniform float4 inner;
+uniform float4 inner;   // the ground glass (px, in this layer)
+uniform float wall;      // how deep the eyepiece's walls stand round it (px)
 uniform float k;
 uniform float ca;
+uniform float glowPass;  // 0: the sharp pass (glass and body); 1: the light only, read from a blurred copy
 
 half3 at(float2 p) { return image.eval(p).rgb; }
 half3 lin(half3 c) { return c * c; }               // near enough sRGB -> linear for a glow
@@ -69,18 +71,18 @@ half3 bloom(float2 q, float dist) {
     float2 inward = normalize((inner.xy + inner.zw) * 0.5 - e + 1e-3);
     float2 centre = e + inward * spread * 0.6;
     half3 s = half3(0);
-    for (int i = 0; i < 16; i++) {
-        float r = sqrt((float(i) + 0.5) / 16.0);
+    for (int i = 0; i < 24; i++) {
+        float r = sqrt((float(i) + 0.5) / 24.0);
         float a = float(i) * 2.39996323;
         float2 t = clamp(centre + float2(cos(a), sin(a)) * r * spread, inner.xy + 1.0, inner.zw - 1.0);
         s += lin(at(t));
     }
-    s /= 16.0;
+    s /= 24.0;
     // a tight halo hugging the glass and a broad faint one reaching well out; bright
     // light (a window, a lamp near the edge) carries further
     float lum = dot(s, half3(0.2126, 0.7152, 0.0722));
-    float halo = 0.30 * exp(-dist / (h * 0.025)) + 0.10 * exp(-dist / (h * 0.11))
-               + 0.25 * smoothstep(0.15, 0.8, lum) * exp(-dist / (h * 0.07));
+    float halo = 0.12 * exp(-dist / (h * 0.025)) + 0.045 * exp(-dist / (h * 0.11))
+               + 0.12 * smoothstep(0.15, 0.8, lum) * exp(-dist / (h * 0.07));
     return s * halo;
 }
 
@@ -108,43 +110,58 @@ half3 walls(float2 q, float dist) {
 }
 
 half4 main(float2 p) {
-    float2 c = size * 0.5;
-    float R = 0.5 * length(size);
+    float2 outv = max(max(inner.xy - p, p - inner.zw), float2(0));
+    float dist = length(outv);
+    float h = inner.w - inner.y;
+    if (glowPass > 0.5) {
+        // the light round the glass, added over the body: the bloom, and the walls' reflection
+        if (dist <= 0.0 || dist > h * 0.3) return half4(0);
+        half3 add = bloom(p, dist);
+        if (dist < wall) add += walls(p, dist) * smoothstep(wall, wall * 0.6, dist);
+        return half4(srgb(add) * 0.8, 0.0);
+    }
+    if (dist > 0.0) return image.eval(p);
+    // the glass: pincushion about its own centre, each channel a touch apart
+    float2 c = (inner.xy + inner.zw) * 0.5;
+    float R = 0.5 * length(inner.zw - inner.xy);
     float2 d = (p - c) / R;
     float r2 = dot(d, d);
-    // pincushion: the edges stretched outward, so each channel is read nearer the middle
     float2 sr = c + (p - c) * (1.0 - k * (1.0 + ca * 40.0) * r2);
     float2 sg = c + (p - c) * (1.0 - k * r2);
     float2 sb = c + (p - c) * (1.0 - k * (1.0 - ca * 40.0) * r2);
-    // outside the glass: judged where the eye looks (p), not through the pincushion,
-    // which folds far points back into the picture
-    float2 q = p;
-    float2 outv = max(max(inner.xy - q, q - inner.zw), float2(0));
-    float dist = length(outv);
-    half3 col = half3(at(sr).r, at(sg).g, at(sb).b);
-    if (dist > 0.0) {
-        // the surround: a faintly grainy black catching the bloom, with a soft lip at the glass
-        float g = 0.012 + 0.006 * fract(sin(dot(floor(p / 3.0), float2(12.9898, 78.233))) * 43758.5453);
-        half3 sur = srgb(lin(half3(g, g, g * 1.05)) + bloom(q, dist) + walls(q, dist));
-        col = mix(col, sur, smoothstep(0.0, 1.5, dist));
-    }
-    return half4(col, 1.0);
+    return half4(at(sr).r, at(sg).g, at(sb).b, 1.0);
 }
 """
 
-/** The eyepiece as a graphics-layer effect (no effect before Android 13). */
+/**
+ * The eyepiece as a graphics-layer effect over everything round the finder (no effect before
+ * Android 13): [glass] is the ground glass in this layer's pixels, [wall] how deep the
+ * eyepiece's walls stand round it. The glass gets the pincushion; the walls mirror it; and its
+ * light blooms out over the body beside it, the lettering and the LEDs.
+ */
 @Composable
-fun Modifier.eyepiece(innerInset: Dp): Modifier {
-    if (Build.VERSION.SDK_INT < 33) return this
-    val shader = remember { RuntimeShader(EYEPIECE_AGSL) }
+fun Modifier.eyepiece(glass: androidx.compose.ui.geometry.Rect?, wall: Dp): Modifier {
+    if (Build.VERSION.SDK_INT < 33 || glass == null || glass.isEmpty) return this
+    val sharp = remember { RuntimeShader(EYEPIECE_AGSL) }
+    val glow = remember { RuntimeShader(EYEPIECE_AGSL) }
     return this.graphicsLayer {
-        val inset = innerInset.toPx()
-        shader.setFloatUniform("size", size.width, size.height)
-        shader.setFloatUniform("inner", inset, inset, size.width - inset, size.height - inset)
-        shader.setFloatUniform("k", 0.018f)
-        shader.setFloatUniform("ca", 0.0035f)
+        for ((sh, pass) in listOf(sharp to 0f, glow to 1f)) {
+            sh.setFloatUniform("size", size.width, size.height)
+            sh.setFloatUniform("inner", glass.left, glass.top, glass.right, glass.bottom)
+            sh.setFloatUniform("wall", wall.toPx())
+            sh.setFloatUniform("k", 0.018f)
+            sh.setFloatUniform("ca", 0.0035f)
+            sh.setFloatUniform("glowPass", pass)
+        }
+        // The glow reads a blurred copy, so its gathered light is a smooth wash, never
+        // ghost copies of sharp things (the meter's figures); it is added over the sharp pass.
+        val blurPx = 14.dp.toPx()
+        val blurred = RenderEffect.createBlurEffect(blurPx, blurPx, android.graphics.Shader.TileMode.CLAMP)
+        val light = RenderEffect.createRuntimeShaderEffect(glow, "image")
+        val glowFx = RenderEffect.createChainEffect(light, blurred)
+        val sharpFx = RenderEffect.createRuntimeShaderEffect(sharp, "image")
         clip = true
-        renderEffect = RenderEffect.createRuntimeShaderEffect(shader, "image").asComposeRenderEffect()
+        renderEffect = RenderEffect.createBlendModeEffect(sharpFx, glowFx, android.graphics.BlendMode.PLUS).asComposeRenderEffect()
     }
 }
 

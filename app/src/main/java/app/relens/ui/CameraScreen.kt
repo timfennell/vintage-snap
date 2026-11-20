@@ -1,5 +1,9 @@
 package app.relens.ui
 
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -88,7 +92,10 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
     val blackout by animateFloatAsState(if (mirrorUp) 1f else 0f,
         androidx.compose.animation.core.tween(if (mirrorUp) 0 else 110), label = "mirror")
 
-    Column(Modifier.fillMaxSize().background(Palette.leather).statusBarsPadding().navigationBarsPadding()) {
+    // The ground glass, in screen pixels: the eyepiece effect over the whole body works round it.
+    var glass by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
+    Column(Modifier.fillMaxSize().background(Palette.leather).eyepiece(glass, wall = 12.dp)
+        .statusBarsPadding().navigationBarsPadding()) {
         // ---- top plate: what's mounted and loaded, the frame counter ----
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f).clickable { openBag() }) {
@@ -109,10 +116,9 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 6.dp), contentAlignment = Alignment.Center) {
           // The eyepiece: a dark surround round the picture, seen through a little pincushion,
           // with light from the picture's edge spilling into it (Finder.kt).
-          // The surround is the body's own black, wide enough for the bloom to spread into.
-          Box(Modifier.aspectRatio(2f / 3f + 0.035f).background(Palette.leather)
-              .eyepiece(innerInset = 20.dp).padding(20.dp)) {
-            Box(Modifier.fillMaxSize().clip(RoundedCornerShape(3.dp)).background(Color.Black)) {
+          Box {
+            Box(Modifier.aspectRatio(2f / 3f).onGloballyPositioned { glass = it.boundsInRoot() }
+                .clip(RoundedCornerShape(6.dp)).background(Color.Black)) {
                 val shiftView = Movements.keystone(lens, floatArrayOf(body.shiftX, body.shiftY))
                 Finder(body, framing?.crop ?: 1f, Modifier.fillMaxSize()
                     .graphicsLayer {
@@ -433,11 +439,64 @@ private fun ShiftGuides(modifier: Modifier) {
     }
 }
 
+/**
+ * The frame counter, as on an SLR's top plate: a black dial with the frames engraved round
+ * its rim (S, then the even frames as numerals and the odd ones as dots, the roll's last frame
+ * in orange) turning one click per frame under a small domed glass window in a chrome bezel,
+ * read against a red index above.
+ */
 @Composable
 private fun FrameCounter(shot: Int, total: Int, modifier: Modifier = Modifier) {
-    Box(modifier.size(42.dp).clip(CircleShape).background(Color(0xFF0A0A0A)).border(2.dp, Palette.chromeLo, CircleShape),
-        contentAlignment = Alignment.Center) {
-        Text("$shot", color = if (shot >= total) Palette.led else Palette.cream, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+    val turn by animateFloatAsState(shot.toFloat(),
+        androidx.compose.animation.core.spring(dampingRatio = 0.5f, stiffness = 300f), label = "counter")
+    val measurer = androidx.compose.ui.text.rememberTextMeasurer()
+    Canvas(modifier.size(48.dp)) {
+        val c = center
+        val outer = size.minDimension / 2
+        val win = outer * 0.72f
+        // the bezel: turned chrome, light from above
+        drawCircle(Brush.linearGradient(listOf(Color(0xFFE8E8E4), Color(0xFF6E6E6A), Color(0xFFBDBDB8), Color(0xFF3A3A38)),
+            start = Offset(c.x, 0f), end = Offset(c.x, size.height)), outer, c)
+        drawCircle(Color(0xFF151514), outer * 0.86f, c)
+        // the dial, seen through the window
+        val window = androidx.compose.ui.graphics.Path().apply { addOval(androidx.compose.ui.geometry.Rect(c, win)) }
+        clipPath(window) {
+            drawCircle(Color(0xFF0C0C0B), win, c)
+            val R = win * 2.6f                                  // the dial is much bigger than the window
+            val hub = Offset(c.x, c.y + R - win * 0.15f)
+            val step = 15f                                      // degrees per frame
+            for (f in -2..total + 2) {
+                val ang = (f - turn) * step
+                if (kotlin.math.abs(ang) > 50f) continue
+                rotate(ang, pivot = hub) {
+                    val top = Offset(hub.x, hub.y - R)
+                    val col = when { f < 0 -> Palette.led; f == total -> Palette.orange; f > total -> Color(0xFF6A6A66); else -> Palette.engraving }
+                    when {
+                        f == -2 -> { val t = measurer.measure("S", androidx.compose.ui.text.TextStyle(color = col, fontSize = (win * 0.62f).toSp(), fontFamily = Futuraish, fontWeight = FontWeight.SemiBold))
+                            drawText(t, topLeft = Offset(top.x - t.size.width / 2f, top.y - t.size.height / 2f)) }
+                        f < 0 || f % 2 == 1 -> drawCircle(col, win * 0.07f, top)
+                        else -> { val t = measurer.measure("$f", androidx.compose.ui.text.TextStyle(color = col, fontSize = (win * 0.62f).toSp(), fontFamily = Futuraish, fontWeight = FontWeight.SemiBold))
+                            drawText(t, topLeft = Offset(top.x - t.size.width / 2f, top.y - t.size.height / 2f)) }
+                    }
+                    // the dial's graduations, below the figures
+                    drawLine(col.copy(alpha = 0.5f), Offset(top.x, top.y + win * 0.48f), Offset(top.x, top.y + win * 0.62f), win * 0.04f)
+                }
+            }
+            // the window's depth: the dial falls into shadow under its rim
+            drawCircle(Brush.radialGradient(0.6f to Color.Transparent, 1f to Color(0xCC000000), center = c, radius = win), win, c)
+            // the red index, printed on the inside of the window's rim
+            val idx = androidx.compose.ui.graphics.Path().apply {
+                moveTo(c.x - win * 0.12f, c.y - win * 0.98f); lineTo(c.x + win * 0.12f, c.y - win * 0.98f); lineTo(c.x, c.y - win * 0.78f); close()
+            }
+            drawPath(idx, Palette.led)
+            // the glass: a domed highlight across the top, a faint glint at the foot
+            drawOval(Brush.verticalGradient(listOf(Color(0x40FFFFFF), Color(0x00FFFFFF)), startY = c.y - win, endY = c.y),
+                topLeft = Offset(c.x - win * 0.72f, c.y - win * 0.92f), size = androidx.compose.ui.geometry.Size(win * 1.44f, win * 0.8f))
+            drawArc(Color(0x33FFFFFF), 40f, 100f, false, topLeft = Offset(c.x - win * 0.82f, c.y - win * 0.82f),
+                size = androidx.compose.ui.geometry.Size(win * 1.64f, win * 1.64f), style = Stroke(win * 0.05f))
+        }
+        // the window's rim
+        drawCircle(Color(0xFF050505), win, c, style = Stroke(outer * 0.06f))
     }
 }
 
