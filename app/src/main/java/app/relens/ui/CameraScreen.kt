@@ -274,7 +274,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                     contentAlignment = Alignment.Center) {
                     val bmp = last?.preview
                     if (bmp != null) Image(bmp.asImageBitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-                    else Text(if (last != null) "…" else "DARK\nROOM", color = Palette.dim, fontSize = 9.sp, lineHeight = 10.sp)
+                    else Text(if (last != null) "…" else "LIGHT\nTABLE", color = Palette.dim, fontSize = 9.sp, lineHeight = 10.sp)
                 }
             }
         }

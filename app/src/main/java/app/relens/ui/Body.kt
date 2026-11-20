@@ -35,7 +35,9 @@ val shutterSpeeds: List<Pair<String, Float>> = listOf(
     "1000" to 1f / 1000, "2000" to 1f / 2000, "4000" to 1f / 4000)
 
 /** A frame in the darkroom: developing, developed or failed. */
-class DarkroomEntry(val frame: Int, val label: String) {
+class DarkroomEntry(val frame: Int, val label: String, val roll: Int = 0, val stock: String = "", val bw: Boolean = false) {
+    /** Ringed on the light table as a keeper (in red china marker). */
+    var marked by mutableStateOf(false)
     var preview by mutableStateOf<Bitmap?>(null)
     var original by mutableStateOf<Bitmap?>(null)
     var status by mutableStateOf("developing…")
@@ -83,6 +85,15 @@ class Body(app: Application) : AndroidViewModel(app) {
     var shiftX by mutableFloatStateOf(0f)
     var shiftY by mutableFloatStateOf(0f)
     var busy by mutableStateOf(false); private set
+    /** Keepers ringed on the light table, kept between launches ("roll:frame"). */
+    fun isMarked(roll: Int, frame: Int) = "$roll:$frame" in (prefs.getStringSet("marks", emptySet()) ?: emptySet())
+    fun toggleMark(e: DarkroomEntry) {
+        e.marked = !e.marked
+        val set = (prefs.getStringSet("marks", emptySet()) ?: emptySet()).toMutableSet()
+        if (e.marked) set += "${e.roll}:${e.frame}" else set -= "${e.roll}:${e.frame}"
+        prefs.edit().putStringSet("marks", set).apply()
+    }
+
     /** Save a linear DNG of each relensed picture (no film) beside the print. */
     var dngOut by mutableStateOf(prefs.getBoolean("dng", true)); private set
     fun toggleDng() { dngOut = !dngOut; prefs.edit().putBoolean("dng", dngOut).apply() }
@@ -217,7 +228,49 @@ class Body(app: Application) : AndroidViewModel(app) {
         if (collimation.size >= 2) { collimating = false; focusPos = Float.NaN }   // back to autofocus, corrected
     }
 
+    /**
+     * The light table after a restart: the recent prints (the last 48) with their roll and
+     * frame from the sidecar each print gets, or for older prints from the negative shot just
+     * before it with that frame number. Small previews, decoded off the main thread.
+     */
+    private fun loadLightTable() = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        val app = getApplication<Application>()
+        val prints = app.getExternalFilesDir("prints")?.listFiles { f -> f.name.startsWith("VINTAGESNAP_") && f.name.endsWith(".jpg") }
+            ?.sortedBy { it.lastModified() }?.takeLast(48) ?: return@launch
+        val negs = app.getExternalFilesDir("negatives")?.listFiles { f -> f.name.matches(Regex("R\\d+_F\\d+_\\d+\\.jpg")) }?.toList() ?: emptyList()
+        val loaded = ArrayList<DarkroomEntry>()
+        for (f in prints) runCatching {
+            val side = File(f.parentFile, f.nameWithoutExtension + ".json")
+            val e: DarkroomEntry = if (side.exists()) {
+                val j = org.json.JSONObject(side.readText())
+                DarkroomEntry(j.getInt("frame"), j.optString("label"), j.getInt("roll"), j.optString("stock"), j.optBoolean("bw"))
+            } else {
+                val frame = f.nameWithoutExtension.substringAfterLast("_").toIntOrNull() ?: return@runCatching
+                if (frame == 0) return@runCatching                         // a test development
+                val neg = negs.filter { it.name.contains("_F%02d_".format(frame)) && it.lastModified() <= f.lastModified() + 1000 }
+                    .maxByOrNull { it.lastModified() }?.takeIf { f.lastModified() - it.lastModified() < 10 * 60_000 } ?: return@runCatching
+                val roll = neg.name.substring(1, neg.name.indexOf('_')).toInt()
+                val desc = runCatching { androidx.exifinterface.media.ExifInterface(f).getAttribute(androidx.exifinterface.media.ExifInterface.TAG_IMAGE_DESCRIPTION) }.getOrNull() ?: ""
+                val stockName = desc.substringAfterLast(" on ", "").trim()
+                val stock = filmStocks.firstOrNull { it.name == stockName }
+                DarkroomEntry(frame, "Roll $roll · frame $frame · $desc", roll, stockName, stock?.blackAndWhite ?: false)
+            }
+            val o = android.graphics.BitmapFactory.Options().apply { inSampleSize = 2 }
+            e.preview = android.graphics.BitmapFactory.decodeFile(f.absolutePath, o)
+            e.status = "saved"; e.done = true
+            e.marked = isMarked(e.roll, e.frame)
+            loaded += e
+        }
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+            // newest first, as the session adds them; keep any already developed this session
+            val have = darkroom.map { it.roll to it.frame }.toSet()
+            darkroom.addAll(loaded.filter { (it.roll to it.frame) !in have }.reversed())
+        }
+        Trace.i("light table: ${loaded.size} prints from before")
+    }
+
     init {
+        loadLightTable()
         // The first focus learning (2026-11-20) paired a stale lock reading with each shot:
         // forget its pairs and put camera 0 back where Tim's collimation left it.
         if (!prefs.getBoolean("aflearn_v2", false)) {
@@ -340,7 +393,9 @@ class Body(app: Application) : AndroidViewModel(app) {
             else -> ""
         }
         val withFilter = if (filter.isNone) "" else " + ${filter.name}"
-        val entry = DarkroomEntry(frame, "Roll $rollNumber · frame $frame · ${lens.name} f/%.1f$moved$withFilter · ${stock.name}".format(n))
+        val entry = DarkroomEntry(frame, "Roll $rollNumber · frame $frame · ${lens.name} f/%.1f$moved$withFilter · ${stock.name}".format(n),
+            rollNumber, stock.name, stock.blackAndWhite)
+        entry.marked = isMarked(rollNumber, frame)
         viewModelScope.launch {
             try {
                 val name = "R%03d_F%02d_".format(rollNumber, frame) + SimpleDateFormat("HHmmss", Locale.US).format(Date())
@@ -390,6 +445,12 @@ class Body(app: Application) : AndroidViewModel(app) {
                     afSamples = swept, exposureStops = stops, saveDng = dngOut))
                 if (lockRaw != null && p.arFocusD != null) learnFocus(heroCam, lockRaw, p.arFocusD)
                 entry.preview = p.preview; entry.original = p.original
+                // the light table finds it again after a restart
+                runCatching {
+                    File(p.file.parentFile, p.file.nameWithoutExtension + ".json").writeText(org.json.JSONObject()
+                        .put("roll", entry.roll).put("frame", entry.frame).put("stock", entry.stock).put("bw", entry.bw)
+                        .put("label", entry.label).toString())
+                }
                 entry.status = if (p.uri != null) "in Pictures/Vintage Snap · ${p.timings}" else "saved in the app · ${p.timings}"
                 entry.done = true
             } catch (t: Throwable) {

@@ -139,11 +139,12 @@ class MainActivity : ComponentActivity() {
             l.enable()
             onDispose { l.disable() }
         }
-        var screen by rememberSaveable { mutableStateOf("camera") }
+        // --es screen darkroom (testing from the Mac): open on that screen
+        var screen by rememberSaveable { mutableStateOf(intent.getStringExtra("screen") ?: "camera") }
         when (screen) {
             "bag" -> LensBagScreen(body, haptics) { screen = "camera" }
             "film" -> FilmScreen(body, haptics) { screen = "camera" }
-            "darkroom" -> DarkroomScreen(body, onBack = { screen = "camera" },
+            "darkroom" -> LightTableScreen(body, initialScale = intent.getFloatExtra("tablezoom", 1f), onBack = { screen = "camera" },
                 openBench = { startActivity(Intent(this, BenchActivity::class.java)) })
             else -> CameraScreen(body, haptics,
                 openBag = { screen = "bag" }, openFilm = { screen = "film" }, openDarkroom = { screen = "darkroom" })
