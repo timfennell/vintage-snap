@@ -47,6 +47,10 @@ data class DevelopJob(
     val publish: Boolean = true,
     /** The filter on the lens. */
     val filter: app.relens.optics.LensFilter = app.relens.optics.lensFilters[0],
+    /** The lens's field of view: this much of the camera's frame (long side), cropped to 3:2. 0 = no crop (old shots). */
+    val crop: Float = 0f,
+    /** The camera's focal length over its sensor's long side (the uncropped frame). */
+    val focalOverLong: Float = 0.68f,
 )
 
 class Print(
@@ -84,7 +88,12 @@ class Developer(private val context: Context) {
         var t0 = System.nanoTime()
         fun lap(name: String) { val n = System.nanoTime(); t[name] = (n - t0) / 1_000_000; t0 = n }
 
-        val photo = decodeUpright(job.jpeg); lap("decode")
+        val full = decodeUpright(job.jpeg); lap("decode")
+        // The lens's field of view on a 3:2 frame; the rest of the camera's frame is kept
+        // to find lights just outside the picture (their flare still reaches the lens).
+        val crop = cropRect(full.bmp.width, full.bmp.height, job.crop)
+        val photo = Upright(if (job.crop > 0f) Bitmap.createBitmap(full.bmp, crop.left, crop.top, crop.width(), crop.height()) else full.bmp)
+        val focalOverLong = job.focalOverLong * (if (job.crop > 0f) job.crop else 1f)
         val est = (depth ?: DepthEstimator(modelFile).also { depth = it }).estimate(photo.bmp); lap("depth")
         val g = gl ?: Gl(context.assets).also { gl = it; engine = LensEngine(it) }
         val eng = engine!!
@@ -106,7 +115,7 @@ class Developer(private val context: Context) {
         val camD = job.cameraFocusD?.takeIf { it > 0.05f }
         var dispA: Float; var dispB: Float
         if (metricFile.exists()) {
-            val md = (metric ?: MetricDepth(metricFile).also { metric = it }).estimate(photo.bmp, viewFocal); lap("metric")
+            val md = (metric ?: MetricDepth(metricFile).also { metric = it }).estimate(photo.bmp, focalOverLong); lap("metric")
             val ab = MetricDepth.fit(dm, md)
             dispB = maxOf(ab[0], 1e-3f); dispA = ab[1]
             val fitTap = dispA + dispB * dTap
@@ -142,7 +151,10 @@ class Developer(private val context: Context) {
             val qx = (job.focusX * w - w / 2f) / hd; val qy = (job.focusY * h - h / 2f) / hd
             focusD -= tiltD[0] * qx + tiltD[1] * qy
         }
-        val look = Look(job.lens, job.fNumber, dispA = dispA, dispB = dispB, focusD = focusD, viewFocal = viewFocal,
+        // The frame now matches the lens: its own focal length over the frame's 36 mm long side
+        // (old uncropped shots: the phone's framing, the "equivalent" stand-in).
+        val vf = if (job.crop > 0f) job.lens.focalMM / 36f else viewFocal
+        val look = Look(job.lens, job.fNumber, dispA = dispA, dispB = dispB, focusD = focusD, viewFocal = vf,
             tiltD = tiltD, keystone = Movements.keystone(job.lens, job.shiftMM),
             stock = job.stock, push = job.push, samples = 256, levelBias = -1f, filter = job.filter,
             tiltDeg = job.tiltDeg, flareGain = if (job.dng != null) 1f else 3f,
@@ -158,6 +170,15 @@ class Developer(private val context: Context) {
                 }
             }
         } else eng.dump = null
+        // Lights over the whole camera frame, in the print's pixels (outside it: off the frame).
+        if (job.crop > 0f) {
+            val ft = g.texture(full.bmp.width, full.bmp.height, GLES30.GL_RGBA8)
+            upload(g, ft, full.bmp)
+            eng.extraLights = eng.findLights(ft, full.bmp.width, full.bmp.height).map {
+                LightSource(it.x - crop.left, it.y - crop.top, it.radius, it.energy, it.blur, it.pixels)
+            }
+            g.deleteTextures(ft)
+        } else eng.extraLights = null
         val out = eng.develop(src, dispLo, guideLo, w, h, look); lap("lens+film")
         Log.i("Relens", "lights: " + eng.lights.joinToString { "(%.0f,%.0f r%.0f e%.0f blur%.0f)".format(it.x, it.y, it.radius, it.luma, it.blur) })
         val buf = ByteBuffer.allocateDirect(w * h * 4).order(ByteOrder.nativeOrder())
@@ -175,13 +196,14 @@ class Developer(private val context: Context) {
         val ps = 1440f / maxOf(w, h)
         val preview = Bitmap.createScaledBitmap(print, (w * ps).toInt(), (h * ps).toInt(), true)
         val original = Bitmap.createScaledBitmap(photo.bmp, (w * ps).toInt(), (h * ps).toInt(), true)
-        print.recycle(); photo.bmp.recycle()
+        print.recycle(); photo.bmp.recycle(); if (full.bmp !== photo.bmp) full.bmp.recycle()
         val timings = t.entries.joinToString("  ") { "${it.key} ${it.value} ms" }
         Log.i("Relens", "developed $name: $timings (subject %.2f m, focus %.2f m)".format(1 / subjectD, look.focusM))
         Print(uri, file, preview, original, timings)
     }
 
     private class Upright(val bmp: Bitmap)
+
 
     private fun decodeUpright(f: File): Upright {
         val bmp = BitmapFactory.decodeFile(f.absolutePath, BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 })
@@ -195,6 +217,14 @@ class Developer(private val context: Context) {
         val r = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, Matrix().apply { postRotate(deg) }, true)
         bmp.recycle()
         return Upright(r)
+    }
+
+    /** The centred 3:2 crop of an upright frame for a lens [crop] times narrower than the camera (0: the whole frame). */
+    private fun cropRect(w: Int, h: Int, crop: Float): android.graphics.Rect {
+        if (crop <= 0f) return android.graphics.Rect(0, 0, w, h)
+        val long = (maxOf(w, h) / crop).toInt(); val short = long * 2 / 3
+        val cw = if (w >= h) long else short; val ch = if (w >= h) short else long
+        return android.graphics.Rect((w - cw) / 2, (h - ch) / 2, (w - cw) / 2 + cw, (h - ch) / 2 + ch)
     }
 
     private fun upload(g: Gl, tex: Int, b: Bitmap) {

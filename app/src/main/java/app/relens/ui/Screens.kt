@@ -80,7 +80,9 @@ fun LensBagScreen(body: Body, haptics: Haptics, onBack: () -> Unit) {
         }
         if (shelf == filtersShelf) { FilterShelf(body, haptics, onBack); return@Panel }
         LazyColumn(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(Palette.panel)) {
-            itemsIndexed(lensCollections[shelf].lenses) { _, lens ->
+            // Only the lenses a phone camera can frame (not wider than the ultra-wide, not
+            // so long the crop leaves under ~1 MP); each with what it leaves.
+            itemsIndexed(lensCollections[shelf].lenses.filter { body.rig.framingFor(it) != null }) { _, lens ->
                 val on = lens.name == mounted.name
                 Column(Modifier.fillMaxWidth().background(if (on) Color(0x33E8B04A) else Color.Transparent)
                     .clickable {
@@ -93,7 +95,10 @@ fun LensBagScreen(body: Body, haptics: Haptics, onBack: () -> Unit) {
                             fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                         val iris = if (lens.isPinhole) "pinhole ${lens.pinholeMM} mm" else if (lens.blades >= 3) "${lens.blades}-blade iris" else "round iris"
                         val move = when (val m = lens.movement) { is Movement.Tilt -> " · tilt ${m.maxDegrees.toInt()}°"; is Movement.Shift -> " · shift ${m.maxMM.toInt()} mm"; else -> "" }
-                        Text("$iris · close ${(lens.minFocusM * 100).toInt()} cm$move", color = Palette.dim, fontSize = 11.sp)
+                        val fr = body.rig.framingFor(lens)
+                        val cam = when (fr?.camera?.id) { "2" -> "ultra-wide"; "3" -> "tele"; else -> "main" }
+                        Text("$iris · close ${(lens.minFocusM * 100).toInt()} cm$move · $cam %.1f MP".format(fr?.megapixels ?: 0f),
+                            color = Palette.dim, fontSize = 11.sp)
                     }
                     Text(lens.inspiredBy, color = Palette.dim, fontSize = 11.sp)
                 }

@@ -3,6 +3,7 @@
 // and its blur. The CPU joins neighbouring tiles into light sources.
 uniform sampler2D uWork;         // rgb (linear, point lights restored) + signed coc
 uniform float uThreshold;
+uniform int uSrgb;               // 1: an sRGB picture (the camera's whole frame), linearised here
 layout(rgba32f, binding = 0) writeonly uniform image2D uEnergy;   // rgb energy, bright pixel count
 layout(rgba32f, binding = 1) writeonly uniform image2D uWhere;    // sum x*e, sum y*e, sum |coc|*e, sum e (luma)
 
@@ -16,6 +17,7 @@ void main() {
         ivec2 p = t * 16 + ivec2(x, y);
         if (p.x >= sz.x || p.y >= sz.y) continue;
         vec4 c = texelFetch(uWork, p, 0);
+        if (uSrgb == 1) c = vec4(to_lin(c.rgb), 0.0);
         float l = luma(c.rgb);
         if (l <= uThreshold) continue;
         e += c.rgb; n += 1.0;

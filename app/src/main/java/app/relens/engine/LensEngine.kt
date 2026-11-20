@@ -75,6 +75,26 @@ class LensEngine(private val gl: Gl) {
     val timings = LinkedHashMap<String, Double>()
     /** The lights the last development found (for the darkroom). */
     var lights: List<LightSource> = emptyList(); private set
+    /** Lights found beforehand over a larger frame (the camera's uncropped one), in this frame's pixels. */
+    var extraLights: List<LightSource>? = null
+
+    /** Finds the lights in an RGBA8 picture (sRGB): tile energies above the threshold, joined. */
+    fun findLights(tex: Int, w: Int, h: Int): List<LightSource> {
+        val ltw = (w + 15) / 16; val lth = (h + 15) / 16
+        val eTex = gl.texture(ltw, lth, GLES30.GL_RGBA32F, linear = false)
+        val wTex = gl.texture(ltw, lth, GLES30.GL_RGBA32F, linear = false)
+        val p = gl.use("lights")
+        gl.sampler(p, "uWork", 0, tex)
+        gl.u1f(p, "uThreshold", 0.9f)
+        gl.u1i(p, "uSrgb", 1)
+        gl.image(0, eTex, GLES30.GL_RGBA32F)
+        GLES31.glBindImageTexture(1, wTex, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA32F)
+        gl.dispatch(ltw, lth)
+        gl.finish()
+        val e = gl.readFloat(eTex, ltw, lth); val wh = gl.readFloat(wTex, ltw, lth)
+        gl.deleteTextures(eTex, wTex)
+        return Flare.join(ltw, lth, e, wh)
+    }
     /** Debug: called after a pass with (pass, texture, w, h, level). */
     var dump: ((String, Int, Int, Int, Int) -> Unit)? = null
     /** Debug: no mip chain (to isolate mip problems). */
@@ -256,13 +276,15 @@ class LensEngine(private val gl: Gl) {
             var p = gl.use("lights")
             gl.sampler(p, "uWork", 0, work)
             gl.u1f(p, "uThreshold", 0.9f)
+            gl.u1i(p, "uSrgb", 0)
             gl.image(0, eTex, GLES30.GL_RGBA32F)
             GLES31.glBindImageTexture(1, wTex, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA32F)
             gl.dispatch(ltw, lth)
             gl.finish()
             val e = gl.readFloat(eTex, ltw, lth); val wh = gl.readFloat(wTex, ltw, lth)
             gl.deleteTextures(eTex, wTex)
-            lights = Flare.join(ltw, lth, e, wh)
+            // Found over the camera's whole frame when there is one (lights just off the picture too).
+            lights = extraLights?.sortedByDescending { it.luma }?.take(Flare.MAX_LIGHTS) ?: Flare.join(ltw, lth, e, wh)
             val rows = Flare.rows(lights, w, h, look.lens, look.fNumber, look.filter, look.tiltDeg, look.flareGain)
             if (lights.isNotEmpty() || look.lens.leak > 0f) {
                 val fo = gl.texture(w, h, GLES30.GL_RGBA16F)

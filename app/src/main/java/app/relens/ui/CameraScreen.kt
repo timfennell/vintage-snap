@@ -1,8 +1,5 @@
 package app.relens.ui
 
-import androidx.camera.compose.CameraXViewfinder
-import androidx.camera.viewfinder.compose.MutableCoordinateTransformer
-import androidx.camera.viewfinder.core.ImplementationMode
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -69,11 +66,11 @@ import kotlin.math.sin
  */
 @Composable
 fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: () -> Unit, openDarkroom: () -> Unit) {
-    val surface by body.camera.surfaceRequest.collectAsState()
-    val liveD by body.camera.liveFocusD.collectAsState()
-    val raw by body.camera.rawSupported.collectAsState()
+    val liveD by body.rig.liveFocusD.collectAsState()
+    val framing by body.rig.framing.collectAsState()
+    val rigError by body.rig.error.collectAsState()
+    val raw = framing?.camera?.raw == true
     val lens = body.lens
-    val transformer = remember { MutableCoordinateTransformer() }
     // The mirror: up for the exposure, the finder black; down again, the picture back.
     var mirrorUp by remember { mutableStateOf(false) }
     LaunchedEffect(mirrorUp) { if (mirrorUp) { kotlinx.coroutines.delay(150); mirrorUp = false } }
@@ -89,52 +86,44 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
             }
             Column(Modifier.clickable { openFilm() }, horizontalAlignment = Alignment.End) {
                 Text(body.stock.name, color = Palette.amber, fontSize = 12.sp)
-                Text("EI ${body.ratedEI.toInt()}${if (body.push != 0) " (%+d)".format(body.push) else ""} · ${if (raw) "RAW+JPEG" else "JPEG"}",
+                Text("EI ${body.ratedEI.toInt()}${if (body.push != 0) " (%+d)".format(body.push) else ""} · ${if (raw) "RAW" else "JPEG"} · %.1f MP".format(framing?.megapixels ?: 0f),
                     color = Palette.dim, fontSize = 10.sp)
             }
             Spacer(Modifier.width(10.dp))
             FrameCounter(body.framesShot, body.stock.exposures, Modifier.clickable { openFilm() })
         }
 
-        // ---- the finder ----
+        // ---- the finder: the lens's own field of view, 3:2 like 35 mm film (2:3 held upright) ----
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
-            Box(Modifier.aspectRatio(3f / 4f).clip(RoundedCornerShape(6.dp)).background(Color.Black)) {
+            Box(Modifier.aspectRatio(2f / 3f).clip(RoundedCornerShape(6.dp)).background(Color.Black)) {
                 val shiftView = Movements.keystone(lens, floatArrayOf(body.shiftX, body.shiftY))
-                surface?.let { req ->
-                    CameraXViewfinder(
-                        surfaceRequest = req,
-                        // Embedded (a TextureView): the filter's tint can blend over it.
-                        implementationMode = ImplementationMode.EMBEDDED,
-                        coordinateTransformer = transformer,
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxSize()
-                            .graphicsLayer {
-                                // The shift lens's perspective, live (the print gets the same turn in the shader).
-                                rotationX = -Math.toDegrees(shiftView[0].toDouble()).toFloat()
-                                rotationY = Math.toDegrees(shiftView[1].toDouble()).toFloat()
-                                cameraDistance = 0.68f * maxOf(size.width, size.height) / density / 72f * 8f
-                                val z = 1f + 0.9f * (kotlin.math.abs(shiftView[0]) + kotlin.math.abs(shiftView[1]))
-                                scaleX = z; scaleY = z
-                            }
-                            .pointerInput(Unit) {
-                                detectTapGestures { tap ->
-                                    body.tapFocus(tap.x / size.width, tap.y / size.height)
-                                    with(transformer) { val s = tap.transform(); body.camera.focusAt(s.x, s.y) }
-                                    haptics.tick()
-                                }
-                            }
-                            .pointerInput(lens) {
-                                if (lens.movement == Movement.None) return@pointerInput
-                                var travelled = 0f
-                                detectDragGestures(onDragEnd = { travelled = 0f }) { change, d ->
-                                    change.consume()
-                                    body.moveLens(d.x / size.width, d.y / size.height)
-                                    travelled += d.getDistance()
-                                    if (travelled > 40f) { travelled = 0f; haptics.tick() }
-                                }
-                            },
-                    )
-                }
+                Finder(body, framing?.crop ?: 1f, Modifier.fillMaxSize()
+                    .graphicsLayer {
+                        // The shift lens's perspective, live (the print gets the same turn in the shader).
+                        rotationX = -Math.toDegrees(shiftView[0].toDouble()).toFloat()
+                        rotationY = Math.toDegrees(shiftView[1].toDouble()).toFloat()
+                        cameraDistance = lens.focalMM / 36f * maxOf(size.width, size.height) / density / 72f * 8f
+                        val z = 1f + 0.9f * (kotlin.math.abs(shiftView[0]) + kotlin.math.abs(shiftView[1]))
+                        scaleX = z; scaleY = z
+                    })
+                // Taps and drags over the finder (a separate layer, so the view's own transform doesn't move them).
+                Box(Modifier.fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures { tap ->
+                            body.tapFocus(tap.x / size.width, tap.y / size.height)
+                            haptics.tick()
+                        }
+                    }
+                    .pointerInput(lens) {
+                        if (lens.movement == Movement.None) return@pointerInput
+                        var travelled = 0f
+                        detectDragGestures(onDragEnd = { travelled = 0f }) { change, d ->
+                            change.consume()
+                            body.moveLens(d.x / size.width, d.y / size.height)
+                            travelled += d.getDistance()
+                            if (travelled > 40f) { travelled = 0f; haptics.tick() }
+                        }
+                    })
                 // Through the filter: the finder sees its colour (normalised: the meter makes up the light).
                 val fl = body.filter
                 if (!fl.isNone && fl.stops < 5f) {
@@ -153,6 +142,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                 }
                 Text("${lens.name}${if (body.filter.isNone) "" else " + " + body.filter.name}  ·  ${body.stock.name}", color = Palette.cream.copy(alpha = 0.8f), fontSize = 10.sp,
                     modifier = Modifier.align(Alignment.TopStart).padding(8.dp))
+                rigError?.let { Text(it, color = Palette.led, fontSize = 11.sp, modifier = Modifier.align(Alignment.Center).padding(16.dp)) }
                 if (blackout > 0f) Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = blackout)))
             }
         }
@@ -225,6 +215,36 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
     }
 }
 
+/**
+ * The phone camera's live picture in a TextureView, scaled so the lens's crop
+ * fills the 2:3 finder. The camera system turns the picture upright; it shows
+ * as 3:4, so the crop (1/crop of the long side, 2/3 of that across) is
+ * enlarged by (9/8) x crop across and crop down.
+ */
+@Composable
+private fun Finder(body: Body, crop: Float, modifier: Modifier) {
+    androidx.compose.ui.viewinterop.AndroidView(
+        modifier = modifier,
+        factory = { ctx ->
+            android.view.TextureView(ctx).apply {
+                surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener {
+                    override fun onSurfaceTextureAvailable(t: android.graphics.SurfaceTexture, w: Int, h: Int) {
+                        body.rig.attach(t); body.rig.select(body.lens)
+                    }
+                    override fun onSurfaceTextureSizeChanged(t: android.graphics.SurfaceTexture, w: Int, h: Int) {}
+                    override fun onSurfaceTextureDestroyed(t: android.graphics.SurfaceTexture): Boolean { body.rig.detach(); return true }
+                    override fun onSurfaceTextureUpdated(t: android.graphics.SurfaceTexture) {}
+                }
+            }
+        },
+        update = { tv ->
+            val m = android.graphics.Matrix()
+            m.setScale(9f / 8f * crop, crop, tv.width / 2f, tv.height / 2f)
+            tv.setTransform(m)
+        },
+    )
+}
+
 @Composable
 private fun Led(text: String, modifier: Modifier = Modifier) {
     Text(text, color = Palette.led, fontFamily = FontFamily.Monospace, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = modifier)
@@ -244,7 +264,7 @@ private fun SharpBand(body: Body, modifier: Modifier) {
     Canvas(modifier) {
         val hd = kotlin.math.hypot(size.width / 2, size.height / 2)
         // depth of field in dioptres either side (0.03 mm circle), over the plane's slope across the frame
-        val f = VIEW_FOCAL_MM / 1000f
+        val f = lens.focalMM / 1000f
         val s = body.focusM?.takeIf { it.isFinite() } ?: 2f
         val dofD = 0.00003f / ((lens.focalMM / 1000f / body.fNumber) * f / (1 - f / s))
         val half = (dofD / g * hd).coerceIn(4f, size.maxDimension)
@@ -356,10 +376,9 @@ fun positionFor(lens: Lens, m: Float): Float {
 /** The DoF scale: the near and far limits (35 mm, 0.03 mm circle) as orange ticks on the focus ring. */
 fun dofMarks(lens: Lens, n: Float, s: Float): List<Pair<Float, Color>> {
     if (s.isInfinite() || lens.isPinhole) return emptyList()
-    // Equivalent framing (Optics.cocRadiusPxPerDioptre): the lens's pupil, the phone's focal length.
-    val f = VIEW_FOCAL_MM / 1000f
-    val ne = n * VIEW_FOCAL_MM / lens.focalMM
-    val h = f * f / (ne * 0.00003f) + f
+    // The frame is the lens's own field of view: its own focal length and f-number.
+    val f = lens.focalMM / 1000f
+    val h = f * f / (n * 0.00003f) + f
     val near = s * (h - f) / (h + s - 2 * f)
     val far = if (s < h) s * (h - f) / (h - s) else Float.POSITIVE_INFINITY
     return listOf(positionFor(lens, near) to Palette.orange, positionFor(lens, far) to Palette.orange)

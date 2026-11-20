@@ -60,7 +60,17 @@ class MainActivity : ComponentActivity() {
             }
             return
         }
-        LaunchedEffect(Unit) { body.camera.bind(this@MainActivity) }
+        // The picture follows how the phone is held; the body is drawn upright always.
+        androidx.compose.runtime.DisposableEffect(Unit) {
+            val l = object : android.view.OrientationEventListener(this@MainActivity) {
+                override fun onOrientationChanged(deg: Int) {
+                    if (deg == ORIENTATION_UNKNOWN) return
+                    body.rig.deviceRotation = ((deg + 45) / 90 % 4) * 90
+                }
+            }
+            l.enable()
+            onDispose { l.disable() }
+        }
         var screen by rememberSaveable { mutableStateOf("camera") }
         when (screen) {
             "bag" -> LensBagScreen(body, haptics) { screen = "camera" }

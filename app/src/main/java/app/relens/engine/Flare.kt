@@ -49,6 +49,8 @@ object Flare {
         return out.sortedByDescending { it.luma }.take(MAX_LIGHTS)
     }
 
+    private fun smoothstep(a: Float, b: Float, x: Float): Float { val t = ((x - a) / (b - a)).coerceIn(0f, 1f); return t * t * (3 - 2 * t) }
+
     private fun seedOf(l: Lens): Int {
         var h = 2166136261L.toInt()
         for (c in l.name.toByteArray()) h = (h xor (c.toInt() and 0xff)) * 16777619
@@ -86,7 +88,12 @@ object Flare {
         row(3, if (filter.isNone) 0f else 1f, 0f, 0f, 0f)
         for ((i, s) in lights.withIndex()) {
             val k = gain * lens.flareBoost / npx
-            row(4 + 3 * i, s.x / w, s.y / h, s.radius / diag, 1f)
+            // Off the picture (found in the camera's wider frame): its flare fades as it goes,
+            // rather than stopping at a line (Flare.swift).
+            val u = s.x / w; val v = s.y / h
+            val beyond = maxOf(maxOf(-u, u - 1), maxOf(-v, v - 1))
+            val fade = 1f - smoothstep(0.2f, 0.6f, beyond)
+            row(4 + 3 * i, u, v, s.radius / diag, fade)
             row(5 + 3 * i, s.energy[0] * k, s.energy[1] * k, s.energy[2] * k, s.blur / diag)
         }
         // A loose lens's leak: the gap opens on the side it is rocked away from.

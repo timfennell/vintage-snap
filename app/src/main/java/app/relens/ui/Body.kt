@@ -11,7 +11,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import app.relens.camera.CameraController
+import app.relens.camera.Rig
 import app.relens.engine.DevelopJob
 import app.relens.engine.Developer
 import app.relens.film.filmStocks
@@ -40,7 +40,8 @@ class DarkroomEntry(val frame: Int, val label: String) {
  */
 class Body(app: Application) : AndroidViewModel(app) {
     private val prefs = app.getSharedPreferences("body", Context.MODE_PRIVATE)
-    val camera = CameraController(app)
+    /** The phone's cameras: the right one for each lens, cropped to its field of view. */
+    val rig = Rig(app)
     val developer = Developer(app)
 
     var lensIndex by mutableIntStateOf(prefs.getInt("lens", lensBag.indexOfFirst { it.name == "Ohi Kor 50mm f/1.4" }.coerceAtLeast(0)))
@@ -54,7 +55,7 @@ class Body(app: Application) : AndroidViewModel(app) {
         set(v) {
             _focusPos.floatValue = v
             // The phone's own lens follows the ring, so it focuses where the print will.
-            camera.manualFocus(focusM?.let { if (it.isInfinite()) 0f else 1f / it })
+            rig.manualFocus(focusM?.let { if (it.isInfinite()) 0f else 1f / it })
         }
     var stockIndex by mutableIntStateOf(prefs.getInt("stock", 1)); private set
     /** The filter on the lens (index into lensFilters; 0 = none). */
@@ -77,6 +78,11 @@ class Body(app: Application) : AndroidViewModel(app) {
     val darkroom = mutableStateListOf<DarkroomEntry>()
 
     val lens get() = lensBag[lensIndex]
+
+    init {
+        if (rig.framingFor(lensBag[lensIndex]) == null)
+            lensIndex = lensBag.indexOfFirst { it.name == "Ohi Kor 50mm f/1.4" }.coerceAtLeast(0)
+    }
     val stock get() = filmStocks[stockIndex]
     val framesLeft get() = stock.exposures - framesShot
     val ratedEI get() = stock.iso * 2f.pow(push)
@@ -108,6 +114,7 @@ class Body(app: Application) : AndroidViewModel(app) {
     fun mount(index: Int) {
         val n = fNumber
         lensIndex = index
+        rig.select(lens)
         // Keep the nearest f-number the new lens has; focus back on the subject.
         aperturePos = lens.apertureStops.withIndex().minBy { kotlin.math.abs(it.value - n) }.index.toFloat()
         focusPos = Float.NaN
@@ -153,7 +160,8 @@ class Body(app: Application) : AndroidViewModel(app) {
 
     fun tapFocus(fx: Float, fy: Float) {
         focusX = fx.coerceIn(0f, 1f); focusY = fy.coerceIn(0f, 1f)
-        focusPos = Float.NaN          // the ring follows the subject again
+        _focusPos.floatValue = Float.NaN          // the ring follows the subject again
+        rig.focusAt(focusX, focusY)
     }
 
     fun save() {
@@ -181,7 +189,8 @@ class Body(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 val name = "R%03d_F%02d_".format(rollNumber, frame) + SimpleDateFormat("HHmmss", Locale.US).format(Date())
-                val exp = camera.shoot(File(getApplication<Application>().getExternalFilesDir("negatives"), ""), name)
+                val framing = rig.framing.value ?: error("no camera for this lens")
+                val exp = rig.shoot(File(getApplication<Application>().getExternalFilesDir("negatives"), ""), name)
                 framesShot = frame; save()
                 onShot()
                 busy = false
@@ -189,7 +198,8 @@ class Body(app: Application) : AndroidViewModel(app) {
                 if (!developer.modelFile.exists()) {
                     entry.status = "no depth model: run scripts/install.sh"; return@launch
                 }
-                val p = developer.develop(DevelopJob(exp.jpeg, exp.dng, fx, fy, exp.cameraFocusD, lens, n, fm, stock, push, frame, tilt, shift, filter = filter))
+                val p = developer.develop(DevelopJob(exp.jpeg, exp.dng, fx, fy, exp.cameraFocusD, lens, n, fm, stock, push, frame, tilt, shift,
+                    filter = filter, crop = framing.crop, focalOverLong = framing.camera.focalMM / framing.camera.sensorLongMM))
                 entry.preview = p.preview; entry.original = p.original
                 entry.status = if (p.uri != null) "in Pictures/Relens · ${p.timings}" else "saved in the app · ${p.timings}"
                 entry.done = true
