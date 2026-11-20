@@ -1,5 +1,9 @@
 package app.relens.ui
 
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.asAndroidPath
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import android.graphics.RenderEffect
 import android.graphics.RuntimeShader
 import android.os.Build
@@ -132,7 +136,7 @@ fun SevenSegment(text: String, height: Dp = 22.dp, color: Color = Palette.led, m
         var x = 0f
         val h = size.height
         val dw = digitW.toPx()
-        val th = h * 0.11f
+        val th = h * 0.12f
         for ((i, c) in text.withIndex()) {
             val seg = segments(c)
             when {
@@ -142,8 +146,9 @@ fun SevenSegment(text: String, height: Dp = 22.dp, color: Color = Palette.led, m
                 seg != null -> drawDigit(x, dw, h, th, seg, color)
                 else -> {
                     val t = measurer.measure(c.toString(), TextStyle(color = color, fontSize = (h * 0.55f).toSp(), fontFamily = Futuraish, fontWeight = FontWeight.Medium))
-                    for (r in listOf(3f, 1.5f)) drawText(t, topLeft = Offset(x + r * 0.1f, h - t.size.height.toFloat()), alpha = 0.18f)
-                    drawText(t, topLeft = Offset(x, h - t.size.height.toFloat()))
+                    val glow = measurer.measure(c.toString(), TextStyle(color = color, fontSize = (h * 0.55f).toSp(), fontFamily = Futuraish, fontWeight = FontWeight.Medium,
+                        shadow = androidx.compose.ui.graphics.Shadow(color.copy(alpha = 0.9f), Offset.Zero, th * 2.2f)))
+                    drawText(glow, topLeft = Offset(x, h - t.size.height.toFloat()))
                 }
             }
             x += widths[i].toPx()
@@ -152,8 +157,7 @@ fun SevenSegment(text: String, height: Dp = 22.dp, color: Color = Palette.led, m
 }
 
 private fun DrawScope.glowDot(c: Offset, r: Float, color: Color) {
-    drawCircle(color.copy(alpha = 0.12f), r * 3.2f, c)
-    drawCircle(color.copy(alpha = 0.25f), r * 1.8f, c)
+    drawCircle(androidx.compose.ui.graphics.Brush.radialGradient(listOf(color.copy(alpha = 0.4f), Color.Transparent), c, r * 3.5f), r * 3.5f, c)
     drawCircle(color, r, c)
 }
 
@@ -172,15 +176,25 @@ private fun DrawScope.drawDigit(x: Float, w: Float, h: Float, th: Float, lit: St
         'f' to listOf(pt(0f, g), pt(0.14f, th + g), pt(0.14f, m - th / 2 - g), pt(0f, m - g)),
         'g' to listOf(pt(0.12f, m), pt(0.24f, m - th / 2), pt(0.76f, m - th / 2), pt(0.88f, m), pt(0.76f, m + th / 2), pt(0.24f, m + th / 2)),
     )
+    val litPath = Path()
     for ((name, poly) in segs) {
         val path = Path().apply { moveTo(poly[0].x, poly[0].y); for (p in poly.drop(1)) lineTo(p.x, p.y); close() }
-        if (name in lit) {
-            // the glow: wide soft strokes under the segment, then the segment itself
-            drawPath(path, color.copy(alpha = 0.10f), style = Stroke(width = th * 2.6f))
-            drawPath(path, color.copy(alpha = 0.22f), style = Stroke(width = th * 1.2f))
-            drawPath(path, color)
-        } else {
-            drawPath(path, color.copy(alpha = 0.07f))                       // an unlit segment, faintly there
+        if (name in lit) litPath.addPath(path)
+        else drawPath(path, color.copy(alpha = 0.07f))                           // an unlit segment, faintly there
+    }
+    if (lit.isEmpty()) return
+    // The glow: the lit segments blurred (a wide faint haze, then a tight bright one),
+    // then the segments themselves with a hotter core, as a red LED behind a filter.
+    drawIntoCanvas { cv ->
+        val ap = litPath.asAndroidPath()
+        for ((radius, alpha) in listOf(th * 2.2f to 0.45f, th * 0.8f to 0.7f)) {
+            val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                this.color = color.copy(alpha = alpha).toArgb()
+                maskFilter = android.graphics.BlurMaskFilter(radius, android.graphics.BlurMaskFilter.Blur.NORMAL)
+            }
+            cv.nativeCanvas.drawPath(ap, paint)
         }
     }
+    drawPath(litPath, color)
+    drawPath(litPath, Color(0xFFFFB08A).copy(alpha = 0.35f), style = Stroke(width = th * 0.25f))
 }

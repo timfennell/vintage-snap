@@ -79,10 +79,13 @@ fun LensBagScreen(body: Body, haptics: Haptics, onBack: () -> Unit) {
             }
         }
         if (shelf == filtersShelf) { FilterShelf(body, haptics, onBack); return@Panel }
+        // Read the shelf here, not inside the lazy list's content lambda: that runs on a
+        // snapshot change, and can see the Filters index before this recomposes away.
+        val lenses = lensCollections.getOrNull(shelf)?.lenses.orEmpty().filter { body.rig.framingFor(it) != null }
         LazyColumn(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(Palette.panel)) {
             // Only the lenses a phone camera can frame (not wider than the ultra-wide, not
             // so long the crop leaves under ~1 MP); each with what it leaves.
-            itemsIndexed(lensCollections[shelf].lenses.filter { body.rig.framingFor(it) != null }) { _, lens ->
+            itemsIndexed(lenses) { _, lens ->
                 val on = lens.name == mounted.name
                 Column(Modifier.fillMaxWidth().background(if (on) Color(0x33E8B04A) else Color.Transparent)
                     .clickable {
