@@ -341,6 +341,23 @@ class Body(app: Application) : AndroidViewModel(app) {
      * Rocks or shifts the lens by a drag on the finder ([dx], [dy] as fractions
      * of the finder: a full width is the lens's whole travel), as far as it goes.
      */
+    /**
+     * A tilt (or whacked) lens steered round the focus point: a finger circling it turns the
+     * plane of focus (the sharp band turns with it), moving out from it tilts more, in less.
+     * [dAngle] radians the finger went round (screen, y down), [dRadius] how far out it moved
+     * (fractions of the finder's width), [fingerAngle] where it is, for starting from flat.
+     */
+    fun steerTilt(dAngle: Float, dRadius: Float, fingerAngle: Float) {
+        val m = lens.movement as? Movement.Tilt ?: return
+        // the plane's direction on the screen: (tiltX, -tiltY) (Movements.tiltDioptres)
+        var mag = kotlin.math.hypot(tiltX, tiltY)
+        var ang = if (mag > 0.05f) kotlin.math.atan2(-tiltY, tiltX) else fingerAngle
+        ang += dAngle
+        mag = (mag + dRadius * m.maxDegrees * 2.5f).coerceIn(0f, m.maxDegrees)
+        tiltX = mag * kotlin.math.cos(ang)
+        tiltY = -mag * kotlin.math.sin(ang)
+    }
+
     fun moveLens(dx: Float, dy: Float) {
         when (val m = lens.movement) {
             is Movement.Tilt -> {

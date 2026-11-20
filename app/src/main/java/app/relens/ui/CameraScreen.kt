@@ -148,7 +148,16 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                         var travelled = 0f
                         detectDragGestures(onDragEnd = { travelled = 0f }) { change, d ->
                             change.consume()
-                            body.moveLens(d.x / size.width, d.y / size.height)
+                            if (lens.movement is Movement.Tilt) {
+                                // round the focus point: going round turns the band, out and in tilts more and less
+                                val c = Offset(body.focusX * size.width, body.focusY * size.height)
+                                val now = change.position - c; val was = now - d
+                                if (now.getDistance() > 8f && was.getDistance() > 8f) {
+                                    var da = kotlin.math.atan2(now.y, now.x) - kotlin.math.atan2(was.y, was.x)
+                                    if (da > Math.PI) da -= (2 * Math.PI).toFloat(); if (da < -Math.PI) da += (2 * Math.PI).toFloat()
+                                    body.steerTilt(da, (now.getDistance() - was.getDistance()) / size.width, kotlin.math.atan2(now.y, now.x))
+                                }
+                            } else body.moveLens(d.x / size.width, d.y / size.height)
                             travelled += d.getDistance()
                             if (travelled > 40f) { travelled = 0f; haptics.tick() }
                         }
