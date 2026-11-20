@@ -5,6 +5,8 @@
     <uses-feature android:name="android.hardware.camera" android:required="true" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Only to fetch the depth models once, from the project's GitHub release. -->
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <application
         android:label="Vintage Snap"
@@ -32,7 +34,7 @@
         <!-- Prints handed to other apps (share, open in): one file at a time, read-only. -->
         <provider
             android:name="androidx.core.content.FileProvider"
-            android:authorities="app.relens.files"
+            android:authorities="${applicationId}.files"
             android:exported="false"
             android:grantUriPermissions="true">
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" />

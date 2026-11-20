@@ -16,6 +16,7 @@ import app.relens.camera.Rig
 import app.relens.camera.Sweep
 import app.relens.engine.DevelopJob
 import app.relens.engine.Developer
+import app.relens.engine.Models
 import app.relens.film.filmStocks
 import app.relens.optics.Movement
 import app.relens.optics.fits
@@ -87,6 +88,10 @@ class Body(app: Application) : AndroidViewModel(app) {
     var shiftX by mutableFloatStateOf(0f)
     var shiftY by mutableFloatStateOf(0f)
     var busy by mutableStateOf(false); private set
+    /** The depth models (fetched once, on the photographer's say-so). */
+    val models = Models(app)
+    fun downloadModels() { viewModelScope.launch { models.download() } }
+
     /** Keepers ringed on the light table, kept between launches ("roll:frame"). */
     fun isMarked(roll: Int, frame: Int) = "$roll:$frame" in (prefs.getStringSet("marks", emptySet()) ?: emptySet())
     fun toggleMark(e: DarkroomEntry) {
@@ -465,7 +470,7 @@ class Body(app: Application) : AndroidViewModel(app) {
                 busy = false
                 darkroom.add(0, entry)
                 if (!developer.modelFile.exists()) {
-                    entry.status = "no depth model: run scripts/install.sh"; return@launch
+                    entry.status = "no depth models yet: download them from the camera screen"; return@launch
                 }
                 val p = developer.develop(DevelopJob(exp.jpeg, exp.dng, fx, fy, exp.cameraFocusD, lens, n, fm, stock, push, frame, tilt, shift,
                     filter = filter, crop = framing.crop, focalOverLong = framing.camera.focalMM / framing.camera.sensorLongMM,

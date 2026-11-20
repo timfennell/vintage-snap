@@ -257,7 +257,7 @@ private fun ShareSheet(e: DarkroomEntry, modifier: Modifier, onPick: (Triple<jav
 /** Hands [file] to another app: the share sheet, or (open) an app that views or edits it. */
 private fun handOff(ctx: android.content.Context, file: java.io.File, mime: String, open: Boolean) {
     runCatching {
-        val uri = androidx.core.content.FileProvider.getUriForFile(ctx, "app.relens.files", file)
+        val uri = androidx.core.content.FileProvider.getUriForFile(ctx, ctx.packageName + ".files", file)
         val intent = if (open) android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(uri, mime)
             else android.content.Intent(android.content.Intent.ACTION_SEND).setType(mime).putExtra(android.content.Intent.EXTRA_STREAM, uri)
         intent.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)

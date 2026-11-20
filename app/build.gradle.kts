@@ -1,3 +1,6 @@
+import java.io.File
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
@@ -11,7 +14,8 @@ android {
     compileSdk { version = release(37) { minorApiLevel = 2 } }
 
     defaultConfig {
-        applicationId = "app.relens"   // working name; Tim picks the real one later
+        // Vintage Snap (the code keeps its first package, app.relens, as its namespace)
+        applicationId = "app.vintagesnap"
         minSdk = 29          // Android 10: GLES 3.1 compute, Camera2 RAW everywhere
         targetSdk = 36
         versionCode = 1
@@ -20,11 +24,23 @@ android {
         buildConfigField("boolean", "QNN", qnn.toString())
     }
 
+    // Release signing: a keystore kept off the repo. Its properties file (storeFile, storePassword,
+    // keyAlias, keyPassword) is found by -PvsSigning=<path> or at the default place on Mike 1;
+    // without one, release builds fall back to the debug key (for testing).
+    val signingProps = File((findProperty("vsSigning") as String?) ?: "/Volumes/Mike 1/vintage_snap_release.properties")
+    signingConfigs {
+        if (signingProps.exists()) create("vs") {
+            val p = Properties().apply { signingProps.inputStream().use { load(it) } }
+            storeFile = File(p.getProperty("storeFile"))
+            storePassword = p.getProperty("storePassword")
+            keyAlias = p.getProperty("keyAlias")
+            keyPassword = p.getProperty("keyPassword")
+        }
+    }
     buildTypes {
         release {
             isMinifyEnabled = false
-            // The spike is benchmarked as release (no debugger overhead), signed with the debug key.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("vs") ?: signingConfigs.getByName("debug")
         }
     }
     buildFeatures { buildConfig = true; compose = true }

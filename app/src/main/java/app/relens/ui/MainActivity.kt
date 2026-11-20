@@ -111,7 +111,7 @@ class MainActivity : ComponentActivity() {
                 }, 3000)
             }, 3000)
         }
-        // Testing from the Mac: adb shell am start -n app.relens/.ui.MainActivity --es autoshoot "<lens name part>"
+        // Testing from the Mac: adb shell am start -n app.vintagesnap/app.relens.ui.MainActivity --es autoshoot "<lens name part>"
         intent.getStringExtra("autoshoot")?.let { want ->
             window.decorView.postDelayed({
                 app.relens.optics.lensBag.indexOfFirst { it.name.contains(want, ignoreCase = true) }.takeIf { it >= 0 }?.let { body.mount(it) }

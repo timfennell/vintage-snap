@@ -237,6 +237,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                 Text("✕", color = Palette.dim, fontSize = 16.sp, modifier = Modifier.clickable { body.collimating = false }.padding(6.dp))
             }
         }
+        ModelsBanner(body)
         body.message?.let { Text(it, color = Palette.led, fontSize = 12.sp, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) }
         // ---- the lens barrel: focus ring (with the DoF scale), aperture ring ----
         val marks = lens.focusMarks
@@ -695,6 +696,38 @@ private fun ParallaxFinder(pc: app.relens.parallax.ParallaxCapture, modifier: Mo
             Text(hint, color = Color(0xFFFFEBCC), fontSize = 15.sp,
                 modifier = Modifier.align(when (held) { 90 -> Alignment.CenterEnd; 270 -> Alignment.CenterStart; 180 -> Alignment.TopCenter; else -> Alignment.BottomCenter })
                     .graphicsLayer { rotationZ = -held.toFloat() })
+        }
+    }
+}
+
+/**
+ * Until the depth models are on the phone: what they are, how big, and a button to fetch them
+ * (once, from the project's GitHub release); then a progress bar; gone when they're in.
+ */
+@Composable
+private fun ModelsBanner(body: Body) {
+    val st by body.models.state.collectAsState()
+    if (st is app.relens.engine.Models.State.Ready) return
+    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).clip(RoundedCornerShape(6.dp)).background(Palette.panel)
+        .padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        androidx.compose.foundation.layout.Column(Modifier.weight(1f)) {
+            Text("DEPTH MODELS", color = Palette.amber, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+            val mb = body.models.totalBytes / 1_000_000
+            when (val s = st) {
+                is app.relens.engine.Models.State.Downloading -> {
+                    Text("downloading… %d of %d MB".format(s.done / 1_000_000, s.total / 1_000_000), color = Palette.dim, fontSize = 10.sp)
+                    androidx.compose.material3.LinearProgressIndicator(progress = { s.done / maxOf(s.total, 1).toFloat() },
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp), color = Palette.amber, trackColor = Palette.panelHi)
+                }
+                is app.relens.engine.Models.State.Failed -> Text("didn't finish (${s.why}): try again", color = Palette.led, fontSize = 10.sp)
+                else -> Text("needed to develop prints · $mb MB, once, from GitHub", color = Palette.dim, fontSize = 10.sp)
+            }
+        }
+        if (st !is app.relens.engine.Models.State.Downloading) {
+            Spacer(Modifier.width(10.dp))
+            Text("DOWNLOAD", color = Palette.leather, fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(Palette.amber).clickable { body.downloadModels() }
+                    .padding(horizontal = 12.dp, vertical = 6.dp))
         }
     }
 }
