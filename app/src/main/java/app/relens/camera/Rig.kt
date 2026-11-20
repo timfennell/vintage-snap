@@ -136,6 +136,8 @@ class Rig(private val context: Context) {
     @Volatile private var lastUwResult: CaptureResult? = null
     @Volatile private var afWatch = false
     @Volatile private var manualWatch = false
+    /** A scan has been seen since the last trigger: only a lock after one is a new measurement. */
+    @Volatile private var sawScan = false
     private var lastAfState = -1
     private var tapX = 0.5f; private var tapY = 0.5f
 
@@ -283,10 +285,12 @@ class Rig(private val context: Context) {
             }
             // After a tap: each autofocus state change and where the lens ends up.
             val af = result.get(CaptureResult.CONTROL_AF_STATE) ?: -1
+            if (afWatch && af == CaptureResult.CONTROL_AF_STATE_ACTIVE_SCAN) sawScan = true
             if (afWatch && af != lastAfState) {
                 lastAfState = af
                 app.relens.Trace.i("AF state $af, lens at %s".format(own.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { "%.2f D (%.2f m)".format(it, 1 / maxOf(it, 1e-3f)) } ?: "-"))
-                if (af == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED) sweepWait?.complete(null)
+                if (af == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED && sawScan) sweepWait?.complete(null)
+                if (af == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED && !sawScan) { lastAfState = -1; return }
                 if (af == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED) {
                     own.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { raw -> sweepWait?.complete(corrected(heroId ?: "0", raw)) }
                     if (sweepWait == null) own.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { raw ->
@@ -295,7 +299,7 @@ class Rig(private val context: Context) {
                         while (afSamples.size > 12) afSamples.removeAt(0)
                     }
                 }
-                if (af == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED || af == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED) afWatch = false
+                if ((af == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED || af == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED) && sawScan) afWatch = false
             }
             own.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { rawD ->
                 val d = corrected(heroId ?: "0", rawD)
@@ -359,6 +363,7 @@ class Rig(private val context: Context) {
         afRegion = MeteringRectangle(Rect(max(a.left, cx - half), max(a.top, cy - half),
             min(a.right, cx + half), min(a.bottom, cy + half)), MeteringRectangle.METERING_WEIGHT_MAX - 1)
         afWatch = true
+        sawScan = false
         tapX = fx; tapY = fy
         app.relens.Trace.i("tap %.2f,%.2f on camera ${fr.camera.id} (crop %.2f): full frame %.2f,%.2f -> sensor %.2f,%.2f -> region %s of %s".format(
             fx, fy, fr.crop, ux, uy, sx, sy, afRegion?.rect, a))
@@ -367,6 +372,9 @@ class Rig(private val context: Context) {
             val p = preview ?: return@post
             val b = baseRequest(CameraDevice.TEMPLATE_PREVIEW) ?: return@post
             b.addTarget(p)
+            // Cancel the old lock first, or the camera keeps it and reports "locked" at once.
+            b.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_CANCEL)
+            s.capture(b.build(), resultCallback, handler)
             b.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START)
             s.capture(b.build(), resultCallback, handler)
         }
