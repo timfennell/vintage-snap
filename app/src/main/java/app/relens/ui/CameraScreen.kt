@@ -93,7 +93,8 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f).clickable { openBag() }) {
                 Text(lens.name, color = Palette.cream, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                Text(lens.inspiredBy, color = Palette.dim, fontSize = 10.sp, maxLines = 1)
+                if (body.filter.isNone) Text(lens.inspiredBy, color = Palette.dim, fontSize = 10.sp, maxLines = 1)
+                else Text("+ ${body.filter.name}", color = Palette.amber, fontSize = 10.sp, maxLines = 1)
             }
             Column(Modifier.clickable { openFilm() }, horizontalAlignment = Alignment.End) {
                 Text(body.stock.name, color = Palette.amber, fontSize = 12.sp)
@@ -156,8 +157,6 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                     Movement.None -> {}
                 }
                 sceneEV?.let { ev -> MeterCard(body.shutterPos, body.meteredShutterPos(ev), body.exposureStops(ev), Modifier.align(Alignment.CenterStart)) }
-                Text("${lens.name}${if (body.filter.isNone) "" else " + " + body.filter.name}  ·  ${body.stock.name}", color = Palette.cream.copy(alpha = 0.8f), fontSize = 10.sp,
-                    modifier = Modifier.align(Alignment.TopStart).padding(8.dp))
                 rigError?.let { Text(it, color = Palette.led, fontSize = 11.sp, modifier = Modifier.align(Alignment.Center).padding(16.dp)) }
                 if (blackout > 0f) Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = blackout)))
                 if (mirrorUp && (body.busy || body.sweeping)) Text("HOLD STEADY", color = Palette.led, fontSize = 16.sp,
