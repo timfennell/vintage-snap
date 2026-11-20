@@ -62,6 +62,9 @@ data class DevelopJob(
     val plate: Boolean = true,
 )
 
+/** The smallest long side a cropped print is developed at (it's enlarged up to 2x to get there). */
+private const val PRINT_LONG_MIN = 3456f
+
 class Print(
     val uri: Uri?,
     val file: File,
@@ -103,7 +106,14 @@ class Developer(private val context: Context) {
         // The lens's field of view on a 3:2 frame; the rest of the camera's frame is kept
         // to find lights just outside the picture (their flare still reaches the lens).
         val crop = cropRect(full.bmp.width, full.bmp.height, job.crop)
-        val photo = Upright(if (job.crop > 0f) Bitmap.createBitmap(full.bmp, crop.left, crop.top, crop.width(), crop.height()) else full.bmp)
+        val cropped = if (job.crop > 0f) Bitmap.createBitmap(full.bmp, crop.left, crop.top, crop.width(), crop.height()) else full.bmp
+        // A long lens on a shorter camera (a 50-70 mm on the main camera) leaves a small crop: the
+        // print is developed larger (up to twice), so the blur, grain and flare are drawn at print
+        // size rather than enlarged after. No detail is invented: the camera's is resampled.
+        val up = if (job.crop > 0f) (PRINT_LONG_MIN / maxOf(cropped.width, cropped.height).toFloat()).coerceIn(1f, 2f) else 1f
+        val photo = Upright(if (up > 1.01f) Bitmap.createScaledBitmap(cropped, (cropped.width * up).toInt(), (cropped.height * up).toInt(), true)
+            .also { if (cropped !== full.bmp) cropped.recycle() } else cropped)
+        if (up > 1.01f) Trace.i("print developed at x%.2f the crop: %dx%d".format(up, photo.bmp.width, photo.bmp.height))
         val focalOverLong = job.focalOverLong * (if (job.crop > 0f) job.crop else 1f)
         val est = (depth ?: DepthEstimator(modelFile).also { depth = it }).estimate(photo.bmp); lap("depth")
         val g = gl ?: Gl(context.assets).also { gl = it; engine = LensEngine(it) }
@@ -284,14 +294,15 @@ class Developer(private val context: Context) {
             // Over the RAW's whole frame (true light, not clipped), into the print's pixels.
             val sx = full.bmp.width / rp.width.toFloat(); val sy = full.bmp.height / rp.height.toFloat()
             eng.extraLights = eng.findLights(rp.tex, rp.width, rp.height, srgb = false, threshold = 0.9f / exposure).map {
-                LightSource(it.x * sx - crop.left, it.y * sy - crop.top, it.radius * sx,
-                    FloatArray(3) { c -> it.energy[c] * exposure * sx * sy }, it.blur, it.pixels)
+                LightSource((it.x * sx - crop.left) * up, (it.y * sy - crop.top) * up, it.radius * sx * up,
+                    FloatArray(3) { c -> it.energy[c] * exposure * sx * sy * up * up }, it.blur, (it.pixels * sx * sy * up * up).toInt())
             }
         } else if (job.crop > 0f) {
             val ft = g.texture(full.bmp.width, full.bmp.height, GLES30.GL_RGBA8)
             upload(g, ft, full.bmp)
             eng.extraLights = eng.findLights(ft, full.bmp.width, full.bmp.height).map {
-                LightSource(it.x - crop.left, it.y - crop.top, it.radius, it.energy, it.blur, it.pixels)
+                LightSource((it.x - crop.left) * up, (it.y - crop.top) * up, it.radius * up,
+                    FloatArray(3) { c -> it.energy[c] * up * up }, it.blur, (it.pixels * up * up).toInt())
             }
             g.deleteTextures(ft)
         } else eng.extraLights = null
@@ -313,8 +324,8 @@ class Developer(private val context: Context) {
             val px = scale * printLong / uwLong                       // print px per ultra-wide px
             val expoRatio = if (meta.has("exposure") && meta.has("heroExposure"))
                 (meta.getDouble("heroExposure") / meta.getDouble("exposure")).toFloat() else 1f
-            val heroLeft = -crop.left.toFloat(); val heroTop = -crop.top.toFloat()
-            val heroRight = heroLeft + full.bmp.width; val heroBottom = heroTop + full.bmp.height
+            val heroLeft = -crop.left * up; val heroTop = -crop.top * up
+            val heroRight = heroLeft + full.bmp.width * up; val heroBottom = heroTop + full.bmp.height * up
             val extra = found.mapNotNull { l ->
                 val x = (l.x - uw.width / 2f) * px + w / 2f; val y = (l.y - uw.height / 2f) * px + h / 2f
                 // Inside the hero camera's own frame: its own (better) view of the light stands.
