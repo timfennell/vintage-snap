@@ -181,19 +181,19 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
         if (!(body.busy || body.sweeping)) heldM = liveM
         val shownM = ringM ?: heldM
         Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-            Led("F ${fLabel(body.fNumber)}")
-            Led(shutterLabel(body.shutterSeconds))
-            Led(if (shownM == null) "-- m" else if (shownM.isInfinite()) "∞ m" else "%.2f m".format(shownM),
+            Led(fLabel(body.fNumber), cells = 3, prefix = "F")
+            body.shutterSeconds.let { t -> Led(if (t >= 0.5f) "%.0f".format(t) else "%.0f".format(1f / t), cells = 4, suffix = if (t >= 0.5f) "\"" else "") }
+            Led(when { shownM == null -> "---"; shownM.isInfinite() -> "∞"; shownM < 10f -> "%.2f".format(shownM); shownM < 100f -> "%.1f".format(shownM); else -> "%.0f".format(shownM) }, cells = 3, suffix = "m",
                 // long-press the distance: collimate this camera's focus readings
-                Modifier.pointerInput(Unit) { detectTapGestures(onLongPress = { body.startCollimating(); haptics.clunk() }) })
+                modifier = Modifier.pointerInput(Unit) { detectTapGestures(onLongPress = { body.startCollimating(); haptics.clunk() }) })
             when (lens.movement) {
-                is Movement.Tilt -> Led("T %.0f°".format(kotlin.math.hypot(body.tiltX, body.tiltY)),
-                    Modifier.clickable { body.centreMovements(); haptics.click() })
-                is Movement.Shift -> Led("S %+.0f".format(body.shiftY),
-                    Modifier.clickable { body.centreMovements(); haptics.click() })
-                Movement.None -> Led(if (ringM == null) "AF" else "MF")
+                is Movement.Tilt -> Led("%.0f".format(kotlin.math.hypot(body.tiltX, body.tiltY)), cells = 2, prefix = "T", suffix = "°",
+                    modifier = Modifier.clickable { body.centreMovements(); haptics.click() })
+                is Movement.Shift -> Led("%+.0f".format(body.shiftY), cells = 3, prefix = "S",
+                    modifier = Modifier.clickable { body.centreMovements(); haptics.click() })
+                Movement.None -> Led(if (ringM == null) "AF" else "MF", cells = 2)
             }
-            Led("${body.framesLeft}")
+            Led("${body.framesLeft}", cells = 2)
         }
 
         if (body.collimating || body.collimationNote.isNotEmpty() && body.collimation.isNotEmpty()) Row(
@@ -385,8 +385,8 @@ private fun MeterCard(setPos: Float, meterPos: Float, modifier: Modifier) {
 
 /** A readout under the finder: red seven-segment digits with their glow (Finder.kt). */
 @Composable
-private fun Led(text: String, modifier: Modifier = Modifier) {
-    SevenSegment(text, height = 20.dp, modifier = modifier)
+private fun Led(value: String, cells: Int, modifier: Modifier = Modifier, prefix: String = "", suffix: String? = null) {
+    SevenSegment(value, cells, prefix, suffix, height = 20.dp, modifier = modifier)
 }
 
 /**

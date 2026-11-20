@@ -182,32 +182,45 @@ private fun segments(ch: Char): String? = when (ch) {
  * are drawn small in Jost with the same glow.
  */
 @Composable
-fun SevenSegment(text: String, height: Dp = 22.dp, color: Color = Palette.led, modifier: Modifier = Modifier) {
+/**
+ * A red LED readout as an old SLR's: a module of fixed digit [cells] that never moves. The
+ * [value] sits right-aligned in its cells, the cells it doesn't use stay dark (their segments
+ * faintly there), a decimal point lights inside its digit's cell rather than taking a place
+ * of its own, a [prefix] (F, T, S) has its own cells to the left, and a unit ([suffix]: m, °, ")
+ * has a slot of its own on the right, kept even when it is dark.
+ */
+fun SevenSegment(value: String, cells: Int, prefix: String = "", suffix: String? = null,
+                 height: Dp = 22.dp, color: Color = Palette.led, modifier: Modifier = Modifier) {
     val measurer = rememberTextMeasurer()
     val digitW = height * 0.55f
-    val widths = text.map { c -> when { c == '.' -> height * 0.18f; segments(c) != null -> digitW + height * 0.12f; else -> height * 0.5f } }
-    val total = widths.fold(0.dp) { a, b -> a + b }
+    val cellW = digitW + height * 0.12f
+    // (character, point lit after it), right-aligned into the cells
+    val parsed = ArrayList<Pair<Char, Boolean>>()
+    for (c in value) if (c == '.' && parsed.isNotEmpty()) parsed[parsed.size - 1] = parsed.last().first to true else if (c != '.') parsed += c to false
+    val shown = (List(maxOf(0, cells - parsed.size)) { ' ' to false } + parsed.takeLast(cells))
+    val all = prefix.map { it to false } + shown
+    val slotW = height * 0.5f
+    val total = cellW * all.size + (if (suffix != null) slotW else 0.dp)
     Canvas(modifier.width(total).height(height)) {
-        var x = 0f
         val h = size.height
-        val dw = digitW.toPx()
+        val dw = digitW.toPx(); val cw = cellW.toPx()
         val th = h * 0.12f
-        for ((i, c) in text.withIndex()) {
-            val seg = segments(c)
-            when {
-                c == '.' -> {
-                    glowDot(Offset(x + h * 0.06f, h * 0.92f), th * 0.7f, color)
-                }
-                seg != null -> drawDigit(x, dw, h, th, seg, color)
-                else -> {
-                    val t = measurer.measure(c.toString(), TextStyle(color = color, fontSize = (h * 0.55f).toSp(), fontFamily = Futuraish, fontWeight = FontWeight.Medium))
-                    val glow = measurer.measure(c.toString(), TextStyle(color = color, fontSize = (h * 0.55f).toSp(), fontFamily = Futuraish, fontWeight = FontWeight.Medium,
-                        shadow = androidx.compose.ui.graphics.Shadow(color.copy(alpha = 0.9f), Offset.Zero, th * 2.2f)))
-                    drawText(glow, topLeft = Offset(x, h - t.size.height.toFloat()))
-                }
-            }
-            x += widths[i].toPx()
+        fun glyph(ch: String, x: Float, w: Float, scale: Float) {
+            val st = TextStyle(color = color, fontSize = (h * scale).toSp(), fontFamily = Futuraish, fontWeight = FontWeight.Medium,
+                shadow = androidx.compose.ui.graphics.Shadow(color.copy(alpha = 0.9f), Offset.Zero, th * 2.2f))
+            val t = measurer.measure(ch, st)
+            drawText(t, topLeft = Offset(x + (w - t.size.width) / 2f, h - t.size.height.toFloat()))
         }
+        for ((i, cell) in all.withIndex()) {
+            val x = i * cw
+            val seg = segments(cell.first)
+            if (seg != null) drawDigit(x, dw, h, th, seg, color)
+            else { drawDigit(x, dw, h, th, "", color); glyph(cell.first.toString(), x, dw, if (cell.first == '∞') 0.8f else 0.7f) }
+            // the point: lit when it follows this digit, faintly there otherwise
+            val dot = Offset(x + dw + h * 0.04f, h * 0.92f)
+            if (cell.second) glowDot(dot, th * 0.7f, color) else drawCircle(color.copy(alpha = 0.07f), th * 0.7f, dot)
+        }
+        if (!suffix.isNullOrEmpty()) glyph(suffix, all.size * cw, slotW.toPx(), 0.55f)
     }
 }
 
