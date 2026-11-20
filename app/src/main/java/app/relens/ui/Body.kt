@@ -358,6 +358,15 @@ class Body(app: Application) : AndroidViewModel(app) {
         tiltY = -mag * kotlin.math.sin(ang)
     }
 
+    /** Pinched: the sharp band wider (less tilt) or narrower (more), its angle kept. */
+    fun scaleTilt(f: Float) {
+        val m = lens.movement as? Movement.Tilt ?: return
+        val mag = kotlin.math.hypot(tiltX, tiltY)
+        if (mag < 0.05f) return
+        val k = ((mag * f).coerceIn(0.1f, m.maxDegrees)) / mag
+        tiltX *= k; tiltY *= k
+    }
+
     fun moveLens(dx: Float, dy: Float) {
         when (val m = lens.movement) {
             is Movement.Tilt -> {

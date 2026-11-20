@@ -1,5 +1,6 @@
 package app.relens.ui
 
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.graphics.drawscope.rotate
@@ -146,18 +147,30 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                     .pointerInput(lens) {
                         if (lens.movement == Movement.None) return@pointerInput
                         var travelled = 0f
+                        if (lens.movement is Movement.Tilt) {
+                            // One finger round the focus point steers the band (round: turn it, out and
+                            // in: tilt more and less); two fingers pinch it narrower or wider.
+                            detectTransformGestures { centroid, pan, zoom, _ ->
+                                if (kotlin.math.abs(zoom - 1f) > 0.002f) {
+                                    body.scaleTilt(1f / zoom)
+                                    travelled += kotlin.math.abs(zoom - 1f) * 400f
+                                } else {
+                                    val c = Offset(body.focusX * size.width, body.focusY * size.height)
+                                    val now = centroid - c; val was = now - pan
+                                    if (now.getDistance() > 8f && was.getDistance() > 8f) {
+                                        var da = kotlin.math.atan2(now.y, now.x) - kotlin.math.atan2(was.y, was.x)
+                                        if (da > Math.PI) da -= (2 * Math.PI).toFloat(); if (da < -Math.PI) da += (2 * Math.PI).toFloat()
+                                        body.steerTilt(da, (now.getDistance() - was.getDistance()) / size.width, kotlin.math.atan2(now.y, now.x))
+                                    }
+                                    travelled += pan.getDistance()
+                                }
+                                if (travelled > 40f) { travelled = 0f; haptics.tick() }
+                            }
+                            return@pointerInput
+                        }
                         detectDragGestures(onDragEnd = { travelled = 0f }) { change, d ->
                             change.consume()
-                            if (lens.movement is Movement.Tilt) {
-                                // round the focus point: going round turns the band, out and in tilts more and less
-                                val c = Offset(body.focusX * size.width, body.focusY * size.height)
-                                val now = change.position - c; val was = now - d
-                                if (now.getDistance() > 8f && was.getDistance() > 8f) {
-                                    var da = kotlin.math.atan2(now.y, now.x) - kotlin.math.atan2(was.y, was.x)
-                                    if (da > Math.PI) da -= (2 * Math.PI).toFloat(); if (da < -Math.PI) da += (2 * Math.PI).toFloat()
-                                    body.steerTilt(da, (now.getDistance() - was.getDistance()) / size.width, kotlin.math.atan2(now.y, now.x))
-                                }
-                            } else body.moveLens(d.x / size.width, d.y / size.height)
+                            body.moveLens(d.x / size.width, d.y / size.height)
                             travelled += d.getDistance()
                             if (travelled > 40f) { travelled = 0f; haptics.tick() }
                         }
