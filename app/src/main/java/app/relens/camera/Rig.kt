@@ -158,6 +158,10 @@ class Rig(private val context: Context) {
         return o + k * trueD
     }
 
+    /** The raw reading at the last autofocus lock (for collimating). */
+    @Volatile var lastLockRaw: Float? = null; private set
+    val currentCameraId: String? get() = heroId
+
     /** Recent autofocus locks after taps (calibration samples for the depth map). */
     val afSamples = java.util.concurrent.CopyOnWriteArrayList<AfSample>()
     @Volatile private var lastHeroResult: CaptureResult? = null
@@ -292,7 +296,7 @@ class Rig(private val context: Context) {
                 if (af == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED && sawScan) sweepWait?.complete(null)
                 if (af == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED && !sawScan) { lastAfState = -1; return }
                 if (af == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED) {
-                    own.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { raw -> sweepWait?.complete(corrected(heroId ?: "0", raw)) }
+                    own.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { raw -> lastLockRaw = raw; sweepWait?.complete(corrected(heroId ?: "0", raw)) }
                     if (sweepWait == null) own.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { raw ->
                         val id = heroId ?: "0"
                         afSamples.add(AfSample(tapX, tapY, corrected(id, raw), id, System.currentTimeMillis()))
@@ -380,6 +384,9 @@ class Rig(private val context: Context) {
         }
         repeat()
     }
+
+    /** Autofocus again (collimating: the ring is an input, not the lens). */
+    fun manualFocusOff() = handler.post { manualD = null; repeat() }
 
     /** The focus ring driving the phone lens (dioptres; 0 = infinity); null: back to autofocus. */
     fun manualFocus(dioptres: Float?) = handler.post {

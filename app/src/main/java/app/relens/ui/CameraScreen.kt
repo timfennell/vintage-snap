@@ -167,7 +167,9 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
         val shownM = ringM ?: heldM
         Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
             Led("F ${fLabel(body.fNumber)}")
-            Led(if (shownM == null) "-- m" else if (shownM.isInfinite()) "∞ m" else "%.2f m".format(shownM))
+            Led(if (shownM == null) "-- m" else if (shownM.isInfinite()) "∞ m" else "%.2f m".format(shownM),
+                // long-press the distance: collimate this camera's focus readings
+                Modifier.pointerInput(Unit) { detectTapGestures(onLongPress = { body.startCollimating(); haptics.clunk() }) })
             when (lens.movement) {
                 is Movement.Tilt -> Led("T %.0f°".format(kotlin.math.hypot(body.tiltX, body.tiltY)),
                     Modifier.clickable { body.centreMovements(); haptics.click() })
@@ -178,6 +180,18 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
             Led("${body.framesLeft}")
         }
 
+        if (body.collimating || body.collimationNote.isNotEmpty() && body.collimation.isNotEmpty()) Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text((if (body.collimating) "COLLIMATE ${body.rig.currentCameraId ?: ""} · " else "") + body.collimationNote,
+                color = Palette.amber, fontSize = 12.sp, modifier = Modifier.weight(1f))
+            if (body.collimating) {
+                Text("SET", color = Palette.leather, fontWeight = FontWeight.Bold, fontSize = 13.sp,
+                    modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(Palette.amber)
+                        .clickable { body.collimateSet(); haptics.click() }.padding(horizontal = 12.dp, vertical = 6.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("✕", color = Palette.dim, fontSize = 16.sp, modifier = Modifier.clickable { body.collimating = false }.padding(6.dp))
+            }
+        }
         body.message?.let { Text(it, color = Palette.led, fontSize = 12.sp, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) }
         // ---- the lens barrel: focus ring (with the DoF scale), aperture ring ----
         val marks = lens.focusMarks

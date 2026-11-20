@@ -57,7 +57,7 @@ class Body(app: Application) : AndroidViewModel(app) {
         set(v) {
             _focusPos.floatValue = v
             // The phone's own lens follows the ring, so it focuses where the print will.
-            rig.manualFocus(focusM?.let { if (it.isInfinite()) 0f else 1f / it })
+            if (!collimating) rig.manualFocus(focusM?.let { if (it.isInfinite()) 0f else 1f / it })
         }
     var stockIndex by mutableIntStateOf(prefs.getInt("stock", 1)); private set
     /** The filter on the lens (index into lensFilters; 0 = none). */
@@ -84,7 +84,46 @@ class Body(app: Application) : AndroidViewModel(app) {
 
     val lens get() = lensBag[lensIndex]
 
+    // ---- collimating: each camera's focus readings against true distances ----
+    /** Collimating: taps measure, the ring is set to the true distance (and doesn't drive the lens). */
+    var collimating by mutableStateOf(false)
+    /** (raw reading, true dioptres) recorded for the current camera. */
+    val collimation = mutableStateListOf<Pair<Float, Float>>()
+    var collimationNote by mutableStateOf("")
+
+    fun startCollimating() {
+        collimating = true; collimation.clear()
+        collimationNote = "tap a target, turn the ring to its true distance, press SET"
+    }
+
+    /** Records the last lock against the ring's distance; with two, fits offset and scale. */
+    fun collimateSet() {
+        val raw = rig.lastLockRaw ?: run { collimationNote = "tap a target first"; return }
+        val m = focusM ?: run { collimationNote = "turn the ring to the target's distance"; return }
+        val trueD = if (m.isInfinite()) 0f else 1f / m
+        collimation.add(Pair(raw, trueD))
+        val id = rig.currentCameraId ?: "0"
+        val (o, k) = if (collimation.size >= 2) {
+            val (r1, t1) = collimation[collimation.size - 2]; val (r2, t2) = collimation.last()
+            if (kotlin.math.abs(t2 - t1) < 0.05f) { collimationNote = "pick a second target at a clearly different distance"; collimation.removeLast(); return }
+            val kk = (r2 - r1) / (t2 - t1)
+            Pair(r1 - kk * t1, kk)
+        } else {
+            val kk = rig.afCalibration[id]?.second ?: 1f
+            Pair(raw - kk * trueD, kk)
+        }
+        rig.afCalibration[id] = Pair(o, k)
+        prefs.edit().putString("afcal_$id", "$o,$k").apply()
+        Trace.i("collimated camera $id: reading = %.3f + %.3f x true (from ${collimation.size} targets)".format(o, k))
+        collimationNote = if (collimation.size >= 2) "camera $id collimated: offset %.2f, scale %.2f. Done.".format(o, k)
+            else "offset set (%.2f). A second target at another distance sets the scale.".format(o)
+        if (collimation.size >= 2) { collimating = false; focusPos = Float.NaN }   // back to autofocus, corrected
+    }
+
     init {
+        // Saved collimations: "afcal_<camera>" = "offset,scale".
+        for (id in listOf("0", "2", "3")) prefs.getString("afcal_$id", null)?.split(",")?.mapNotNull { it.toFloatOrNull() }
+            ?.takeIf { it.size == 2 }?.let { rig.afCalibration[id] = Pair(it[0], it[1]) }
         if (rig.framingFor(lensBag[lensIndex]) == null)
             lensIndex = lensBag.indexOfFirst { it.name == "Ohi Kor 50mm f/1.4" }.coerceAtLeast(0)
         // A ring set by hand last time: the phone's lens goes there too (the rig applies it when it opens).
@@ -167,6 +206,8 @@ class Body(app: Application) : AndroidViewModel(app) {
 
     fun tapFocus(fx: Float, fy: Float) {
         focusX = fx.coerceIn(0f, 1f); focusY = fy.coerceIn(0f, 1f)
+        // Collimating, the ring is the true distance being entered: a tap only measures.
+        if (collimating) { rig.manualFocusOff(); rig.focusAt(focusX, focusY); return }
         _focusPos.floatValue = Float.NaN          // the ring follows the subject again
         rig.focusAt(focusX, focusY)
     }
