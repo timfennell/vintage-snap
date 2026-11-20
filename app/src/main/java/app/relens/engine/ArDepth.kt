@@ -54,17 +54,18 @@ class ArDepth private constructor(private val fx: FloatArray, private val fy: Fl
         if (b <= 1e-4f) { Trace.w("ARCore depth: no usable slope (b %.4f)".format(b)); return null }
         // The residuals on a coarse grid (portrait: 12 across, 18 down), Gaussian-weighted,
         // shrunk toward nothing where few samples fall.
-        val gw = 12; val gh = 18
+        val dense = size > 4000
+        val gw = if (dense) 24 else 12; val gh = if (dense) 36 else 18
         val acc = FloatArray(gw * gh); val wsum = FloatArray(gw * gh)
-        val sigma = 1.1f
+        val sigma = if (dense) 1.4f else 1.1f
         for (i in 0 until size) {
             val pred = a + b * rel[i]
             var r = disp[i] - pred
             val lim = 0.6f * maxOf(abs(pred), 0.02f)
             r = r.coerceIn(-lim, lim)
             val gx = fx[i] * gw - 0.5f; val gy = fy[i] * gh - 0.5f
-            for (cy in maxOf(0, (gy - 3).toInt())..minOf(gh - 1, (gy + 3).toInt()))
-                for (cx in maxOf(0, (gx - 3).toInt())..minOf(gw - 1, (gx + 3).toInt())) {
+            for (cy in maxOf(0, (gy - 4).toInt())..minOf(gh - 1, (gy + 4).toInt()))
+                for (cx in maxOf(0, (gx - 4).toInt())..minOf(gw - 1, (gx + 4).toInt())) {
                     val d2 = (cx - gx) * (cx - gx) + (cy - gy) * (cy - gy)
                     val k = wt[i] * exp(-d2 / (2 * sigma * sigma))
                     acc[cy * gw + cx] += k * r; wsum[cy * gw + cx] += k
@@ -96,7 +97,8 @@ class ArDepth private constructor(private val fx: FloatArray, private val fy: Fl
          * upright frame, at [crop]); [focalOverLong] the hero camera's focal length over its
          * sensor's long side (uncropped).
          */
-        fun load(jpeg: File, photo: Bitmap, fullW: Int, fullH: Int, crop: Rect, focalOverLong: Float): ArDepth? = runCatching {
+        fun load(jpeg: File, photo: Bitmap, fullW: Int, fullH: Int, crop: Rect, focalOverLong: Float,
+                 gl: Gl? = null, debugDir: File? = null): ArDepth? = runCatching {
             val dir = File(jpeg.parentFile, jpeg.nameWithoutExtension + ".par")
             val metaF = File(dir, "parallax.json")
             if (!metaF.exists()) return null
@@ -158,6 +160,21 @@ class ArDepth private constructor(private val fx: FloatArray, private val fy: Fl
                     used++
                 }
                 Trace.i("ARCore depth: $name gives $used points on the print")
+            }
+            // Stereo from the three frames themselves: far denser than ARCore's own, in the
+            // centre frame's pixels, over the distances ARCore saw (with room either side).
+            if (gl != null) runCatching {
+                val sorted = ds.sorted()
+                val nearM = if (sorted.size > 20) (1f / sorted[(sorted.size * 0.98).toInt()] * 0.6f).coerceIn(0.2f, 5f) else 0.3f
+                val farM = if (sorted.size > 20) (1f / sorted[(sorted.size * 0.02).toInt()] * 2.5f).coerceIn(nearM * 3f, 60f) else 30f
+                StereoDepth.compute(gl, dir, frames, nearM, farM, debugDir?.let { File(it, "last_stereo.png") })
+            }.onFailure { Trace.w("stereo failed", it) }.getOrNull()?.let { st ->
+                var on = 0
+                for (i in st.u.indices) {
+                    val p = toPrint((st.u[i] - acx) / afx, (st.v[i] - acy) / afy, best.rot, best.dx, best.dy, fullW, fullH, crop, heroF) ?: continue
+                    fxs += p.first; fys += p.second; ds += st.disp[i]; ws += st.weight[i]; on++
+                }
+                Trace.i("stereo: $on points on the print")
             }
             Trace.i("ARCore depth: turn ${best.rot}°, offset %.3f, %.3f, match %.2f, %d of %d samples on the print".format(
                 best.dx, best.dy, best.score, fxs.size, total))

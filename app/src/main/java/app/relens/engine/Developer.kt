@@ -136,7 +136,8 @@ class Developer(private val context: Context) {
         val dm = est.depth
         // A parallax capture's own measured depth (ARCore), when there is one: it makes the
         // relative depth metric and corrects it region by region (before it goes to the GPU).
-        val ar = ArDepth.load(job.jpeg, photo.bmp, full.bmp.width, full.bmp.height, crop, job.focalOverLong)
+        val ar = ArDepth.load(job.jpeg, photo.bmp, full.bmp.width, full.bmp.height, crop, job.focalOverLong,
+            gl = g, debugDir = if (job.publish) null else context.getExternalFilesDir("prints"))
         // ARCore's distance right at the focus point, for the camera's focus calibration
         val arFocusD = ar?.disparityAround(job.focusX, job.focusY)
         val arFit = ar?.calibrate(dm)?.also { lap("ar depth") }

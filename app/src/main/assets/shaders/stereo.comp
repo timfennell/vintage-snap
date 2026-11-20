@@ -1,0 +1,86 @@
+// Plane-sweep stereo over a parallax capture (ParallaxCapture: centre, left, right,
+// each with ARCore's pose). For each pixel of the centre frame, a set of distances
+// (even in 1/distance) is tried: at each, the pixel's 5x5 patch is looked for in
+// the left and right frames where that distance would put it, and scored by
+// normalised cross-correlation. The better of the two views counts (at a
+// foreground edge one side sees round it, the other doesn't), the best distance
+// wins, refined between its neighbours. Out: (1/distance, best cost, how unique,
+// patch contrast). Images and intrinsics are in ARCore's sensor frame, x right, y
+// down; the camera looks down -z.
+uniform sampler2D uC;            // R16F grey, centre
+uniform sampler2D uL;            // left
+uniform sampler2D uR;            // right
+layout(rgba32f, binding = 0) writeonly uniform image2D uOut;
+uniform mat4 uTL;                // centre camera -> left camera
+uniform mat4 uTR;                // centre camera -> right camera
+uniform vec4 uK;                 // fx, fy, cx, cy at this resolution
+uniform vec2 uInv;               // 1/near, 1/far (per metre)
+uniform int uPlanes;
+uniform ivec2 uOffset;
+
+vec2 project(mat4 T, vec3 X, vec2 size) {
+    vec4 P = T * vec4(X, 1.0);
+    float d = max(-P.z, 1e-4);
+    return vec2(uK.z + uK.x * P.x / d, uK.w - uK.y * P.y / d) / size;
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy) + uOffset;
+    ivec2 sz = imageSize(uOut);
+    if (p.x >= sz.x || p.y >= sz.y) return;
+    vec2 size = vec2(sz);
+    // the centre patch, normalised
+    float c[25];
+    float m = 0.0;
+    for (int j = 0; j < 5; j++) for (int i = 0; i < 5; i++) {
+        float v = texelFetch(uC, clamp(p + ivec2(i - 2, j - 2), ivec2(0), sz - 1), 0).r;
+        c[j * 5 + i] = v; m += v;
+    }
+    m /= 25.0;
+    float sc = 0.0;
+    for (int k = 0; k < 25; k++) { c[k] -= m; sc += c[k] * c[k]; }
+    float contrast = sqrt(sc / 25.0);
+    if (contrast < 0.008) { imageStore(uOut, p, vec4(0.0, 2.0, 1.0, contrast)); return; }
+
+    vec2 pc = vec2(p) + 0.5;
+    vec2 ray = vec2((pc.x - uK.z) / uK.x, -(pc.y - uK.w) / uK.y);
+    float best = 9.0, second = 9.0, prevCost = 9.0, bestPrev = 9.0, bestNext = 9.0;
+    int bi = -1;
+    bool wantNext = false;
+    for (int i = 0; i < uPlanes; i++) {
+        float inv = mix(uInv.x, uInv.y, float(i) / float(uPlanes - 1));
+        float z = 1.0 / inv;
+        vec3 X = vec3(ray * z, -z);
+        float cost = 9.0;
+        for (int v = 0; v < 2; v++) {
+            vec2 q = v == 0 ? project(uTL, X, size) : project(uTR, X, size);
+            if (any(lessThan(q, vec2(0.0))) || any(greaterThan(q, vec2(1.0)))) continue;
+            float s[25]; float ms = 0.0;
+            for (int j = 0; j < 5; j++) for (int k = 0; k < 5; k++) {
+                vec2 o = vec2(float(k - 2), float(j - 2)) / size;
+                float val = v == 0 ? textureLod(uL, q + o, 0.0).r : textureLod(uR, q + o, 0.0).r;
+                s[j * 5 + k] = val; ms += val;
+            }
+            ms /= 25.0;
+            float sab = 0.0, sbb = 0.0;
+            for (int k = 0; k < 25; k++) { float b = s[k] - ms; sab += c[k] * b; sbb += b * b; }
+            float zncc = sab / sqrt(max(sc * sbb, 1e-10));
+            cost = min(cost, 1.0 - zncc);
+        }
+        if (wantNext) { bestNext = cost; wantNext = false; }
+        if (cost < best) {
+            if (bi >= 0 && i - bi > 1) second = min(second, best);
+            best = cost; bi = i; bestPrev = prevCost; bestNext = 9.0; wantNext = true;
+        } else if (i - bi > 1) second = min(second, cost);
+        prevCost = cost;
+    }
+    if (bi < 0 || best > 2.0) { imageStore(uOut, p, vec4(0.0, 2.0, 1.0, contrast)); return; }
+    // between the planes: a parabola through the best and its neighbours
+    float off = 0.0;
+    if (bestPrev < 8.0 && bestNext < 8.0) {
+        float den = bestPrev - 2.0 * best + bestNext;
+        if (den > 1e-5) off = clamp(0.5 * (bestPrev - bestNext) / den, -0.5, 0.5);
+    }
+    float inv = mix(uInv.x, uInv.y, (float(bi) + off) / float(uPlanes - 1));
+    imageStore(uOut, p, vec4(inv, best, best / max(second, 1e-3), contrast));
+}
