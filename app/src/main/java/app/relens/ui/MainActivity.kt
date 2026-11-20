@@ -101,6 +101,8 @@ class MainActivity : ComponentActivity() {
                 body.tiltX = intent.getFloatExtra("tiltx", 0f); body.tiltY = intent.getFloatExtra("tilty", 0f)
             }, 2500)
         }
+        // --ez fetchmodels true (testing from the Mac): start the depth models' download
+        if (intent.getBooleanExtra("fetchmodels", false)) body.downloadModels()
         if (intent.hasExtra("logicaltest")) window.decorView.postDelayed({ lifecycleScope.launch { body.rig.logicalTest() } }, 9000)
         // Testing from the Mac: --es rawtest "<lens name part>": a RAW-only capture to a test folder (no roll, no gallery).
         intent.getStringExtra("rawtest")?.let { want ->
