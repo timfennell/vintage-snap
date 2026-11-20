@@ -105,8 +105,12 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
         }
 
         // ---- the finder: the lens's own field of view, 3:2 like 35 mm film (2:3 held upright) ----
-        BoxWithConstraints(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
-            Box(Modifier.aspectRatio(2f / 3f).clip(RoundedCornerShape(6.dp)).background(Color.Black)) {
+        BoxWithConstraints(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 6.dp), contentAlignment = Alignment.Center) {
+          // The eyepiece: a dark surround round the picture, seen through a little pincushion,
+          // with light from the picture's edge spilling into it (Finder.kt).
+          Box(Modifier.aspectRatio(2f / 3f + 0.02f).clip(RoundedCornerShape(10.dp)).background(Color.Black)
+              .eyepiece(innerInset = 10.dp).padding(10.dp)) {
+            Box(Modifier.fillMaxSize().clip(RoundedCornerShape(3.dp)).background(Color.Black)) {
                 val shiftView = Movements.keystone(lens, floatArrayOf(body.shiftX, body.shiftY))
                 Finder(body, framing?.crop ?: 1f, Modifier.fillMaxSize()
                     .graphicsLayer {
@@ -159,6 +163,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                 if (mirrorUp && (body.busy || body.sweeping)) Text("HOLD STEADY", color = Palette.led, fontSize = 16.sp,
                     fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, modifier = Modifier.align(Alignment.Center))
             }
+          }
         }
 
         // ---- LED readout under the finder ----
@@ -330,9 +335,10 @@ private fun MeterCard(setPos: Float, meterPos: Float, stops: Float, modifier: Mo
     }
 }
 
+/** A readout under the finder: red seven-segment digits with their glow (Finder.kt). */
 @Composable
 private fun Led(text: String, modifier: Modifier = Modifier) {
-    Text(text, color = Palette.led, fontFamily = FontFamily.Monospace, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = modifier)
+    SevenSegment(text, height = 20.dp, modifier = modifier)
 }
 
 /**

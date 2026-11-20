@@ -46,7 +46,10 @@ class MainActivity : ComponentActivity() {
         // The app owns files/models (scripts/install.sh pushes the depth model there).
         File(getExternalFilesDir(null), "models").mkdirs()
         val haptics = Haptics(this)
-        setContent { App(body, haptics) }
+        setContent {
+            // The body's lettering: Jost, a free geometric face after Futura.
+            androidx.compose.material3.ProvideTextStyle(androidx.compose.ui.text.TextStyle(fontFamily = Futuraish)) { App(body, haptics) }
+        }
         // Testing from the Mac: --es testshot "<lens name part>": a real shot into the test folder (no roll, no gallery).
         intent.getStringExtra("testshot")?.let { want ->
             window.decorView.postDelayed({
