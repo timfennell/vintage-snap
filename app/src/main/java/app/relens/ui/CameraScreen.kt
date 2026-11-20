@@ -227,6 +227,9 @@ private fun Finder(body: Body, crop: Float, modifier: Modifier) {
         modifier = modifier,
         factory = { ctx ->
             android.view.TextureView(ctx).apply {
+                // The crop is a scale about the view's centre: apply it once the view has a size
+                // (Compose's update can run before layout, when the centre would be the corner).
+                addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ -> applyCrop(v as android.view.TextureView) }
                 surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener {
                     override fun onSurfaceTextureAvailable(t: android.graphics.SurfaceTexture, w: Int, h: Int) {
                         body.rig.attach(t); body.rig.select(body.lens)
@@ -237,12 +240,17 @@ private fun Finder(body: Body, crop: Float, modifier: Modifier) {
                 }
             }
         },
-        update = { tv ->
-            val m = android.graphics.Matrix()
-            m.setScale(9f / 8f * crop, crop, tv.width / 2f, tv.height / 2f)
-            tv.setTransform(m)
-        },
+        update = { tv -> tv.tag = crop; applyCrop(tv) },
     )
+}
+
+/** Enlarges the upright 3:4 picture so the lens's crop fills the 2:3 view, about its centre. */
+private fun applyCrop(tv: android.view.TextureView) {
+    val crop = tv.tag as? Float ?: return
+    if (tv.width == 0 || tv.height == 0) return
+    val m = android.graphics.Matrix()
+    m.setScale(9f / 8f * crop, crop, tv.width / 2f, tv.height / 2f)
+    tv.setTransform(m)
 }
 
 @Composable
