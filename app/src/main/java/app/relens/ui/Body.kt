@@ -288,6 +288,8 @@ class Body(app: Application) : AndroidViewModel(app) {
                 steadiness.start()
                 val pts = runCatching { Sweep.points(exp.jpeg, framing.crop, n = 4) }.getOrDefault(emptyList())
                 var swept = runCatching { rig.sweep(pts) }.getOrDefault(emptyList())
+                // then the ultra-wide's view of the lights round the picture, still held steady
+                runCatching { rig.grabLightMap(File(getApplication<Application>().getExternalFilesDir("negatives"), ""), name) }
                 steadiness.stop()
                 // allowed drift: a twelfth of the lens's field of view (its long side)
                 val fov = Math.toDegrees(2 * kotlin.math.atan(18.0 / lens.focalMM)).toFloat()

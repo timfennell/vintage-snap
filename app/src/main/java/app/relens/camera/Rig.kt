@@ -232,7 +232,9 @@ class Rig(private val context: Context) {
             }
             if (heroId != cam.id) afSamples.clear()
             heroId = cam.id
-            logicalOpen = useLogical && logicalId != null
+            // Through the logical camera only to see round the picture with the ultra-wide; a lens on
+            // the ultra-wide itself already has it.
+            logicalOpen = useLogical && logicalId != null && cam.id != "2"
             if (logicalOpen && cam.id != "2") uwReader = ImageReader.newInstance(1280, 960, ImageFormat.YUV_420_888, 2)
             cm.openCamera(if (logicalOpen) logicalId!! else cam.id, executor, object : CameraDevice.StateCallback() {
                 override fun onOpened(d: CameraDevice) {
@@ -431,7 +433,7 @@ class Rig(private val context: Context) {
             close()
             val c4 = runCatching { cm.getCameraCharacteristics("4") }.getOrNull() ?: run { out.complete("no camera 4"); return@post }
             val phys = c4.physicalCameraIds
-            val results = StringBuilder("physical ${phys}; ")
+            val results = StringBuilder("physical ${phys}; concurrent sets ${runCatching { cm.concurrentCameraIds }.getOrNull()}; ")
             safely("logical test") {
                 cm.openCamera("4", executor, object : CameraDevice.StateCallback() {
                     override fun onOpened(d: CameraDevice) {
@@ -574,6 +576,75 @@ class Rig(private val context: Context) {
     @Volatile private var sweepWait: CompletableDeferred<Float?>? = null
 
     /** Takes a frame: JPEG (and DNG when the camera gives RAW) into [dir]. */
+    /** The hero shot's own capture result (its exposure, for the light map's exposure ratio). */
+    @Volatile private var lastShotResult: CaptureResult? = null
+    /** After each shot, a frame from the ultra-wide to find the lights round the picture. */
+    var ultraWideMap = true
+
+    /**
+     * The ultra-wide's view, taken just after the shot while the photographer still holds the
+     * camera as it was (the mirror is up, HOLD STEADY): the lights beyond the picture, for its
+     * flare. This phone can't run the ultra-wide beside the RAW camera (no concurrent pair, and
+     * RAW fails through the logical camera), so the camera switches to the ultra-wide for one
+     * settled frame and back. Saves [name].uw.jpg / .uw.json beside the negative.
+     */
+    suspend fun grabLightMap(dir: File, name: String): Boolean {
+        val fr = _framing.value ?: return false
+        val uwCam = cameras.firstOrNull { it.id == "2" } ?: return false
+        if (!ultraWideMap || fr.camera.id == "2") return false
+        val t0 = System.currentTimeMillis()
+        val done = CompletableDeferred<Boolean>()
+        var dev: CameraDevice? = null
+        var reader: ImageReader? = null
+        fun finishUp(ok: Boolean) {
+            if (done.isCompleted) return
+            runCatching { dev?.close() }; runCatching { reader?.close() }
+            done.complete(ok)
+            _framing.value?.let { open(it) }
+        }
+        handler.post {
+            close()
+            val r = ImageReader.newInstance(1280, 960, ImageFormat.YUV_420_888, 3); reader = r
+            var latest: CaptureResult? = null
+            var settleUntil = Long.MAX_VALUE
+            safely("light map") {
+                cm.openCamera("2", executor, object : CameraDevice.StateCallback() {
+                    override fun onOpened(d: CameraDevice) {
+                        dev = d
+                        val cfg = SessionConfiguration(SessionConfiguration.SESSION_REGULAR, listOf(OutputConfiguration(r.surface)), executor,
+                            object : CameraCaptureSession.StateCallback() {
+                                override fun onConfigured(s: CameraCaptureSession) {
+                                    settleUntil = System.currentTimeMillis() + 500       // let its exposure settle
+                                    r.setOnImageAvailableListener({ rr ->
+                                        val img = rr.acquireLatestImage() ?: return@setOnImageAvailableListener
+                                        if (System.currentTimeMillis() < settleUntil || latest == null || done.isCompleted) { img.close(); return@setOnImageAvailableListener }
+                                        val ok = runCatching { LightMap.save(img, File(dir, "$name.uw.jpg"), File(dir, "$name.uw.json"), uwCam,
+                                            (uwCam.sensorOrientation + deviceRotation) % 360, latest, lastShotResult) }
+                                            .onFailure { app.relens.Trace.w("light map not saved", it) }.isSuccess
+                                        img.close()
+                                        app.relens.Trace.i("light map from the ultra-wide: $ok in ${System.currentTimeMillis() - t0} ms")
+                                        runCatching { s.close() }
+                                        finishUp(ok)
+                                    }, handler)
+                                    val req = d.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply { addTarget(r.surface) }.build()
+                                    runCatching { s.setRepeatingRequest(req, object : CameraCaptureSession.CaptureCallback() {
+                                        override fun onCaptureCompleted(ss: CameraCaptureSession, q: CaptureRequest, t: TotalCaptureResult) { latest = t }
+                                    }, handler) }.onFailure { finishUp(false) }
+                                }
+                                override fun onConfigureFailed(s: CameraCaptureSession) { finishUp(false) }
+                            })
+                        runCatching { d.createCaptureSession(cfg) }.onFailure { finishUp(false) }
+                    }
+                    override fun onDisconnected(d: CameraDevice) { finishUp(false) }
+                    override fun onError(d: CameraDevice, e: Int) { app.relens.Trace.w("ultra-wide error $e"); finishUp(false) }
+                })
+            }
+        }
+        return try { withTimeout(5_000) { done.await() } } catch (t: kotlinx.coroutines.TimeoutCancellationException) {
+            app.relens.Trace.w("light map timed out"); handler.post { finishUp(false) }; false
+        }
+    }
+
     suspend fun shoot(dir: File, name: String): Exposure {
         val s = session ?: run { _framing.value?.let { fr -> handler.post { open(fr) } }; error("camera not ready (reopening)") }
         if (device == null) error("camera not open")
@@ -614,6 +685,7 @@ class Rig(private val context: Context) {
                     }
                     ri.close()
                 }
+                lastShotResult = result
                 done.complete(Exposure(jpeg, dng.takeIf { it.exists() && it.length() > 0 }, focusD))
             } catch (t: Throwable) { done.completeExceptionally(t) }
         }
@@ -638,15 +710,18 @@ class Rig(private val context: Context) {
             val uw = uwReader
             if (rr != null) reqs.add(baseRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)!!.apply {
                 addTarget(rr.surface)
-                // The ultra-wide's view of the same moment: where the lights are, around the picture.
-                uw?.let { addTarget(it.surface) }
                 // The lens shading map (RAW isn't corrected for it): the developer applies it.
                 set(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE, CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON)
             }.build())
             reqs.add(jpegReq)
+            // The ultra-wide's view of the same moment (where the lights are, round the picture):
+            // a request of its own, since this phone fails a RAW request that also feeds it.
+            val uwReq = uw?.let { u -> baseRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)!!.apply { addTarget(u.surface) }.build() }
+            uwReq?.let { reqs.add(it) }
             s.captureBurst(reqs, object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(ss: CameraCaptureSession, r: CaptureRequest, t: TotalCaptureResult) {
-                    if (logicalOpen) { lastUwResult = t.physicalCameraTotalResults["2"]; lastHeroResult = heroId?.let { t.physicalCameraTotalResults[it] } }
+                    if (r == uwReq) { lastUwResult = t.physicalCameraTotalResults["2"]; return }
+                    if (logicalOpen) { lastHeroResult = heroId?.let { t.physicalCameraTotalResults[it] } }
                     // The DNG needs the RAW frame's own result (the hero camera's, on the logical camera).
                     val t = if (logicalOpen) heroId?.let { t.physicalCameraTotalResults[it] } ?: t else t
                     if (r != jpegReq || rr == null) { if (result == null || r != jpegReq) result = t }
@@ -654,6 +729,8 @@ class Rig(private val context: Context) {
                     finish()
                 }
                 override fun onCaptureFailed(ss: CameraCaptureSession, r: CaptureRequest, f: android.hardware.camera2.CaptureFailure) {
+                    if (r == uwReq) { app.relens.Trace.w("ultra-wide frame failed (${f.reason}): no light map"); return }
+                    app.relens.Trace.e("capture failed (${f.reason}) on the ${if (r == jpegReq) "JPEG" else "RAW"} request, logical $logicalOpen")
                     done.completeExceptionally(IllegalStateException("capture failed (${f.reason})"))
                 }
             }, handler)
