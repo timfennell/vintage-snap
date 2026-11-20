@@ -20,7 +20,18 @@ object CameraProbe {
         val ids = cm.cameraIdList.toMutableSet()
         // Logical multi-cameras hide their physical lenses; list those too.
         for (id in cm.cameraIdList) ids += cm.getCameraCharacteristics(id).physicalCameraIds
-        ids.sortedBy { it.toIntOrNull() ?: 999 }.map { id -> describe(id, cm.getCameraCharacteristics(id)) }
+        val listed = ids.sortedBy { it.toIntOrNull() ?: 999 }.map { id -> describe(id, cm.getCameraCharacteristics(id)) }
+        // Cameras the HAL has but the app's list hides (the Nothing logical camera 4,
+        // ultra-wide 2, periscope 3): can the app still reach them by id?
+        val hidden = (0..7).map { it.toString() }.filter { it !in ids }.map { id ->
+            try {
+                val c = cm.getCameraCharacteristics(id)
+                val zr = if (android.os.Build.VERSION.SDK_INT >= 30) c.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE) else null
+                "hidden " + describe(id, c) + (zr?.let { ", zoom ${it.lower}-${it.upper}" } ?: "")
+            } catch (t: Throwable) { "hidden camera $id: not reachable (${t.javaClass.simpleName})" }
+        }
+        val zoom0 = if (android.os.Build.VERSION.SDK_INT >= 30) runCatching { cm.getCameraCharacteristics("0").get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE) }.getOrNull() else null
+        listed + listOf("camera 0 zoom range ${zoom0?.lower}-${zoom0?.upper}") + hidden
     } catch (t: Throwable) {
         listOf("camera probe failed: ${t.message}")
     }

@@ -60,6 +60,7 @@ class Bench(private val ctx: Context, private val ui: (String) -> Unit) {
         // The app owns files/models (a folder adb creates is not listable by the app).
         File(dir, "models").mkdirs()
         if ("setup" in flags) { log("SETUP DONE"); log("BENCH DONE"); return }
+        if ("probe" in flags) { CameraProbe.report(ctx).forEach(::log); File(dir, "bench.txt").writeText(report.toString()); log("BENCH DONE"); return }
         if ("develop" in flags) { developOnce(flags); File(dir, "bench.txt").writeText(report.toString()); log("BENCH DONE"); return }
         val t0 = System.nanoTime()
         try {

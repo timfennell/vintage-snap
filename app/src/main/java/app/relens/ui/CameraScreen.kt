@@ -33,6 +33,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -71,6 +74,11 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
     val raw by body.camera.rawSupported.collectAsState()
     val lens = body.lens
     val transformer = remember { MutableCoordinateTransformer() }
+    // The mirror: up for the exposure, the finder black; down again, the picture back.
+    var mirrorUp by remember { mutableStateOf(false) }
+    LaunchedEffect(mirrorUp) { if (mirrorUp) { kotlinx.coroutines.delay(150); mirrorUp = false } }
+    val blackout by animateFloatAsState(if (mirrorUp) 1f else 0f,
+        androidx.compose.animation.core.tween(if (mirrorUp) 0 else 110), label = "mirror")
 
     Column(Modifier.fillMaxSize().background(Palette.leather).statusBarsPadding().navigationBarsPadding()) {
         // ---- top plate: what's mounted and loaded, the frame counter ----
@@ -134,6 +142,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                 }
                 Text("${lens.name}  ·  ${body.stock.name}", color = Palette.cream.copy(alpha = 0.8f), fontSize = 10.sp,
                     modifier = Modifier.align(Alignment.TopStart).padding(8.dp))
+                if (blackout > 0f) Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = blackout)))
             }
         }
 
@@ -188,8 +197,8 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
         Row(Modifier.fillMaxWidth().height(116.dp).padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
             DeckButton("BAG", Modifier.weight(1f)) { openBag() }
             ShutterRelease(busy = body.busy) {
-                if (!body.busy && body.framesLeft > 0) haptics.shutter()
-                body.shoot()
+                if (!body.busy && body.framesLeft > 0) { haptics.shutter(); mirrorUp = true }
+                body.shoot(onShot = { haptics.advance() })
             }
             Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
                 val last = body.darkroom.firstOrNull()

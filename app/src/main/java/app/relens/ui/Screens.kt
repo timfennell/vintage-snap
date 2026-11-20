@@ -79,7 +79,7 @@ fun LensBagScreen(body: Body, haptics: Haptics, onBack: () -> Unit) {
                 Column(Modifier.fillMaxWidth().background(if (on) Color(0x33E8B04A) else Color.Transparent)
                     .clickable {
                         body.mount(lensBag.indexOfFirst { it.name == lens.name })
-                        haptics.clunk()
+                        haptics.lensMounted()
                         onBack()
                     }.padding(horizontal = 12.dp, vertical = 10.dp)) {
                     Row {
@@ -126,7 +126,7 @@ fun FilmScreen(body: Body, haptics: Haptics, onBack: () -> Unit) {
             Text("▶", color = Palette.amber, fontSize = 22.sp, modifier = Modifier.clickable { if (push < 3) { push++; haptics.click() } }.padding(12.dp))
         }
         Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(Palette.amber)
-            .clickable { body.loadRoll(choice, push); haptics.clunk(); onBack() }.padding(14.dp), contentAlignment = Alignment.Center) {
+            .clickable { body.loadRoll(choice, push); haptics.filmLoaded(); onBack() }.padding(14.dp), contentAlignment = Alignment.Center) {
             Text("LOAD ${filmStocks[choice].name.uppercase()}", color = Palette.leather, fontWeight = FontWeight.Bold)
         }
     }

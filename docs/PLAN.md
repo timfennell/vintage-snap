@@ -119,8 +119,26 @@ For still subjects: a hero shot plus two flanking frames give measured depth
 - Single-shot mode (people, pets, anything moving) stays: Depth Anything +
   Metric3D + the autofocus anchor.
 
+## The lens's own field of view, on 35 mm's 3:2 (Tim, 2026-11-19)
+
+- The finder and the print show exactly what the mounted lens frames, in
+  3:2: the 36 mm side spans the sensor's long side, the short side is cropped.
+- Each lens shoots from the best physical camera (all reachable by id even
+  though the app's list hides them): ultra-wide **2** (1.64 mm, ~16 mm on the
+  36 mm side) for 16-24 mm lenses, main **0** (~24 mm) for 24-58 mm,
+  periscope **3** (13.3 mm, ~73 mm) for 70 mm and up; logical **4** switches
+  0.6-10x. Crop = lens focal / camera's 36 mm-side focal.
+- Hidden from the bag: lenses wider than the ultra-wide (the 13 mm, both
+  fisheyes) and lenses whose crop leaves under ~1 MP even on the periscope
+  (300 mm, the 500 mm mirror). The bag shows each lens's working resolution.
+- The blur uses the lens's own focal length again (the frame now matches
+  the lens), not the "equivalent framing" stand-in.
+
 ## Milestones
 
+1b. **Camera2 capture** (in progress): physical camera per lens, field-of-view
+   crop to 3:2 in the finder and the print, real DNG + JPEG, Parallax capture
+   (ARCore-guided hero + left + right), RAW develop on the GPU.
 1. **Capture**: Camera2 RAW_SENSOR to DNG (and JPEG fallback), the 3 rear
    cameras, focal length + sensor size from characteristics (for the
    CoC maths and "as if shot on a 35 mm body"); import from the photo picker;
