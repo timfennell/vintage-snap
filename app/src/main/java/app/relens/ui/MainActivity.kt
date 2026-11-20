@@ -98,6 +98,18 @@ class MainActivity : ComponentActivity() {
                 }
             }, 3000)
         }
+        // Testing from the Mac: --es rawdev R001_F01_154320: that RAW negative developed alone
+        // (no lens, no film) into files/tests/rawdev_<neg>.f16, to compare with the iOS port.
+        intent.getStringExtra("rawdev")?.let { neg ->
+            window.decorView.postDelayed({
+                lifecycleScope.launch {
+                    val dir = java.io.File(getExternalFilesDir("negatives"), "")
+                    val r = runCatching { body.developer.rawDevelopTest(java.io.File(dir, "$neg.raw16"),
+                        java.io.File(dir, "$neg.rawmeta.json"), java.io.File(getExternalFilesDir("tests"), "rawdev_$neg.f16")) }
+                    android.util.Log.i("Relens", "rawdev $neg: ${r.exceptionOrNull()?.message ?: "ok"}")
+                }
+            }, 3000)
+        }
         // --ef parallaxtest <subject m>: the parallax guide on its own, into files/tests/par.
         if (intent.hasExtra("parallaxtest")) window.decorView.postDelayed({
             body.parallaxTest(java.io.File(getExternalFilesDir("tests"), "par"), intent.getFloatExtra("parallaxtest", 1.5f))

@@ -97,6 +97,35 @@ class Developer(private val context: Context) {
             ?: File(dir, "da2s_fp32_770x1036.onnx")
     }
 
+    /**
+     * Test (from the Mac): the RAW negative developed alone (no lens, no film), written as
+     * little-endian half floats (RGBA, upright, row 0 first) + `<out>.json` with the size and time.
+     * The iOS port develops the same negative and compares (vintage_snap_ios).
+     */
+    suspend fun rawDevelopTest(raw16: File, meta: File, out: File) = withContext(dispatcher) {
+        val g = gl ?: Gl(context.assets).also { gl = it; engine = LensEngine(it) }
+        val t0 = System.nanoTime()
+        val rp = RawDeveloper.develop(g, raw16, meta)
+        val ms = (System.nanoTime() - t0) / 1_000_000
+        val rows = 64
+        val buf = java.nio.ByteBuffer.allocateDirect(rp.width * rows * 16).order(java.nio.ByteOrder.nativeOrder())
+        val half = java.nio.ByteBuffer.allocate(rp.width * rows * 8).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        java.io.FileOutputStream(out).channel.use { ch ->
+            var y = 0
+            while (y < rp.height) {
+                val n = minOf(rows, rp.height - y)
+                g.readFloatRows(rp.tex, rp.width, y, n, buf)
+                val f = buf.asFloatBuffer()
+                half.clear()
+                for (i in 0 until rp.width * n * 4) half.putShort(android.util.Half.toHalf(f.get(i)))
+                half.flip(); ch.write(half)
+                y += n
+            }
+        }
+        g.deleteTextures(rp.tex)
+        File(out.path + ".json").writeText("{\"width\":${rp.width},\"height\":${rp.height},\"ms\":$ms}")
+    }
+
     suspend fun develop(job: DevelopJob): Print = withContext(dispatcher) {
         val t = LinkedHashMap<String, Long>()
         var t0 = System.nanoTime()
