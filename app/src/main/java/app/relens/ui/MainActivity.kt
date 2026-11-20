@@ -65,6 +65,7 @@ class MainActivity : ComponentActivity() {
                 }, 3000)
             }, 3000)
         }
+        if (intent.hasExtra("logicaltest")) window.decorView.postDelayed({ lifecycleScope.launch { body.rig.logicalTest() } }, 9000)
         // Testing from the Mac: --es rawtest "<lens name part>": a RAW-only capture to a test folder (no roll, no gallery).
         intent.getStringExtra("rawtest")?.let { want ->
             window.decorView.postDelayed({

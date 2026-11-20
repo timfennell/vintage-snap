@@ -144,8 +144,11 @@ class Developer(private val context: Context) {
             val fitTap = dispA + dispB * dTap
             if (camD != null) {
                 // The camera measured the subject: pass through it exactly; the fit gives the slope.
-                Log.i("Relens", "AF %.2f m, fit %.2f m at the tap".format(1 / camD, 1 / maxOf(fitTap, 1e-3f)))
-                dispA = camD - dispB * dTap
+                // Unless they disagree wildly (an AF distance off by more than 3x is not to be trusted).
+                val ratio = camD / maxOf(fitTap, 1e-3f)
+                Log.i("Relens", "AF %.2f m, fit %.2f m at the tap (x%.2f)".format(1 / camD, 1 / maxOf(fitTap, 1e-3f), ratio))
+                if (ratio in (1f / 3f)..3f) dispA = camD - dispB * dTap
+                else Log.w("Relens", "AF and depth disagree: keeping the depth fit")
             }
             // Nothing beyond 60 m (a fit's shift can push the far end past infinity).
             val minRel = dm.data.minOrNull() ?: 0f

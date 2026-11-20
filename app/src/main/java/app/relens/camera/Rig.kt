@@ -46,6 +46,8 @@ data class PhoneCamera(
     val minFocusD: Float,       // dioptres; 0 = fixed focus
     val sensorOrientation: Int,
     val activeArray: Rect,
+    /** LENS_INFO_FOCUS_DISTANCE_CALIBRATION: 0 uncalibrated (not dioptres), 1 approximate, 2 calibrated. */
+    val focusCalibration: Int = 0,
 )
 
 /** How a lens is shot: which camera, how much of its frame (the crop factor), and what that leaves. */
@@ -88,7 +90,8 @@ class Rig(private val context: Context) {
             PhoneCamera(id, f * 36f / long, f, long, jpeg, raw,
                 c.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f,
                 c.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90,
-                c.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)!!)
+                c.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)!!,
+                c.get(CameraCharacteristics.LENS_INFO_FOCUS_DISTANCE_CALIBRATION) ?: 0)
         }.getOrNull()
     }.sortedBy { it.f36 }
 
@@ -291,6 +294,95 @@ class Rig(private val context: Context) {
     }
 
     /**
+     * Test: can the logical camera "4" give the ultra-wide ("2") alongside the main ("0")
+     * or periscope ("3") in one request? Opens 4 with small YUV streams on two physical
+     * cameras and captures once. Logs what is supported and what arrives.
+     */
+    @SuppressLint("MissingPermission")
+    suspend fun logicalTest(): String {
+        val out = CompletableDeferred<String>()
+        handler.post {
+            close()
+            val c4 = runCatching { cm.getCameraCharacteristics("4") }.getOrNull() ?: run { out.complete("no camera 4"); return@post }
+            val phys = c4.physicalCameraIds
+            val results = StringBuilder("physical ${phys}; ")
+            safely("logical test") {
+                cm.openCamera("4", executor, object : CameraDevice.StateCallback() {
+                    override fun onOpened(d: CameraDevice) {
+                        fun tryPair(a: String, b: String, next: () -> Unit) {
+                            val ra = ImageReader.newInstance(640, 480, ImageFormat.YUV_420_888, 2)
+                            val rb = ImageReader.newInstance(640, 480, ImageFormat.YUV_420_888, 2)
+                            val oa = OutputConfiguration(ra.surface).apply { setPhysicalCameraId(a) }
+                            val ob = OutputConfiguration(rb.surface).apply { setPhysicalCameraId(b) }
+                            val cfg = SessionConfiguration(SessionConfiguration.SESSION_REGULAR, listOf(oa, ob), executor,
+                                object : CameraCaptureSession.StateCallback() {
+                                    override fun onConfigured(s: CameraCaptureSession) {
+                                        var gotA = false; var gotB = false
+                                        ra.setOnImageAvailableListener({ r -> r.acquireNextImage()?.close(); gotA = true }, handler)
+                                        rb.setOnImageAvailableListener({ r -> r.acquireNextImage()?.close(); gotB = true }, handler)
+                                        val req = d.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply { addTarget(ra.surface); addTarget(rb.surface) }.build()
+                                        runCatching { s.capture(req, null, handler) }
+                                        handler.postDelayed({
+                                            results.append("$a+$b: configured, frames $a=$gotA $b=$gotB; ")
+                                            s.close(); ra.close(); rb.close(); next()
+                                        }, 2500)
+                                    }
+                                    override fun onConfigureFailed(s: CameraCaptureSession) {
+                                        results.append("$a+$b: configure failed; "); ra.close(); rb.close(); next()
+                                    }
+                                })
+                            val sup = runCatching { d.isSessionConfigurationSupported(cfg) }.getOrNull()
+                            results.append("$a+$b supported=$sup ")
+                            runCatching { d.createCaptureSession(cfg) }.onFailure { results.append("$a+$b: ${it.message}; "); next() }
+                        }
+                        // Does the periscope autofocus inside the logical session? Watch its own focus distance.
+                        fun afTest(zoom: Float, next: () -> Unit) {
+                            val ra = ImageReader.newInstance(640, 480, ImageFormat.YUV_420_888, 3)
+                            val rb = ImageReader.newInstance(640, 480, ImageFormat.YUV_420_888, 3)
+                            ra.setOnImageAvailableListener({ r -> r.acquireLatestImage()?.close() }, handler)
+                            rb.setOnImageAvailableListener({ r -> r.acquireLatestImage()?.close() }, handler)
+                            val oa = OutputConfiguration(ra.surface).apply { setPhysicalCameraId("3") }
+                            val ob = OutputConfiguration(rb.surface).apply { setPhysicalCameraId("2") }
+                            d.createCaptureSession(SessionConfiguration(SessionConfiguration.SESSION_REGULAR, listOf(oa, ob), executor,
+                                object : CameraCaptureSession.StateCallback() {
+                                    override fun onConfigured(s: CameraCaptureSession) {
+                                        val seen = ArrayList<String>()
+                                        val cb = object : CameraCaptureSession.CaptureCallback() {
+                                            override fun onCaptureCompleted(ss: CameraCaptureSession, r: CaptureRequest, t: TotalCaptureResult) {
+                                                val p3 = t.physicalCameraTotalResults["3"]?.get(CaptureResult.LENS_FOCUS_DISTANCE)
+                                                val af = t.get(CaptureResult.CONTROL_AF_STATE)
+                                                if (seen.size < 400) seen.add("%.2f/%s".format(p3 ?: -1f, af))
+                                            }
+                                        }
+                                        val b = d.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                                            addTarget(ra.surface); addTarget(rb.surface)
+                                            set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                                            if (zoom > 0f) set(CaptureRequest.CONTROL_ZOOM_RATIO, zoom)
+                                        }
+                                        s.setRepeatingRequest(b.build(), cb, handler)
+                                        handler.postDelayed({
+                                            val dist = seen.map { it.substringBefore('/') }.distinct()
+                                            results.append("AF zoom $zoom: periscope focus values ${dist.take(12)} (${seen.size} frames, last ${seen.lastOrNull()}); ")
+                                            s.close(); ra.close(); rb.close(); next()
+                                        }, 3500)
+                                    }
+                                    override fun onConfigureFailed(s: CameraCaptureSession) { results.append("AF test configure failed; "); next() }
+                                }))
+                        }
+                        tryPair("0", "2") { tryPair("3", "2") { afTest(0f) { afTest(3.2f) { d.close(); out.complete(results.toString()) } } } }
+                    }
+                    override fun onDisconnected(d: CameraDevice) { d.close() }
+                    override fun onError(d: CameraDevice, e: Int) { d.close(); out.complete("open 4 error $e") }
+                })
+            }
+        }
+        val r = try { withTimeout(30000) { out.await() } } catch (t: Throwable) { "timed out" }
+        Log.i("Relens", "logical test: $r")
+        handler.post { _framing.value?.let { open(it) } }
+        return r
+    }
+
+    /**
      * Test: a RAW-only capture (no JPEG in the same request), to see whether this
      * camera fills a RAW stream at all. Logs the outcome; writes [file] as DNG.
      */
@@ -328,7 +420,9 @@ class Rig(private val context: Context) {
         val fr = _framing.value ?: error("no lens framing")
         dir.mkdirs()
         val jpeg = File(dir, "$name.jpg"); val dng = File(dir, "$name.dng")
-        val focusD = lastFocusD
+        // Only a calibrated (or approximate) focus distance is in dioptres; uncalibrated is just a lens position.
+        val focusD = lastFocusD.takeIf { fr.camera.focusCalibration > 0 }
+        Log.i("Relens", "shot on camera ${fr.camera.id}: focus %s (calibration ${fr.camera.focusCalibration})".format(lastFocusD?.let { "%.2f m".format(1 / maxOf(it, 1e-3f)) } ?: "-"))
         val done = CompletableDeferred<Exposure>()
         val jr = jpegReader!!; val rr = rawReader
         var jpegImage: Image? = null; var rawImage: Image? = null; var result: TotalCaptureResult? = null
