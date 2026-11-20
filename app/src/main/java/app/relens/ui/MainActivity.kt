@@ -39,6 +39,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        app.relens.Trace.init(this)
+        if (intent.getBooleanExtra("logical", false)) body.rig.useLogical = true
         enableEdgeToEdge()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         // The app owns files/models (scripts/install.sh pushes the depth model there).

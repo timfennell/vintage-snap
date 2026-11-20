@@ -108,7 +108,7 @@ class Developer(private val context: Context) {
         var srcRect = floatArrayOf(0f, 0f, 1f, 1f)
         val src: Int
         if (raw16 != null && rawMeta != null) {
-            val rp = runCatching { RawDeveloper.develop(g, raw16, rawMeta) }.onFailure { Log.w("Relens", "raw develop failed", it) }.getOrNull()
+            val rp = runCatching { RawDeveloper.develop(g, raw16, rawMeta) }.onFailure { app.relens.Trace.w("raw develop failed", it) }.getOrNull()
             rawPic = rp
         }
         val rp = rawPic
@@ -154,18 +154,18 @@ class Developer(private val context: Context) {
                 val fitTap = fitA + fitB * dTap
                 // Metric3D misjudges very close things (a hand at 0.2 m put at 0.66 m): allow 5x.
                 val ok = camD != null && (camD / maxOf(fitTap, 1e-3f)) in 0.2f..5f
-                Log.i("Relens", "AF anchor: tap rel %.2f, camera %s, fit %.2f m%s".format(dTap,
+                app.relens.Trace.i("AF anchor: tap rel %.2f, camera %s, fit %.2f m%s".format(dTap,
                     camD?.let { "%.2f m".format(1 / it) } ?: "-", 1 / maxOf(fitTap, 1e-3f), if (camD != null && !ok) " (disagree: fit kept)" else ""))
                 Pair(dTap, if (ok) camD!! else fitTap)
             } else {
                 val ringD = if (job.focusM.isInfinite()) 0f else 1f / job.focusM
                 val sharp = Sharpness.peak(est.seen, dm)
-                Log.i("Relens", "ring anchor: ring %.2f m, sharpest rel %s".format(job.focusM,
+                app.relens.Trace.i("ring anchor: ring %.2f m, sharpest rel %s".format(job.focusM,
                     sharp?.let { "%.2f (x%.1f over the rest)".format(it.first, it.second) } ?: "none clear"))
                 // The sharpest depth is at the ring's distance, unless that is absurd against
                 // Metric3D (5x: the lens wasn't where the ring says, or nothing is sharp there).
                 sharp?.takeIf { (ringD / maxOf(fitA + fitB * it.first, 1e-3f)) in 0.2f..5f }?.let { Pair(it.first, ringD) }
-                    ?: run { if (sharp != null) Log.w("Relens", "sharpest depth disagrees with the ring: fit kept"); null }
+                    ?: run { if (sharp != null) app.relens.Trace.w("sharpest depth disagrees with the ring: fit kept"); null }
             }
             if (anchor != null && anchor.first - dFar > 0.05f) {
                 dispB = maxOf((anchor.second - farD) / (anchor.first - dFar), 1e-3f)
@@ -173,7 +173,7 @@ class Developer(private val context: Context) {
             } else if (anchor != null) {
                 dispA = anchor.second - dispB * anchor.first
             }
-            Log.i("Relens", "depth scale: rel 1 at %.2f m, rel 0 at %.2f m (fit: %.2f m, %.2f m)".format(
+            app.relens.Trace.i("depth scale: rel 1 at %.2f m, rel 0 at %.2f m (fit: %.2f m, %.2f m)".format(
                 1 / maxOf(dispA + dispB, 1e-3f), 1 / maxOf(dispA, 1e-3f), 1 / maxOf(fitA + fitB, 1e-3f), 1 / maxOf(fitA, 1e-3f)))
             // Nothing beyond 60 m.
             val minRel = dm.data.minOrNull() ?: 0f
@@ -191,7 +191,7 @@ class Developer(private val context: Context) {
             File(context.getExternalFilesDir("prints"), "last_depth.png").outputStream().use {
                 depthToBitmap(vis).compress(Bitmap.CompressFormat.PNG, 100, it)
             }
-            Log.i("Relens", "subject at the tap %.2f m".format(1 / subjectD))
+            app.relens.Trace.i("subject at the tap %.2f m".format(1 / subjectD))
         }
         val tiltD = Movements.tiltDioptres(job.lens, job.tiltDeg)
         var focusD = job.focusM?.let { if (it.isInfinite()) 0f else 1f / it } ?: subjectD
@@ -216,7 +216,7 @@ class Developer(private val context: Context) {
                 val f = g.readFloat(tex, dw, dh, level)
                 for (fy in floatArrayOf(job.focusY, 0.7f)) {
                     val y = (fy * dh).toInt().coerceIn(0, dh - 1)
-                    Log.i("Relens", "coc at y=%.2f: ".format(fy) + (0 until 20).joinToString(" ") { i ->
+                    app.relens.Trace.i("coc at y=%.2f: ".format(fy) + (0 until 20).joinToString(" ") { i ->
                         "%.0f".format(f[4 * (y * dw + i * dw / 20) + 3]) })
                 }
             }
@@ -237,9 +237,41 @@ class Developer(private val context: Context) {
             }
             g.deleteTextures(ft)
         } else eng.extraLights = null
+        // The ultra-wide's view of the same moment: lights beyond even the hero camera's frame.
+        val uwJpg = job.jpeg.let { File(it.parentFile, it.nameWithoutExtension + ".uw.jpg") }
+        val uwJson = job.jpeg.let { File(it.parentFile, it.nameWithoutExtension + ".uw.json") }
+        if (uwJpg.exists() && uwJson.exists()) runCatching {
+            val meta = org.json.JSONObject(uwJson.readText())
+            val raw0 = BitmapFactory.decodeFile(uwJpg.absolutePath)
+            val rot = meta.optInt("orientation", 90).toFloat()
+            val uw = if (rot == 0f) raw0 else Bitmap.createBitmap(raw0, 0, 0, raw0.width, raw0.height, Matrix().apply { postRotate(rot) }, true)
+            val ut = g.texture(uw.width, uw.height, GLES30.GL_RGBA8); upload(g, ut, uw)
+            val found = eng.findLights(ut, uw.width, uw.height)
+            g.deleteTextures(ut)
+            // By angle: on the 36 mm scale a direction sits at f x tan(angle), so the ultra-wide's
+            // positions scale by the lens's focal length over its own.
+            val scale = job.lens.focalMM / meta.getDouble("f36").toFloat()
+            val uwLong = maxOf(uw.width, uw.height).toFloat(); val printLong = maxOf(w, h).toFloat()
+            val px = scale * printLong / uwLong                       // print px per ultra-wide px
+            val expoRatio = if (meta.has("exposure") && meta.has("heroExposure"))
+                (meta.getDouble("heroExposure") / meta.getDouble("exposure")).toFloat() else 1f
+            val heroLeft = -crop.left.toFloat(); val heroTop = -crop.top.toFloat()
+            val heroRight = heroLeft + full.bmp.width; val heroBottom = heroTop + full.bmp.height
+            val extra = found.mapNotNull { l ->
+                val x = (l.x - uw.width / 2f) * px + w / 2f; val y = (l.y - uw.height / 2f) * px + h / 2f
+                // Inside the hero camera's own frame: its own (better) view of the light stands.
+                if (x in heroLeft..heroRight && y in heroTop..heroBottom) null
+                // Too far off the picture for its flare to reach in (Flare.swift fades them out by 0.6 frames).
+                else if (x / w !in -0.6f..1.6f || y / h !in -0.6f..1.6f) null
+                else LightSource(x, y, l.radius * px, FloatArray(3) { l.energy[it] * px * px * expoRatio * exposure }, 0f, l.pixels)
+            }
+            app.relens.Trace.i("ultra-wide map: ${found.size} lights, ${extra.size} beyond the hero frame (scale %.2f, exposure x%.2f)".format(scale, expoRatio))
+            eng.extraLights = (eng.extraLights ?: emptyList()) + extra
+            if (uw !== raw0) raw0.recycle(); uw.recycle()
+        }.onFailure { app.relens.Trace.w("ultra-wide map failed", it) }
         val out = eng.develop(src, dispLo, guideLo, w, h, look); lap("lens+film")
-        if (rp != null) Log.i("Relens", "developed from RAW, exposure x%.2f".format(exposure))
-        Log.i("Relens", "lights: " + eng.lights.joinToString { "(%.0f,%.0f r%.0f e%.0f blur%.0f)".format(it.x, it.y, it.radius, it.luma, it.blur) })
+        if (rp != null) app.relens.Trace.i("developed from RAW, exposure x%.2f".format(exposure))
+        app.relens.Trace.i("lights: " + eng.lights.joinToString { "(%.0f,%.0f r%.0f e%.0f blur%.0f)".format(it.x, it.y, it.radius, it.luma, it.blur) })
         val buf = ByteBuffer.allocateDirect(w * h * 4).order(ByteOrder.nativeOrder())
         g.readRgba8(out, w, h, buf); buf.position(0)
         g.deleteTextures(src, dispLo, guideLo, out)
@@ -250,14 +282,14 @@ class Developer(private val context: Context) {
         val file = File(context.getExternalFilesDir("prints"), "$name.jpg")
         file.outputStream().use { print.compress(Bitmap.CompressFormat.JPEG, 95, it) }
         writeExif(file, job, look)
-        val uri = if (!job.publish) null else runCatching { publish(file, name) }.onFailure { Log.w("Relens", "gallery save failed", it) }.getOrNull()
+        val uri = if (!job.publish) null else runCatching { publish(file, name) }.onFailure { app.relens.Trace.w("gallery save failed", it) }.getOrNull()
         lap("save")
         val ps = 1440f / maxOf(w, h)
         val preview = Bitmap.createScaledBitmap(print, (w * ps).toInt(), (h * ps).toInt(), true)
         val original = Bitmap.createScaledBitmap(photo.bmp, (w * ps).toInt(), (h * ps).toInt(), true)
         print.recycle(); photo.bmp.recycle(); if (full.bmp !== photo.bmp) full.bmp.recycle()
         val timings = t.entries.joinToString("  ") { "${it.key} ${it.value} ms" }
-        Log.i("Relens", "developed $name: $timings (subject %.2f m, focus %.2f m)".format(1 / subjectD, look.focusM))
+        app.relens.Trace.i("developed $name: $timings (subject %.2f m, focus %.2f m)".format(1 / subjectD, look.focusM))
         Print(uri, file, preview, original, timings)
     }
 
@@ -304,7 +336,7 @@ class Developer(private val context: Context) {
         for (c in px) jSum += 0.2126 * lin((c shr 16) and 0xff) + 0.7152 * lin((c shr 8) and 0xff) + 0.0722 * lin(c and 0xff)
         val raw = rawSum / maxOf(n, 1); val jpg = jSum / px.size
         val k = (jpg / maxOf(raw, 1e-5)).toFloat().coerceIn(0.05f, 50f)
-        Log.i("Relens", "exposure match: jpeg mean %.4f, raw mean %.4f -> x%.2f".format(jpg, raw, k))
+        app.relens.Trace.i("exposure match: jpeg mean %.4f, raw mean %.4f -> x%.2f".format(jpg, raw, k))
         return k
     }
 

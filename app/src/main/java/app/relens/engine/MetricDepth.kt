@@ -89,7 +89,7 @@ class MetricDepth(model: File) : AutoCloseable {
                 val med = res.sorted()[res.size / 2]
                 keep = BooleanArray(xs.size) { res[it] <= 3f * maxOf(med, 0.02f) }
             }
-            Log.i("Relens", "depth calibration: disparity = %.3f * rel + %.3f (rel 1 at %.2f m, rel 0 at %.2f m)".format(
+            app.relens.Trace.i("depth calibration: disparity = %.3f * rel + %.3f (rel 1 at %.2f m, rel 0 at %.2f m)".format(
                 a, b, 1 / maxOf(a + b, 1e-3f), 1 / maxOf(b, 1e-3f)))
             return floatArrayOf(a, b)
         }

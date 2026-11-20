@@ -90,7 +90,7 @@ object RawDeveloper {
         GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
         gl.deleteTextures(rawTex, shading)
         gl.checkErr("raw develop")
-        Log.i("Relens", "raw developed ${w}x$h -> ${uw}x$uh, rotate $rot, illuminant mix %.2f, neutral %s".format(t, neutral.joinToString { "%.3f".format(it) }))
+        app.relens.Trace.i("raw developed ${w}x$h -> ${uw}x$uh, rotate $rot, illuminant mix %.2f, neutral %s".format(t, neutral.joinToString { "%.3f".format(it) }))
         return RawPicture(out, uw, uh, levels)
     }
 }

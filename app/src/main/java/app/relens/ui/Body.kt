@@ -11,6 +11,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import app.relens.Trace
 import app.relens.camera.Rig
 import app.relens.engine.DevelopJob
 import app.relens.engine.Developer
@@ -207,7 +208,7 @@ class Body(app: Application) : AndroidViewModel(app) {
                 entry.done = true
             } catch (t: Throwable) {
                 busy = false
-                android.util.Log.e("Relens", "frame failed", t)
+                Trace.e("frame failed", t)
                 message = "frame failed: ${t.message ?: t.javaClass.simpleName}"
                 entry.status = "failed: ${t.message}"
                 if (entry !in darkroom) darkroom.add(0, entry)

@@ -114,6 +114,14 @@ class Rig(private val context: Context) {
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
 
+    /** Open the logical camera "4" (hero streams + an ultra-wide light-map stream in one request), when it works. */
+    var useLogical = false   // on after it is tested (--ez logical true turns it on for a test)
+    private val logicalId: String? = runCatching {
+        cm.getCameraCharacteristics("4").physicalCameraIds.takeIf { it.containsAll(listOf("0", "2", "3")) }?.let { "4" }
+    }.getOrNull()
+    private var logicalOpen = false
+    private var uwReader: ImageReader? = null
+    private var heroId: String? = null
     private var device: CameraDevice? = null
     private var session: CameraCaptureSession? = null
     private var preview: Surface? = null
@@ -122,6 +130,10 @@ class Rig(private val context: Context) {
     private var characteristics: CameraCharacteristics? = null
     private var texture: SurfaceTexture? = null
     @Volatile private var lastFocusD: Float? = null
+    @Volatile private var lastUwResult: CaptureResult? = null
+    @Volatile private var afWatch = false
+    private var lastAfState = -1
+    @Volatile private var lastHeroResult: CaptureResult? = null
     @Volatile private var lastResult: TotalCaptureResult? = null
     /** Tap focus region (sensor coordinates) or manual focus (dioptres); else continuous AF. */
     private var afRegion: MeteringRectangle? = null
@@ -146,7 +158,7 @@ class Rig(private val context: Context) {
     /** Runs a camera call, turning failures (a camera taken away, closed under us) into a message, never a crash. */
     private inline fun safely(what: String, block: () -> Unit) {
         try { block() } catch (t: Throwable) {
-            Log.w("Relens", "camera: $what failed: ${t.message}")
+            app.relens.Trace.w("camera: $what failed: ${t.message}")
             if (t !is IllegalStateException) _error.value = "camera: ${t.message}"
         }
     }
@@ -179,19 +191,22 @@ class Rig(private val context: Context) {
                     .getOutputSizes(ImageFormat.RAW_SENSOR).maxBy { it.width * it.height }
                 rawReader = ImageReader.newInstance(rs.width, rs.height, ImageFormat.RAW_SENSOR, 2)
             }
-            cm.openCamera(cam.id, executor, object : CameraDevice.StateCallback() {
+            heroId = cam.id
+            logicalOpen = useLogical && logicalId != null
+            if (logicalOpen && cam.id != "2") uwReader = ImageReader.newInstance(1280, 960, ImageFormat.YUV_420_888, 2)
+            cm.openCamera(if (logicalOpen) logicalId!! else cam.id, executor, object : CameraDevice.StateCallback() {
                 override fun onOpened(d: CameraDevice) {
                     if (gen != generation) { d.close(); return }          // superseded while opening
                     device = d; startSession(d, gen)
                 }
                 override fun onDisconnected(d: CameraDevice) {
-                    Log.w("Relens", "camera ${cam.id} disconnected (current ${device == d})")
+                    app.relens.Trace.w("camera ${cam.id} disconnected (current ${device == d})")
                     d.close()
                     if (device == d) { device = null; session = null; _error.value = "camera ${cam.id} was taken away; reopening"
                         handler.postDelayed({ _framing.value?.let { if (device == null) open(it) } }, 500) }
                 }
                 override fun onError(d: CameraDevice, e: Int) {
-                    Log.e("Relens", "camera ${cam.id} error $e")
+                    app.relens.Trace.e("camera ${cam.id} error $e")
                     d.close()
                     if (device == d) { device = null; session = null; _error.value = "camera ${cam.id} error $e" }
                 }
@@ -200,27 +215,48 @@ class Rig(private val context: Context) {
     }
 
     private fun startSession(d: CameraDevice, gen: Int): Unit = safely("session") {
-        val outs = listOfNotNull(preview, jpegReader?.surface, rawReader?.surface).map { OutputConfiguration(it) }
-        d.createCaptureSession(SessionConfiguration(SessionConfiguration.SESSION_REGULAR, outs, executor,
+        val hero = heroId ?: return
+        val outs = listOfNotNull(preview, jpegReader?.surface, rawReader?.surface).map { sfc ->
+            OutputConfiguration(sfc).apply { if (logicalOpen) setPhysicalCameraId(hero) }
+        } + listOfNotNull(uwReader?.surface).map { OutputConfiguration(it).apply { setPhysicalCameraId("2") } }
+        val cfg = SessionConfiguration(SessionConfiguration.SESSION_REGULAR, outs, executor,
             object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(s: CameraCaptureSession) {
                     if (gen != generation || device != d) { runCatching { s.close() }; return }
                     session = s; repeat()
-                    Log.i("Relens", "camera ${_framing.value?.camera?.id} open, crop %.2f, RAW ${rawReader != null}".format(_framing.value?.crop ?: 0f))
+                    app.relens.Trace.i("camera ${_framing.value?.camera?.id} open${if (logicalOpen) " (logical 4, ultra-wide map ${uwReader != null})" else ""}, crop %.2f, RAW ${rawReader != null}".format(_framing.value?.crop ?: 0f))
                 }
                 override fun onConfigureFailed(s: CameraCaptureSession) {
                     if (gen != generation || device != d) return
-                    Log.e("Relens", "session failed with RAW; retrying without")
+                    if (logicalOpen) {
+                        // The logical camera won't take it: back to the camera on its own.
+                        app.relens.Trace.e("logical session failed: opening camera $hero directly"); useLogical = false
+                        _framing.value?.let { open(it) }; return
+                    }
+                    app.relens.Trace.e("session failed with RAW; retrying without")
                     if (rawReader != null) { rawReader?.close(); rawReader = null; startSession(d, gen) }
                     else _error.value = "camera session failed"
                 }
-            }))
+            })
+        if (logicalOpen && runCatching { d.isSessionConfigurationSupported(cfg) }.getOrDefault(true) == false) {
+            app.relens.Trace.w("logical session not supported for $hero: direct"); useLogical = false
+            _framing.value?.let { open(it) }; return
+        }
+        d.createCaptureSession(cfg)
     }
 
     private val resultCallback = object : CameraCaptureSession.CaptureCallback() {
         override fun onCaptureCompleted(s: CameraCaptureSession, r: CaptureRequest, result: TotalCaptureResult) {
             lastResult = result
-            result.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { d ->
+            val own = if (logicalOpen) heroId?.let { result.physicalCameraTotalResults[it] } ?: result else result
+            // After a tap: each autofocus state change and where the lens ends up.
+            val af = result.get(CaptureResult.CONTROL_AF_STATE) ?: -1
+            if (afWatch && af != lastAfState) {
+                lastAfState = af
+                app.relens.Trace.i("AF state $af, lens at %s".format(own.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { "%.2f D (%.2f m)".format(it, 1 / maxOf(it, 1e-3f)) } ?: "-"))
+                if (af == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED || af == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED) afWatch = false
+            }
+            own.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { d ->
                 lastFocusD = d
                 val prev = _focusD.value
                 if (prev == null || kotlin.math.abs(d - prev) > 0.02f * max(prev, 0.2f)) _focusD.value = d
@@ -233,6 +269,8 @@ class Rig(private val context: Context) {
         return d.createCaptureRequest(template).apply {
             set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
             set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+            // On the logical camera: the zoom that makes the hero the active camera (its 3A, its lens).
+            if (logicalOpen) set(CaptureRequest.CONTROL_ZOOM_RATIO, when (heroId) { "2" -> 0.6f; "3" -> 3.2f; else -> 1.0f })
             val md = manualD
             val reg = afRegion
             when {
@@ -269,11 +307,18 @@ class Rig(private val context: Context) {
         // The crop's point on the upright full frame, then on the sensor (landscape, turned by its orientation).
         val (ux, uy) = cropToFull(fx, fy, fr)
         val (sx, sy) = uprightToSensor(ux, uy, fr.camera.sensorOrientation)
-        val a = c.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)!!
-        val half = (min(a.width(), a.height()) * 0.05f / fr.crop).toInt().coerceAtLeast(16)
+        // On the logical camera the regions are in its active array, relative to the zoomed
+        // view (which is the hero's frame).
+        val a = (if (logicalOpen) cm.getCameraCharacteristics(logicalId!!) else c).get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)!!
+        // A region about 8 % of the sensor's short side: enough texture for the autofocus even
+        // through a long lens's crop (smaller, a periscope's AF could fail and park the lens near).
+        val half = (min(a.width(), a.height()) * 0.08f).toInt()
         val cx = (a.left + sx * a.width()).toInt(); val cy = (a.top + sy * a.height()).toInt()
         afRegion = MeteringRectangle(Rect(max(a.left, cx - half), max(a.top, cy - half),
             min(a.right, cx + half), min(a.bottom, cy + half)), MeteringRectangle.METERING_WEIGHT_MAX - 1)
+        afWatch = true
+        app.relens.Trace.i("tap %.2f,%.2f on camera ${fr.camera.id} (crop %.2f): full frame %.2f,%.2f -> sensor %.2f,%.2f -> region %s of %s".format(
+            fx, fy, fr.crop, ux, uy, sx, sy, afRegion?.rect, a))
         safely("focus") {
             val s = session ?: return@post
             val p = preview ?: return@post
@@ -377,7 +422,7 @@ class Rig(private val context: Context) {
             }
         }
         val r = try { withTimeout(30000) { out.await() } } catch (t: Throwable) { "timed out" }
-        Log.i("Relens", "logical test: $r")
+        app.relens.Trace.i("logical test: $r")
         handler.post { _framing.value?.let { open(it) } }
         return r
     }
@@ -409,7 +454,7 @@ class Rig(private val context: Context) {
             }, handler)
         } catch (t: Throwable) { done.complete("error ${t.message}") } }
         val out = try { withTimeout(6000) { done.await() } } catch (t: Throwable) { "timed out: image ${img != null} result ${res != null}" }
-        Log.i("Relens", "raw test on camera ${fr.camera.id}: $out")
+        app.relens.Trace.i("raw test on camera ${fr.camera.id}: $out")
         return out
     }
 
@@ -422,10 +467,10 @@ class Rig(private val context: Context) {
         val jpeg = File(dir, "$name.jpg"); val dng = File(dir, "$name.dng")
         // Only a calibrated (or approximate) focus distance is in dioptres; uncalibrated is just a lens position.
         val focusD = lastFocusD.takeIf { fr.camera.focusCalibration > 0 }
-        Log.i("Relens", "shot on camera ${fr.camera.id}: focus %s (calibration ${fr.camera.focusCalibration})".format(lastFocusD?.let { "%.2f m".format(1 / maxOf(it, 1e-3f)) } ?: "-"))
+        app.relens.Trace.i("shot on camera ${fr.camera.id}: focus %s (calibration ${fr.camera.focusCalibration})".format(lastFocusD?.let { "%.2f m".format(1 / maxOf(it, 1e-3f)) } ?: "-"))
         val done = CompletableDeferred<Exposure>()
         val jr = jpegReader!!; val rr = rawReader
-        var jpegImage: Image? = null; var rawImage: Image? = null; var result: TotalCaptureResult? = null
+        var jpegImage: Image? = null; var rawImage: Image? = null; var result: CaptureResult? = null
         var rawGiveUp = false
         fun finish() {
             val ji = jpegImage ?: return
@@ -434,7 +479,7 @@ class Rig(private val context: Context) {
                 // Some cameras accept a RAW stream and never fill it: don't lose the frame over it.
                 if (result != null) handler.postDelayed({
                     if (!done.isCompleted && rawImage == null) {
-                        Log.w("Relens", "camera ${fr.camera.id}: no RAW image; keeping the JPEG")
+                        app.relens.Trace.w("camera ${fr.camera.id}: no RAW image; keeping the JPEG")
                         rawGiveUp = true; finish()
                     }
                 }, 1500)
@@ -447,7 +492,7 @@ class Rig(private val context: Context) {
                     // For the developer: the sensor's values as plain 16-bit, and what it needs to read them.
                     runCatching {
                         RawNegative.write(File(dir, "$name.raw16"), File(dir, "$name.rawmeta.json"), ri, characteristics!!, result!!, (fr.camera.sensorOrientation + deviceRotation) % 360)
-                    }.onFailure { Log.w("Relens", "raw negative not written", it) }
+                    }.onFailure { app.relens.Trace.w("raw negative not written", it) }
                     DngCreator(characteristics!!, result!!).use { dc ->
                         dc.setOrientation(exifOrientation(fr.camera.sensorOrientation))
                         dng.outputStream().use { dc.writeImage(it, ri) }
@@ -457,8 +502,15 @@ class Rig(private val context: Context) {
                 done.complete(Exposure(jpeg, dng.takeIf { it.exists() && it.length() > 0 }, focusD))
             } catch (t: Throwable) { done.completeExceptionally(t) }
         }
-        jr.setOnImageAvailableListener({ r -> jpegImage = r.acquireNextImage(); Log.i("Relens", "jpeg in"); finish() }, handler)
-        rr?.setOnImageAvailableListener({ r -> rawImage = r.acquireNextImage(); Log.i("Relens", "raw in"); finish() }, handler)
+        uwReader?.setOnImageAvailableListener({ r ->
+            val img = r.acquireNextImage() ?: return@setOnImageAvailableListener
+            runCatching { LightMap.save(img, File(dir, "$name.uw.jpg"), File(dir, "$name.uw.json"),
+                cameras.first { it.id == "2" }, (cameras.first { it.id == "2" }.sensorOrientation + deviceRotation) % 360,
+                lastUwResult, lastHeroResult) }.onFailure { app.relens.Trace.w("light map not saved", it) }
+            img.close()
+        }, handler)
+        jr.setOnImageAvailableListener({ r -> jpegImage = r.acquireNextImage(); app.relens.Trace.i("jpeg in"); finish() }, handler)
+        rr?.setOnImageAvailableListener({ r -> rawImage = r.acquireNextImage(); app.relens.Trace.i("raw in"); finish() }, handler)
         handler.post { try {
             // This phone's camera fills a RAW stream only in a request of its own (RAW and
             // JPEG together: the JPEG only). So a burst: the RAW frame, then the JPEG frame.
@@ -468,15 +520,20 @@ class Rig(private val context: Context) {
             jb.set(CaptureRequest.JPEG_QUALITY, 97.toByte())
             val jpegReq = jb.build()
             val reqs = ArrayList<CaptureRequest>()
+            val uw = uwReader
             if (rr != null) reqs.add(baseRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)!!.apply {
                 addTarget(rr.surface)
+                // The ultra-wide's view of the same moment: where the lights are, around the picture.
+                uw?.let { addTarget(it.surface) }
                 // The lens shading map (RAW isn't corrected for it): the developer applies it.
                 set(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE, CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON)
             }.build())
             reqs.add(jpegReq)
             s.captureBurst(reqs, object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(ss: CameraCaptureSession, r: CaptureRequest, t: TotalCaptureResult) {
-                    // The DNG needs the RAW frame's own result.
+                    if (logicalOpen) { lastUwResult = t.physicalCameraTotalResults["2"]; lastHeroResult = heroId?.let { t.physicalCameraTotalResults[it] } }
+                    // The DNG needs the RAW frame's own result (the hero camera's, on the logical camera).
+                    val t = if (logicalOpen) heroId?.let { t.physicalCameraTotalResults[it] } ?: t else t
                     if (r != jpegReq || rr == null) { if (result == null || r != jpegReq) result = t }
                     if (rr == null) result = t
                     finish()
@@ -487,7 +544,7 @@ class Rig(private val context: Context) {
             }, handler)
         } catch (t: Throwable) { done.completeExceptionally(t) } }
         return try { withTimeout(10_000) { done.await() } } catch (t: kotlinx.coroutines.TimeoutCancellationException) {
-            Log.e("Relens", "shot timed out: jpeg ${jpegImage != null} raw ${rawImage != null} result ${result != null} device ${device != null}")
+            app.relens.Trace.e("shot timed out: jpeg ${jpegImage != null} raw ${rawImage != null} result ${result != null} device ${device != null}")
             handler.post { _framing.value?.let { open(it) } }
             error("the camera didn't deliver the frame (jpeg ${jpegImage != null}, raw ${rawImage != null}, result ${result != null})")
         }
@@ -501,12 +558,13 @@ class Rig(private val context: Context) {
     }
 
     private fun close() {
-        if (device != null) Log.i("Relens", "closing camera ${device?.id}", Throwable("who closed it"))
+        if (device != null) app.relens.Trace.i("closing camera ${device?.id}")
         generation++
         runCatching { session?.close() }; session = null
         runCatching { device?.close() }; device = null
         runCatching { jpegReader?.close() }; jpegReader = null
         runCatching { rawReader?.close() }; rawReader = null
+        runCatching { uwReader?.close() }; uwReader = null
         runCatching { preview?.release() }; preview = null
     }
 

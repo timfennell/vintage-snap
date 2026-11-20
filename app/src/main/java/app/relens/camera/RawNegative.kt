@@ -21,7 +21,7 @@ import java.nio.channels.FileChannel
  * orientation. (The DNG beside it is the negative for the photographer.)
  */
 object RawNegative {
-    fun write(bin: File, json: File, img: Image, c: CameraCharacteristics, r: TotalCaptureResult, orientation: Int) {
+    fun write(bin: File, json: File, img: Image, c: CameraCharacteristics, r: CaptureResult, orientation: Int) {
         val w = img.width; val h = img.height
         val plane = img.planes[0]
         val src = plane.buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
