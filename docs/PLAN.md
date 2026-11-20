@@ -1,7 +1,7 @@
 # Relens: architecture and milestones (draft for Tim's approval)
 
-Target phone: Nothing Phone (3a) Pro, Snapdragon 7s Gen 3, Adreno 710 GPU,
-Hexagon NPU, 50 MP main camera (+ 50 MP 3x periscope, 8 MP ultra-wide).
+Target phone: Nothing Phone (3a) Pro, Snapdragon 7s Gen 3 (SM7635), Adreno 810 GPU,
+Hexagon NPU, 12 GB RAM. Apps see the main camera (RAW 4096 x 3072) and the front camera only.
 Measured numbers are in `docs/BENCH.md`.
 
 ## Shape of the app
@@ -59,16 +59,24 @@ Real-time limits shape this: the rings drive the screen-res preview (lens +
 film passes only, measured below), so they must stay inside a frame budget or
 degrade gracefully (fewer gather samples while a ring turns, full quality when it stops).
 
-## Decisions to confirm (from the spike)
+## Decisions (measured, docs/BENCH.md)
 
-- **Depth runtime**: whichever backend the bench shows fastest on the 7s Gen 3.
-- **GPU API**: OpenGL ES 3.1 compute from Kotlin. No NDK, shaders are plain GLSL
-  close to the Metal originals, fast enough if the bench says so. Vulkan only
-  if a pass proves GL-bound.
+- **Depth runtime: ONNX Runtime Mobile, default CPU execution provider**,
+  Depth Anything V2 Small fp32 at 518 px: 0.8–1.1 s, once per photo. LiteRT's
+  GPU delegate was 3x slower with a 15–22 s first load; NNAPI and XNNPACK
+  slower too. The NPU (QNN) didn't engage yet: a later optimisation for live
+  viewfinder depth, not needed for editing or export.
+- **GPU API: OpenGL ES 3.1 compute from Kotlin.** 12.5 MP lens + film in 0.8 s
+  (96 samples), preview in 70 ms (48 samples). No NDK, no Vulkan needed.
+  Rules learnt: mips via `glGenerateMipmap`; long passes in strips.
+- **Budget:** a full-resolution export is ~2 s against a 1–2 minute target,
+  so quality work (edge matting, inpainting, flare, more samples) has room.
+- **Preview while a ring turns:** 48 samples at screen size (~70 ms, ~14 fps);
+  96–160 when it stops. Halving the preview again makes turning fully live.
 - **Film/lens maths**: ported literally from Vintage Click (`FilmStock.swift`,
   `Lens.swift`, `CameraBody.swift`, `Shaders.swift`) so looks match the game.
 
-## Findings so far (before the phone run)
+## Findings so far
 
 - **Depth quality is good.** Depth Anything V2 Small on a macro render
   separates legs, antennae and the proboscis cleanly; the joint bilateral
@@ -80,6 +88,9 @@ degrade gracefully (fewer gather samples while a ring turns, full quality when i
   tone curve before `linearize`, and keep the highlight expansion small
   (big clipped areas glow; only small hot points should become bokeh balls,
   which light detection in milestone 4 can pick out properly).
+- **Occlusion edges show.** On the living-room photo the out-of-focus chair
+  leaves faint streaks and doubled edges over the background: the
+  near/far layer split + inpainting in milestone 3 is needed.
 - **Scene scale must be the user's.** The network's depth is relative; a
   fixed near/far guess blurs a macro subject far too much. The near/far
   calibration (milestone 2) is required, not optional; good defaults can come

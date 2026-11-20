@@ -14,7 +14,13 @@ export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/
 ./gradlew -q assembleRelease ${QNN:+-Pqnn=true}
 adb install -r app/build/outputs/apk/release/app-release.apk >/dev/null
 adb shell am force-stop $PKG
-adb shell mkdir -p $DEV/models
+# Let the app create its own files/models first: a folder made by adb isn't listable by the app.
+if ! adb shell ls -ld $DEV/models 2>/dev/null | grep -q " u0_"; then
+  adb shell rm -rf $DEV/models
+  adb shell am start -W -n $PKG/.MainActivity --es flags setup >/dev/null
+  sleep 2
+  adb shell am force-stop $PKG
+fi
 adb shell rm -rf $DEV/out $DEV/bench.txt
 # Static-shape ONNX (NNAPI/QNN need them) and the LiteRT model; push only what's missing.
 have=$(adb shell ls $DEV/models 2>/dev/null || true)
@@ -25,14 +31,11 @@ for f in "$MODELS"/da2s_fp32_392x518.onnx "$MODELS"/da2s_fp16_392x518.onnx \
   if ! grep -qx "$n" <<<"$have"; then echo "push $n"; adb push "$f" $DEV/models/ >/dev/null; fi
 done
 if [ -n "${1:-}" ]; then adb push "$1" $DEV/input.jpg >/dev/null; else adb shell rm -f $DEV/input.jpg; fi
-adb logcat -c
-adb shell am start -n $PKG/.MainActivity --es flags "${2:-}" >/dev/null
-echo "running..."
-adb logcat -v raw -s RelensBench:I | while read -r line; do
-  echo "$line"
-  [[ "$line" == "BENCH DONE" ]] && break
-done
+adb shell am start -n $PKG/.MainActivity --es flags "${2:-none}" >/dev/null
+echo "running (log on the phone's screen)..."
+until adb shell ls $DEV/bench.txt >/dev/null 2>&1; do sleep 3; done
 mkdir -p "$OUT"
 adb pull $DEV/bench.txt "$OUT/" >/dev/null
+cat "$OUT/bench.txt"
 adb pull $DEV/out "$OUT/" >/dev/null
 echo "results in $OUT"

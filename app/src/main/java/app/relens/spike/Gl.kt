@@ -82,6 +82,8 @@ class Gl(private val assets: AssetManager) : AutoCloseable {
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, if (linear) GLES30.GL_LINEAR else GLES30.GL_NEAREST)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_BASE_LEVEL, 0)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAX_LEVEL, levels - 1)
         checkErr("texture ${w}x$h")
         return t
     }
@@ -140,6 +142,21 @@ class Gl(private val assets: AssetManager) : AutoCloseable {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
         GLES30.glDeleteFramebuffers(1, intArrayOf(fbo), 0)
         checkErr("readPixels")
+    }
+
+    /** Reads a float texture level back (debug): RGBA floats. */
+    fun readFloat(tex: Int, w: Int, h: Int, level: Int = 0): FloatArray {
+        val fbo = IntArray(1).also { GLES30.glGenFramebuffers(1, it, 0) }[0]
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fbo)
+        GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, tex, level)
+        val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+        val buf = ByteBuffer.allocateDirect(w * h * 16).order(ByteOrder.nativeOrder())
+        if (status == GLES30.GL_FRAMEBUFFER_COMPLETE)
+            GLES30.glReadPixels(0, 0, w, h, GLES30.GL_RGBA, GLES30.GL_FLOAT, buf)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        GLES30.glDeleteFramebuffers(1, intArrayOf(fbo), 0)
+        checkErr("readFloat status 0x${Integer.toHexString(status)}")
+        return FloatArray(w * h * 4).also { buf.asFloatBuffer().get(it) }
     }
 
     fun checkErr(what: String) {

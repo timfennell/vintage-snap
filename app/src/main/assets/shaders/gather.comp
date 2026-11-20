@@ -14,6 +14,7 @@ uniform vec2 uAxis;
 uniform float uHalfDiag;
 uniform vec4 uLens;              // (blades, blade rotation, cat's eye, soap bubble)
 uniform vec2 uLens2;             // (central obstruction, open = N wide open / N)
+uniform ivec2 uOffset;           // this strip's origin (the frame is gathered in strips)
 
 float shape_norm(vec2 l, vec2 q) {
     float r = length(l);
@@ -28,7 +29,7 @@ float shape_norm(vec2 l, vec2 q) {
 }
 
 void main() {
-    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy) + uOffset;
     ivec2 sz = imageSize(uOut);
     if (p.x >= sz.x || p.y >= sz.y) return;
     vec2 pc = vec2(p) + 0.5;

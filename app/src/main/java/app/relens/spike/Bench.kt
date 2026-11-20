@@ -39,6 +39,9 @@ class Bench(private val ctx: Context, private val ui: (String) -> Unit) {
     }
 
     fun run(flags: Set<String>) {
+        // The app owns files/models (a folder adb creates is not listable by the app).
+        File(dir, "models").mkdirs()
+        if ("setup" in flags) { log("SETUP DONE"); log("BENCH DONE"); return }
         val t0 = System.nanoTime()
         try {
             body(flags)
@@ -73,7 +76,7 @@ class Bench(private val ctx: Context, private val ui: (String) -> Unit) {
         }
 
         // ---- depth ----
-        val models = File(dir, "models").listFiles()?.sortedBy { it.name } ?: emptyList()
+        val models = if ("nodepth" in flags) emptyList() else File(dir, "models").listFiles()?.sortedBy { it.name } ?: emptyList()
         val runs = 5
         val results = ArrayList<DepthResult>()
         // Depth Anything wants sides that are multiples of 14; 518 on the long side.
@@ -87,8 +90,9 @@ class Bench(private val ctx: Context, private val ui: (String) -> Unit) {
             add("xnnpack"); add("cpu"); add("nnapi")
             if (BuildConfig.QNN) add("qnn")
         }
-        for (m in models.filter { it.name.endsWith(".onnx") && !it.name.startsWith("._") }) {
-            for (ep in eps) {
+        val fast = "fast" in flags   // only the winner: ORT fp32 on the CPU
+        for (m in models.filter { it.name.endsWith(".onnx") && !it.name.startsWith("._") && (!fast || it.name.startsWith("da2s_fp32")) }) {
+            for (ep in if (fast) listOf("cpu") else eps) {
                 if (ep == "cpu" && "slow" !in flags && m.name.contains("fp16")) continue
                 // Qualcomm's quantized graph is meant for the NPU; on the CPU it only says how slow that is.
                 if (m.name.contains("qai") && ep == "nnapi") continue
@@ -96,7 +100,7 @@ class Bench(private val ctx: Context, private val ui: (String) -> Unit) {
                 log(r.line()); results.add(r)
             }
         }
-        for (m in models.filter { it.name.endsWith(".tflite") && !it.name.startsWith("._") }) {
+        for (m in models.filter { it.name.endsWith(".tflite") && !it.name.startsWith("._") && !fast }) {
             for (gpu in listOf(true, false)) {
                 val r = runLiteRt(m, gpu, photo, runs, ::log)
                 log(r.line()); results.add(r)
@@ -134,23 +138,67 @@ class Bench(private val ctx: Context, private val ui: (String) -> Unit) {
         val guideLo = gl.texture(depth.w, depth.h, GLES30.GL_RGBA8)
         gl.upload(guideLo, depth.w, depth.h, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, gbuf)
 
-        // Focus on the middle of the frame.
+        // Focus point: flag focus=x:y (fractions of the frame), else the middle.
+        val fp = flags.firstOrNull { it.startsWith("focus=") }?.removePrefix("focus=")?.split(":")?.map { it.toFloat() } ?: listOf(0.5f, 0.5f)
         val focusDisp = run {
             val v = ArrayList<Float>()
-            for (y in depth.h * 2 / 5 until depth.h * 3 / 5) for (x in depth.w * 2 / 5 until depth.w * 3 / 5) v.add(depth.data[y * depth.w + x])
+            val cx = (fp[0] * depth.w).toInt(); val cy = (fp[1] * depth.h).toInt()
+            for (y in maxOf(0, cy - depth.h / 20) until minOf(depth.h, cy + depth.h / 20))
+                for (x in maxOf(0, cx - depth.w / 20) until minOf(depth.w, cx + depth.w / 20)) v.add(depth.data[y * depth.w + x])
             v.sort(); v[v.size / 2]
         }
+        log("focus at ${fp[0]},${fp[1]}: disparity %.3f".format(focusDisp))
         val engine = LensEngine(gl)
         val lens = spikeLenses[1]                      // 85 mm f/1.4: the biggest blur, the worst case
         val stock = filmStocks.first { it.name == "Rochester Portrait 400" }
+        fun num(k: String, d: Float) = flags.firstOrNull { it.startsWith("$k=") }?.removePrefix("$k=")?.toFloat() ?: d
+        val nearM = num("near", 0.8f); val farM = num("far", 50f); val focusM = num("focusm", 2f)
+        log("scene near %.2f m, far %.1f m, lens focused at %.2f m".format(nearM, farM, focusM))
         fun look(n: Int, s: FilmStock = stock, l: Lens = lens) =
-            Look(lens = l, fNumber = l.maxAperture, focusM = 2f, focusDisparity = focusDisp, stock = s, samples = n)
+            Look(lens = l, fNumber = l.maxAperture, focusM = focusM, nearM = nearM, farM = farM,
+                focusDisparity = focusDisp, stock = s, samples = n)
 
+        if ("debug" in flags) {
+            engine.dump = { name, tex, w, h, level ->
+                val f = gl.readFloat(tex, w, h, level)
+                val st = (0 until 4).map { c ->
+                    var mn = Float.MAX_VALUE; var mx = -Float.MAX_VALUE; var sum = 0.0; var nan = 0
+                    for (i in c until f.size step 4) { val v = f[i]; if (v.isNaN()) { nan++; continue }; mn = minOf(mn, v); mx = maxOf(mx, v); sum += v }
+                    "%.3f/%.3f/%.3f%s".format(mn, sum / (w * h), mx, if (nan > 0) " nan$nan" else "")
+                }
+                // Mean of each quadrant's red, to spot partial writes.
+                fun q(x0: Int, y0: Int): String { var s = 0.0; var n = 0
+                    for (y in y0 until y0 + h / 2 step 4) for (x in x0 until x0 + w / 2 step 4) { s += f[4 * (y * w + x)]; n++ }
+                    return "%.3f".format(s / n) }
+                log("DUMP $name ${w}x$h L$level: r ${st[0]} g ${st[1]} b ${st[2]} a ${st[3]} | quadrants r ${q(0, 0)} ${q(w / 2, 0)} ${q(0, h / 2)} ${q(w / 2, h / 2)}")
+            }
+            for (mode in listOf(1, 2)) {
+                log("-- mip mode $mode --")
+                engine.mipMode = mode
+                gl.deleteTextures(engine.develop(src, dispLo, guideLo, 720, 540, look(48)))
+            }
+            engine.mipMode = 2
+            engine.dump = null
+            return
+        }
         val aspect = photo.height / photo.width.toFloat()
+        // Preview: long side 1440. Full: the photo's own size. 2x: the 50 MP case (last: it may lose the context).
+        val pw0 = photo.width; val ph0 = photo.height
+        val ps = 1440f / maxOf(pw0, ph0)
         val sizes = buildList {
-            add("preview" to (1440 to (1440 * aspect).toInt()))
-            add("12MP" to (4000 to (4000 * aspect).toInt()))
-            add("50MP" to (8160 to (8160 * aspect).toInt()))
+            add("preview" to ((pw0 * ps).toInt() to (ph0 * ps).toInt()))
+            add("full" to (pw0 to ph0))
+            add("2x" to (pw0 * 2 to ph0 * 2))
+        }
+        // A few stocks and lenses at preview size, to look at (before the 2x test, which may lose the context).
+        val (pw, ph) = sizes[0].second
+        for ((i, s) in listOf("Backlot 800T", "Rochester Tri-Pan 400", "Rochester Aero-Colour IR 400", "Ashigara Velvet 50").withIndex()) {
+            val l = spikeLenses[i % spikeLenses.size]
+            val out = engine.develop(src, dispLo, guideLo, pw, ph, look(96, filmStocks.first { it.name == s }, l))
+            val bmp = Bitmap.createBitmap(pw, ph, Bitmap.Config.ARGB_8888)
+            bmp.copyPixelsFromBuffer(readBack(gl, out, pw, ph))
+            save(bmp, File(outDir, "look_${i}_${s.replace(Regex("[^A-Za-z0-9]+"), "_")}.jpg"))
+            gl.deleteTextures(out)
         }
         val summary = LinkedHashMap<String, Double>()
         for ((label, wh) in sizes) {
@@ -171,7 +219,7 @@ class Bench(private val ctx: Context, private val ui: (String) -> Unit) {
                     log("GPU $label ${w}x$h N=$n: total %.0f ms | %s".format(total,
                         med.entries.joinToString(", ") { "%s %.1f".format(it.key, it.value) }))
                     summary["$label N=$n"] = total
-                    if (n == 96 && label != "50MP") {
+                    if (n == 96 && label != "2x") {
                         val tr = System.nanoTime()
                         val buf = readBack(gl, lastOut, w, h)
                         val readMs = (System.nanoTime() - tr) / 1e6
@@ -192,24 +240,14 @@ class Bench(private val ctx: Context, private val ui: (String) -> Unit) {
             }
         }
 
-        // A few stocks and lenses at preview size, to look at.
-        val (pw, ph) = sizes[0].second
-        for ((i, s) in listOf("Backlot 800T", "Rochester Tri-Pan 400", "Rochester Aero-Colour IR 400", "Ashigara Velvet 50").withIndex()) {
-            val l = spikeLenses[i % spikeLenses.size]
-            val out = engine.develop(src, dispLo, guideLo, pw, ph, look(96, filmStocks.first { it.name == s }, l))
-            val bmp = Bitmap.createBitmap(pw, ph, Bitmap.Config.ARGB_8888)
-            bmp.copyPixelsFromBuffer(readBack(gl, out, pw, ph))
-            save(bmp, File(outDir, "look_${i}_${s.replace(Regex("[^A-Za-z0-9]+"), "_")}.jpg"))
-            gl.deleteTextures(out)
-        }
         gl.deleteTextures(src, dispLo, guideLo)
 
         // ---- the estimate ----
         val depthMs = best?.medianMs ?: Double.NaN
-        val exp12 = (summary["12MP N=96"] ?: Double.NaN) + (summary["12MP readback"] ?: 0.0) + (summary["12MP encode"] ?: 0.0)
+        val exp12 = (summary["full N=96"] ?: Double.NaN) + (summary["full readback"] ?: 0.0) + (summary["full encode"] ?: 0.0)
         log("ESTIMATE preview re-render (lens+film only, N=48): %.0f ms".format(summary["preview N=48"] ?: Double.NaN))
-        log("ESTIMATE 12MP export: depth %.0f + GPU/readback/encode %.0f = %.1f s".format(depthMs, exp12, (depthMs + exp12) / 1000))
-        log("ESTIMATE 50MP export GPU (N=96): %.1f s".format((summary["50MP N=96"] ?: Double.NaN) / 1000))
+        log("ESTIMATE full-res export: depth %.0f + GPU/readback/encode %.0f = %.1f s".format(depthMs, exp12, (depthMs + exp12) / 1000))
+        log("ESTIMATE 2x export GPU (N=96): %.1f s".format((summary["2x N=96"] ?: Double.NaN) / 1000))
     }
 
     private fun save(b: Bitmap, f: File) {

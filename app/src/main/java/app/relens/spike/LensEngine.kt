@@ -38,11 +38,23 @@ data class Look(
  */
 class LensEngine(private val gl: Gl) {
     val timings = LinkedHashMap<String, Double>()
+    /** Debug: called after a pass with (pass, texture, w, h, level). */
+    var dump: ((String, Int, Int, Int, Int) -> Unit)? = null
+    /** Debug: no mip chain (to isolate mip problems). */
+    var singleLevel = false
+    /**
+     * 2 = glGenerateMipmap (default). 0 = the compute downsample, which samples
+     * `work` while writing another of its levels as an image: undefined in GL ES,
+     * and on the Adreno 810 it left every later read of `work` returning zeros.
+     * 1 = no mips (debug).
+     */
+    var mipMode = 2
 
     private inline fun <T> timed(name: String, block: () -> T): T {
         val t0 = System.nanoTime()
         val r = block()
         gl.finish()
+        gl.checkErr(name)            // e.g. GL_OUT_OF_MEMORY at 50 MP
         timings[name] = (timings[name] ?: 0.0) + (System.nanoTime() - t0) / 1e6
         return r
     }
@@ -53,7 +65,7 @@ class LensEngine(private val gl: Gl) {
      */
     fun develop(src: Int, dispLo: Int, guideLo: Int, w: Int, h: Int, look: Look): Int {
         timings.clear()
-        val levels = min(7, floor(log2(max(w, h).toFloat())).toInt() + 1)
+        val levels = if (singleLevel) 1 else min(7, floor(log2(max(w, h).toFloat())).toInt() + 1)
         val lin = gl.texture(w, h, GLES30.GL_RGBA16F)
         val disp = gl.texture(w, h, GLES30.GL_R32F, linear = false)
         val work = gl.texture(w, h, GLES30.GL_RGBA16F, levels = levels)
@@ -72,6 +84,7 @@ class LensEngine(private val gl: Gl) {
             gl.u1f(p, "uHighlight", 2f)   // JPEG only; small clipped points become hot, big areas barely change
             gl.dispatch(w, h)
         }
+        dump?.invoke("linearize", lin, w, h, 0)
         timed("depth upsample (JBU)") {
             val p = gl.use("jbu")
             gl.sampler(p, "uDispLo", 0, dispLo)
@@ -81,6 +94,7 @@ class LensEngine(private val gl: Gl) {
             gl.u1f(p, "uSigmaRange", 0.06f)
             gl.dispatch(w, h)
         }
+        dump?.invoke("jbu disp", disp, w, h, 0)
         val maxCoc = h * 0.08f
         timed("coc") {
             val p = gl.use("coc")
@@ -97,7 +111,13 @@ class LensEngine(private val gl: Gl) {
             gl.u1f(p, "uHalfDiag", halfDiag)
             gl.dispatch(w, h)
         }
+        dump?.invoke("coc work L0", work, w, h, 0)
         timed("mips") {
+          if (mipMode == 2) {
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, work)
+            GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
+          } else if (mipMode == 0 && levels > 1) {
             val p = gl.use("downsample")
             gl.sampler(p, "uIn", 0, work)
             for (l in 1 until levels) {
@@ -105,6 +125,7 @@ class LensEngine(private val gl: Gl) {
                 gl.image(0, work, GLES30.GL_RGBA16F, level = l)
                 gl.dispatch(max(1, w shr l), max(1, h shr l))
             }
+          }
         }
         timed("tiles + dilate") {
             var p = gl.use("tiles")
@@ -119,6 +140,9 @@ class LensEngine(private val gl: Gl) {
             gl.sampler(p, "uIn", 0, tilesB); gl.image(0, tilesA, GLES30.GL_R32F)
             gl.u2i(p, "uDir", 0, 1); gl.dispatch(tw, th)
         }
+        dump?.invoke("work L0 after mips", work, w, h, 0)
+        if (levels > 3) dump?.invoke("work L3", work, max(1, w shr 3), max(1, h shr 3), 3)
+        dump?.invoke("tiles", tilesA, tw, th, 0)
         val n = min(256, look.samples)
         val ubo = gl.ubo(gatherPattern(n, look.lens).copyOf(256 * 4))
         timed("gather blur (N=$n)") {
@@ -135,9 +159,19 @@ class LensEngine(private val gl: Gl) {
             val l = look.lens
             gl.u4f(p, "uLens", l.blades.toFloat(), l.bladeRotation, l.catsEye, l.soapBubble)
             gl.u2f(p, "uLens2", l.obstruction, l.maxAperture / look.fNumber)
-            gl.dispatch(w, h)
+            // In strips of ~1.5 MP, each flushed: one long dispatch trips the GPU
+            // watchdog (a 1.3 s 50 MP gather lost the context on the Adreno 810).
+            val rows = max(64, (1_500_000 / w) / 8 * 8)
+            var y = 0
+            while (y < h) {
+                gl.u2i(p, "uOffset", 0, y)
+                gl.dispatch(w, min(rows, h - y))
+                GLES30.glFlush()
+                y += rows
+            }
         }
         GLES30.glDeleteBuffers(1, intArrayOf(ubo), 0)
+        dump?.invoke("gather", lin, w, h, 0)
         timed("film develop") {
             val p = gl.use("develop")
             gl.sampler(p, "uIn", 0, lin)
