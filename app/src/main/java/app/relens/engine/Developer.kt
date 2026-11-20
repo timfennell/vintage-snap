@@ -131,30 +131,54 @@ class Developer(private val context: Context) {
         val guideLo = g.texture(dm.w, dm.h, GLES30.GL_RGBA8)
         upload(g, guideLo, guide)
 
-        // Scene scale: Depth Anything's disparity is relative (unknown scale and shift).
-        // Fit it to Metric3D's metres over the frame, then let the camera's own focus
-        // distance at the tapped point set the scale (it measured that one).
+        // Scene scale. Depth Anything's disparity is relative (unknown scale and shift); it is
+        // pinned by two anchors, a line through both:
+        //  - the focus: what is sharp in the phone's picture is at the distance its lens was
+        //    focused at. With autofocus, the tapped point at the camera's distance (when it is
+        //    calibrated and plausible); with the ring set by hand, the sharpest depth in the
+        //    picture at the ring's distance (if one clearly stands out);
+        //  - the far end: the background's distance from Metric3D (sound for far things).
+        // Without Metric3D: disparity ~ 1 / distance, the far end at infinity.
         val dTap = dm.medianAround(job.focusX, job.focusY)
         val camD = job.cameraFocusD?.takeIf { it > 0.05f }
         var dispA: Float; var dispB: Float
         if (metricFile.exists()) {
             val md = (metric ?: MetricDepth(metricFile).also { metric = it }).estimate(photo.bmp, focalOverLong); lap("metric")
             val ab = MetricDepth.fit(dm, md)
-            dispB = maxOf(ab[0], 1e-3f); dispA = ab[1]
-            val fitTap = dispA + dispB * dTap
-            if (camD != null) {
-                // The camera measured the subject: pass through it exactly; the fit gives the slope.
-                // Unless they disagree wildly (an AF distance off by more than 3x is not to be trusted).
-                val ratio = camD / maxOf(fitTap, 1e-3f)
-                Log.i("Relens", "AF %.2f m, fit %.2f m at the tap (x%.2f)".format(1 / camD, 1 / maxOf(fitTap, 1e-3f), ratio))
-                if (ratio in (1f / 3f)..3f) dispA = camD - dispB * dTap
-                else Log.w("Relens", "AF and depth disagree: keeping the depth fit")
+            val fitB = maxOf(ab[0], 1e-3f); val fitA = ab[1]
+            dispB = fitB; dispA = fitA
+            val sorted = dm.data.copyOf().also { it.sort() }
+            val dFar = sorted[(sorted.size * 0.05).toInt()]
+            val farD = maxOf(fitA + fitB * dFar, 1f / 60f)
+            val anchor: Pair<Float, Float>? = if (job.focusM == null) {
+                val fitTap = fitA + fitB * dTap
+                // Metric3D misjudges very close things (a hand at 0.2 m put at 0.66 m): allow 5x.
+                val ok = camD != null && (camD / maxOf(fitTap, 1e-3f)) in 0.2f..5f
+                Log.i("Relens", "AF anchor: tap rel %.2f, camera %s, fit %.2f m%s".format(dTap,
+                    camD?.let { "%.2f m".format(1 / it) } ?: "-", 1 / maxOf(fitTap, 1e-3f), if (camD != null && !ok) " (disagree: fit kept)" else ""))
+                Pair(dTap, if (ok) camD!! else fitTap)
+            } else {
+                val ringD = if (job.focusM.isInfinite()) 0f else 1f / job.focusM
+                val sharp = Sharpness.peak(est.seen, dm)
+                Log.i("Relens", "ring anchor: ring %.2f m, sharpest rel %s".format(job.focusM,
+                    sharp?.let { "%.2f (x%.1f over the rest)".format(it.first, it.second) } ?: "none clear"))
+                // The sharpest depth is at the ring's distance, unless that is absurd against
+                // Metric3D (5x: the lens wasn't where the ring says, or nothing is sharp there).
+                sharp?.takeIf { (ringD / maxOf(fitA + fitB * it.first, 1e-3f)) in 0.2f..5f }?.let { Pair(it.first, ringD) }
+                    ?: run { if (sharp != null) Log.w("Relens", "sharpest depth disagrees with the ring: fit kept"); null }
             }
-            // Nothing beyond 60 m (a fit's shift can push the far end past infinity).
+            if (anchor != null && anchor.first - dFar > 0.05f) {
+                dispB = maxOf((anchor.second - farD) / (anchor.first - dFar), 1e-3f)
+                dispA = anchor.second - dispB * anchor.first
+            } else if (anchor != null) {
+                dispA = anchor.second - dispB * anchor.first
+            }
+            Log.i("Relens", "depth scale: rel 1 at %.2f m, rel 0 at %.2f m (fit: %.2f m, %.2f m)".format(
+                1 / maxOf(dispA + dispB, 1e-3f), 1 / maxOf(dispA, 1e-3f), 1 / maxOf(fitA + fitB, 1e-3f), 1 / maxOf(fitA, 1e-3f)))
+            // Nothing beyond 60 m.
             val minRel = dm.data.minOrNull() ?: 0f
             dispA = maxOf(dispA, 1f / 60f - dispB * minRel)
         } else {
-            // No metric model: disparity ~ 1 / distance with the far end at infinity.
             dispA = 0f; dispB = (camD ?: (1f / 1.5f)) / maxOf(dTap, 0.02f)
         }
         val subjectD = maxOf(dispA + dispB * dTap, 0.02f)

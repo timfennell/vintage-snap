@@ -65,6 +65,25 @@ class MainActivity : ComponentActivity() {
                 }, 3000)
             }, 3000)
         }
+        // Testing from the Mac: re-develop a negative with given settings into the test folder.
+        //   --es redevelop R016_F07_225747 --es lens "Kor 35mm" --ef f 1.4 --ef focusm 0.3 --ef crop 1.43 --es stock "E-Chrome"
+        intent.getStringExtra("redevelop")?.let { neg ->
+            window.decorView.postDelayed({
+                lifecycleScope.launch {
+                    val dir = java.io.File(getExternalFilesDir("negatives"), "")
+                    val lens = app.relens.optics.lensBag.first { it.name.contains(intent.getStringExtra("lens") ?: "Kor 50mm", ignoreCase = true) }
+                    val stock = app.relens.film.filmStocks.first { it.name.contains(intent.getStringExtra("stock") ?: "Portrait 400", ignoreCase = true) }
+                    val fm = intent.getFloatExtra("focusm", -1f).takeIf { it > 0 }
+                    val job = app.relens.engine.DevelopJob(java.io.File(dir, "$neg.jpg"), java.io.File(dir, "$neg.dng").takeIf { it.exists() },
+                        intent.getFloatExtra("fx", 0.5f), intent.getFloatExtra("fy", 0.5f), null, lens,
+                        intent.getFloatExtra("f", lens.maxAperture), fm, stock, 0, 0, publish = false,
+                        crop = intent.getFloatExtra("crop", 0f), focalOverLong = 5.56f / 8.19f)
+                    val r = runCatching { body.developer.develop(job) }
+                    r.getOrNull()?.file?.copyTo(java.io.File(getExternalFilesDir("tests"), "redevelop_$neg.jpg"), overwrite = true)
+                    android.util.Log.i("Relens", "redevelop $neg: ${r.getOrNull()?.timings ?: r.exceptionOrNull()?.message}")
+                }
+            }, 3000)
+        }
         if (intent.hasExtra("logicaltest")) window.decorView.postDelayed({ lifecycleScope.launch { body.rig.logicalTest() } }, 9000)
         // Testing from the Mac: --es rawtest "<lens name part>": a RAW-only capture to a test folder (no roll, no gallery).
         intent.getStringExtra("rawtest")?.let { want ->

@@ -287,7 +287,7 @@ class Rig(private val context: Context) {
 
     /** The focus ring driving the phone lens (dioptres; 0 = infinity); null: back to autofocus. */
     fun manualFocus(dioptres: Float?) = handler.post {
-        if (dioptres == manualD) return@post
+        if (dioptres == manualD && session != null) return@post
         manualD = dioptres
         if (dioptres == null) afRegion = null
         repeat()

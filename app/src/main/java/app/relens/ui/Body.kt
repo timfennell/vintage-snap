@@ -82,6 +82,8 @@ class Body(app: Application) : AndroidViewModel(app) {
     init {
         if (rig.framingFor(lensBag[lensIndex]) == null)
             lensIndex = lensBag.indexOfFirst { it.name == "Ohi Kor 50mm f/1.4" }.coerceAtLeast(0)
+        // A ring set by hand last time: the phone's lens goes there too (the rig applies it when it opens).
+        rig.manualFocus(focusM?.let { if (it.isInfinite()) 0f else 1f / it })
     }
     val stock get() = filmStocks[stockIndex]
     val framesLeft get() = stock.exposures - framesShot
