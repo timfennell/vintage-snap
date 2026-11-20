@@ -6,6 +6,8 @@ uniform sampler2D uSrc;          // RGBA8, linear filtering
 layout(rgba16f, binding = 0) writeonly uniform image2D uOut;
 uniform float uGain;             // exposure, linear
 uniform float uHighlight;        // highlight expansion (0 = none)
+uniform vec4 uSrcRect;           // where the frame is in the source (uv origin, uv size): the lens's crop
+uniform int uSrcLinear;          // 1: the source is scene-linear (developed from RAW), not an sRGB picture
 uniform vec4 uWarp;              // shift lens (common.glsl shift_uv)
 uniform vec2 uWarpFZ;
 
@@ -13,8 +15,9 @@ void main() {
     ivec2 p = ivec2(gl_GlobalInvocationID.xy);
     ivec2 sz = imageSize(uOut);
     if (p.x >= sz.x || p.y >= sz.y) return;
-    vec2 uv = shift_uv(vec2(p) + 0.5, vec2(sz), uWarp, uWarpFZ);
-    vec3 c = to_lin(textureLod(uSrc, uv, 0.0).rgb);
+    vec2 uv = uSrcRect.xy + shift_uv(vec2(p) + 0.5, vec2(sz), uWarp, uWarpFZ) * uSrcRect.zw;
+    vec3 c = textureLod(uSrc, uv, 0.0).rgb;
+    if (uSrcLinear == 0) c = to_lin(c);
     float m = max(c.r, max(c.g, c.b));
     c *= 1.0 + uHighlight * pow(smoothstep(0.90, 1.0, m), 2.0);
     imageStore(uOut, p, vec4(c * uGain, 1.0));

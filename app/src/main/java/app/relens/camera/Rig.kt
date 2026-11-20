@@ -350,6 +350,10 @@ class Rig(private val context: Context) {
                 jpeg.outputStream().use { o -> val buf = ji.planes[0].buffer; val a = ByteArray(buf.remaining()); buf.get(a); o.write(a) }
                 ji.close()
                 rawImage?.takeIf { result != null }?.let { ri ->
+                    // For the developer: the sensor's values as plain 16-bit, and what it needs to read them.
+                    runCatching {
+                        RawNegative.write(File(dir, "$name.raw16"), File(dir, "$name.rawmeta.json"), ri, characteristics!!, result!!, (fr.camera.sensorOrientation + deviceRotation) % 360)
+                    }.onFailure { Log.w("Relens", "raw negative not written", it) }
                     DngCreator(characteristics!!, result!!).use { dc ->
                         dc.setOrientation(exifOrientation(fr.camera.sensorOrientation))
                         dng.outputStream().use { dc.writeImage(it, ri) }
@@ -370,7 +374,11 @@ class Rig(private val context: Context) {
             jb.set(CaptureRequest.JPEG_QUALITY, 97.toByte())
             val jpegReq = jb.build()
             val reqs = ArrayList<CaptureRequest>()
-            if (rr != null) reqs.add(baseRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)!!.apply { addTarget(rr.surface) }.build())
+            if (rr != null) reqs.add(baseRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)!!.apply {
+                addTarget(rr.surface)
+                // The lens shading map (RAW isn't corrected for it): the developer applies it.
+                set(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE, CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON)
+            }.build())
             reqs.add(jpegReq)
             s.captureBurst(reqs, object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(ss: CameraCaptureSession, r: CaptureRequest, t: TotalCaptureResult) {

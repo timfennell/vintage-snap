@@ -53,6 +53,14 @@ class MainActivity : ComponentActivity() {
                     lifecycleScope.launch {
                         val r = runCatching { body.rig.shoot(java.io.File(getExternalFilesDir("tests"), ""), "testshot") }
                         android.util.Log.i("Relens", "test shot: ${r.getOrNull()?.let { "jpeg ${it.jpeg.length()} dng ${it.dng?.length()}" } ?: r.exceptionOrNull()?.message}")
+                        val exp = r.getOrNull() ?: return@launch
+                        val fr = body.rig.framing.value ?: return@launch
+                        val dev = runCatching { body.developer.develop(app.relens.engine.DevelopJob(exp.jpeg, exp.dng, body.focusX, body.focusY,
+                            exp.cameraFocusD, body.lens, body.fNumber, body.focusM, body.stock, body.push, 0,
+                            publish = false, filter = body.filter, crop = fr.crop,
+                            focalOverLong = fr.camera.focalMM / fr.camera.sensorLongMM)) }
+                        dev.getOrNull()?.file?.copyTo(java.io.File(getExternalFilesDir("tests"), "testprint.jpg"), overwrite = true)
+                        android.util.Log.i("Relens", "test print: ${dev.getOrNull()?.timings ?: dev.exceptionOrNull()?.message}")
                     }
                 }, 3000)
             }, 3000)

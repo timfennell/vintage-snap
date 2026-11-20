@@ -53,6 +53,10 @@ data class Look(
     val flareGain: Float = 3f,
     /** A tilt lens's tilt, degrees (a whacked lens's leak opens on the side it's rocked away from). */
     val tiltDeg: FloatArray = floatArrayOf(0f, 0f),
+    /** Where the frame is in the source texture (uv origin, uv size): the lens's crop of the camera's frame. */
+    val srcRect: FloatArray = floatArrayOf(0f, 0f, 1f, 1f),
+    /** The source is scene-linear (developed from RAW) rather than an sRGB picture. */
+    val srcLinear: Boolean = false,
 ) {
     val focusM: Float get() = 1f / maxOf(focusD, 1e-3f)
 
@@ -79,14 +83,14 @@ class LensEngine(private val gl: Gl) {
     var extraLights: List<LightSource>? = null
 
     /** Finds the lights in an RGBA8 picture (sRGB): tile energies above the threshold, joined. */
-    fun findLights(tex: Int, w: Int, h: Int): List<LightSource> {
+    fun findLights(tex: Int, w: Int, h: Int, srgb: Boolean = true, threshold: Float = 0.9f): List<LightSource> {
         val ltw = (w + 15) / 16; val lth = (h + 15) / 16
         val eTex = gl.texture(ltw, lth, GLES30.GL_RGBA32F, linear = false)
         val wTex = gl.texture(ltw, lth, GLES30.GL_RGBA32F, linear = false)
         val p = gl.use("lights")
         gl.sampler(p, "uWork", 0, tex)
-        gl.u1f(p, "uThreshold", 0.9f)
-        gl.u1i(p, "uSrgb", 1)
+        gl.u1f(p, "uThreshold", threshold)
+        gl.u1i(p, "uSrgb", if (srgb) 1 else 0)
         gl.image(0, eTex, GLES30.GL_RGBA32F)
         GLES31.glBindImageTexture(1, wTex, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA32F)
         gl.dispatch(ltw, lth)
@@ -138,6 +142,8 @@ class LensEngine(private val gl: Gl) {
             val p = gl.use("linearize")
             gl.u4f(p, "uWarp", warp[0], warp[1], warp[2], warp[3])
             gl.u2f(p, "uWarpFZ", warp[4], warp[5])
+            gl.u4f(p, "uSrcRect", look.srcRect[0], look.srcRect[1], look.srcRect[2], look.srcRect[3])
+            gl.u1i(p, "uSrcLinear", if (look.srcLinear) 1 else 0)
             gl.sampler(p, "uSrc", 0, src)
             gl.image(0, lin, GLES30.GL_RGBA16F)
             gl.u1f(p, "uGain", look.exposure)

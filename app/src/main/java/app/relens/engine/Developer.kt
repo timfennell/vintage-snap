@@ -99,8 +99,31 @@ class Developer(private val context: Context) {
         val eng = engine!!
         val w = photo.bmp.width; val h = photo.bmp.height
 
-        val src = g.texture(w, h, GLES30.GL_RGBA8)
-        upload(g, src, photo.bmp)
+        // From the RAW negative where there is one (scene-linear, highlights not clipped),
+        // else from the JPEG.
+        val raw16 = job.dng?.let { File(it.parentFile, it.nameWithoutExtension + ".raw16") }?.takeIf { it.exists() }
+        val rawMeta = job.dng?.let { File(it.parentFile, it.nameWithoutExtension + ".rawmeta.json") }?.takeIf { it.exists() }
+        var rawPic: RawPicture? = null
+        var exposure = 1f
+        var srcRect = floatArrayOf(0f, 0f, 1f, 1f)
+        val src: Int
+        if (raw16 != null && rawMeta != null) {
+            val rp = runCatching { RawDeveloper.develop(g, raw16, rawMeta) }.onFailure { Log.w("Relens", "raw develop failed", it) }.getOrNull()
+            rawPic = rp
+        }
+        val rp = rawPic
+        if (rp != null) {
+            src = rp.tex
+            srcRect = floatArrayOf(crop.left / full.bmp.width.toFloat(), crop.top / full.bmp.height.toFloat(),
+                crop.width() / full.bmp.width.toFloat(), crop.height() / full.bmp.height.toFloat())
+            // Exposure: the RAW's mean brightness over the crop matched to the JPEG's (linearised):
+            // what the photographer saw, with the highlights the JPEG clipped still there.
+            exposure = matchExposure(g, rp, photo.bmp, srcRect)
+            lap("raw")
+        } else {
+            src = g.texture(w, h, GLES30.GL_RGBA8)
+            upload(g, src, photo.bmp)
+        }
         val dm = est.depth
         val dispLo = g.texture(dm.w, dm.h, GLES30.GL_R32F, linear = false)
         g.upload(dispLo, dm.w, dm.h, GLES30.GL_RED, GLES30.GL_FLOAT, floatBuffer(dm.data))
@@ -157,8 +180,9 @@ class Developer(private val context: Context) {
         val look = Look(job.lens, job.fNumber, dispA = dispA, dispB = dispB, focusD = focusD, viewFocal = vf,
             tiltD = tiltD, keystone = Movements.keystone(job.lens, job.shiftMM),
             stock = job.stock, push = job.push, samples = 256, levelBias = -1f, filter = job.filter,
-            tiltDeg = job.tiltDeg, flareGain = if (job.dng != null) 1f else 3f,
-            pointBoost = if (job.dng != null) 0f else 8f)
+            tiltDeg = job.tiltDeg, flareGain = if (rp != null) 1f else 3f,
+            srcRect = srcRect, srcLinear = rp != null, exposure = exposure,
+            pointBoost = if (rp != null) 0f else 8f)
         if (!job.publish) eng.dump = { name, tex, dw, dh, level ->
             if (name == "coc work L0") {
                 // Bench: the signed blur radius along a horizontal line at the focus point and at 70 % down.
@@ -171,7 +195,14 @@ class Developer(private val context: Context) {
             }
         } else eng.dump = null
         // Lights over the whole camera frame, in the print's pixels (outside it: off the frame).
-        if (job.crop > 0f) {
+        if (rp != null) {
+            // Over the RAW's whole frame (true light, not clipped), into the print's pixels.
+            val sx = full.bmp.width / rp.width.toFloat(); val sy = full.bmp.height / rp.height.toFloat()
+            eng.extraLights = eng.findLights(rp.tex, rp.width, rp.height, srgb = false, threshold = 0.9f / exposure).map {
+                LightSource(it.x * sx - crop.left, it.y * sy - crop.top, it.radius * sx,
+                    FloatArray(3) { c -> it.energy[c] * exposure * sx * sy }, it.blur, it.pixels)
+            }
+        } else if (job.crop > 0f) {
             val ft = g.texture(full.bmp.width, full.bmp.height, GLES30.GL_RGBA8)
             upload(g, ft, full.bmp)
             eng.extraLights = eng.findLights(ft, full.bmp.width, full.bmp.height).map {
@@ -180,6 +211,7 @@ class Developer(private val context: Context) {
             g.deleteTextures(ft)
         } else eng.extraLights = null
         val out = eng.develop(src, dispLo, guideLo, w, h, look); lap("lens+film")
+        if (rp != null) Log.i("Relens", "developed from RAW, exposure x%.2f".format(exposure))
         Log.i("Relens", "lights: " + eng.lights.joinToString { "(%.0f,%.0f r%.0f e%.0f blur%.0f)".format(it.x, it.y, it.radius, it.luma, it.blur) })
         val buf = ByteBuffer.allocateDirect(w * h * 4).order(ByteOrder.nativeOrder())
         g.readRgba8(out, w, h, buf); buf.position(0)
@@ -225,6 +257,28 @@ class Developer(private val context: Context) {
         val long = (maxOf(w, h) / crop).toInt(); val short = long * 2 / 3
         val cw = if (w >= h) long else short; val ch = if (w >= h) short else long
         return android.graphics.Rect((w - cw) / 2, (h - ch) / 2, (w - cw) / 2 + cw, (h - ch) / 2 + ch)
+    }
+
+    /** The RAW's exposure that gives the crop the JPEG's mean brightness (linear), from small mips of both. */
+    private fun matchExposure(g: Gl, rp: RawPicture, jpegCrop: Bitmap, rect: FloatArray): Float {
+        val lvl = rp.levels - 1
+        val lw = maxOf(1, rp.width shr lvl); val lh = maxOf(1, rp.height shr lvl)
+        val f = g.readFloat(rp.tex, lw, lh, lvl)
+        var rawSum = 0.0; var n = 0
+        val x0 = (rect[0] * lw).toInt(); val y0 = (rect[1] * lh).toInt()
+        val x1 = ((rect[0] + rect[2]) * lw).toInt().coerceAtMost(lw); val y1 = ((rect[1] + rect[3]) * lh).toInt().coerceAtMost(lh)
+        for (y in y0 until y1) for (x in x0 until x1) {
+            val i = 4 * (y * lw + x); rawSum += 0.2126 * f[i] + 0.7152 * f[i + 1] + 0.0722 * f[i + 2]; n++
+        }
+        val small = Bitmap.createScaledBitmap(jpegCrop, 64, maxOf(1, 64 * jpegCrop.height / jpegCrop.width), true)
+        val px = IntArray(small.width * small.height).also { small.getPixels(it, 0, small.width, 0, 0, small.width, small.height) }
+        fun lin(c: Int): Double { val v = c / 255.0; return if (v <= 0.04045) v / 12.92 else Math.pow((v + 0.055) / 1.055, 2.4) }
+        var jSum = 0.0
+        for (c in px) jSum += 0.2126 * lin((c shr 16) and 0xff) + 0.7152 * lin((c shr 8) and 0xff) + 0.0722 * lin(c and 0xff)
+        val raw = rawSum / maxOf(n, 1); val jpg = jSum / px.size
+        val k = (jpg / maxOf(raw, 1e-5)).toFloat().coerceIn(0.05f, 50f)
+        Log.i("Relens", "exposure match: jpeg mean %.4f, raw mean %.4f -> x%.2f".format(jpg, raw, k))
+        return k
     }
 
     private fun upload(g: Gl, tex: Int, b: Bitmap) {
