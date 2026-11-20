@@ -29,6 +29,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import app.relens.spike.BenchActivity
 import java.io.File
 
@@ -43,6 +45,34 @@ class MainActivity : ComponentActivity() {
         File(getExternalFilesDir(null), "models").mkdirs()
         val haptics = Haptics(this)
         setContent { App(body, haptics) }
+        // Testing from the Mac: --es testshot "<lens name part>": a real shot into the test folder (no roll, no gallery).
+        intent.getStringExtra("testshot")?.let { want ->
+            window.decorView.postDelayed({
+                app.relens.optics.lensBag.indexOfFirst { it.name.contains(want, ignoreCase = true) }.takeIf { it >= 0 }?.let { body.mount(it) }
+                window.decorView.postDelayed({
+                    lifecycleScope.launch {
+                        val r = runCatching { body.rig.shoot(java.io.File(getExternalFilesDir("tests"), ""), "testshot") }
+                        android.util.Log.i("Relens", "test shot: ${r.getOrNull()?.let { "jpeg ${it.jpeg.length()} dng ${it.dng?.length()}" } ?: r.exceptionOrNull()?.message}")
+                    }
+                }, 3000)
+            }, 3000)
+        }
+        // Testing from the Mac: --es rawtest "<lens name part>": a RAW-only capture to a test folder (no roll, no gallery).
+        intent.getStringExtra("rawtest")?.let { want ->
+            window.decorView.postDelayed({
+                app.relens.optics.lensBag.indexOfFirst { it.name.contains(want, ignoreCase = true) }.takeIf { it >= 0 }?.let { body.mount(it) }
+                window.decorView.postDelayed({
+                    lifecycleScope.launch { body.rig.rawTest(java.io.File(getExternalFilesDir("tests"), "rawtest.dng")) }
+                }, 3000)
+            }, 3000)
+        }
+        // Testing from the Mac: adb shell am start -n app.relens/.ui.MainActivity --es autoshoot "<lens name part>"
+        intent.getStringExtra("autoshoot")?.let { want ->
+            window.decorView.postDelayed({
+                app.relens.optics.lensBag.indexOfFirst { it.name.contains(want, ignoreCase = true) }.takeIf { it >= 0 }?.let { body.mount(it) }
+                window.decorView.postDelayed({ body.shoot() }, 3000)
+            }, 3000)
+        }
     }
 
     @Composable
