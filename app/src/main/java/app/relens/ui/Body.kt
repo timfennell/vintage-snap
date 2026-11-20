@@ -203,15 +203,15 @@ class Body(app: Application) : AndroidViewModel(app) {
                 // well-textured points of this very frame, kept only if the camera didn't turn.
                 sweeping = true
                 steadiness.start()
-                val pts = runCatching { Sweep.points(exp.jpeg, framing.crop) }.getOrDefault(emptyList())
+                val pts = runCatching { Sweep.points(exp.jpeg, framing.crop, n = 4) }.getOrDefault(emptyList())
                 var swept = runCatching { rig.sweep(pts) }.getOrDefault(emptyList())
                 steadiness.stop()
-                // allowed turn: a twentieth of the lens's field of view (its long side)
+                // allowed drift: a twelfth of the lens's field of view (its long side)
                 val fov = Math.toDegrees(2 * kotlin.math.atan(18.0 / lens.focalMM)).toFloat()
-                if (steadiness.degrees > fov / 20f) {
-                    Trace.w("sweep discarded: the camera turned %.2f degrees (allowed %.2f)".format(steadiness.degrees, fov / 20f))
+                if (steadiness.degrees > fov / 12f) {
+                    Trace.w("sweep discarded: the camera drifted %.2f degrees (allowed %.2f)".format(steadiness.degrees, fov / 12f))
                     swept = emptyList()
-                }
+                } else Trace.i("sweep kept: drift %.2f degrees (allowed %.2f)".format(steadiness.degrees, fov / 12f))
                 sweeping = false
                 onShot()
                 busy = false

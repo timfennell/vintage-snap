@@ -518,7 +518,7 @@ class Rig(private val context: Context) {
             val locked = CompletableDeferred<Float?>()
             sweepWait = locked
             focusAt(fx, fy)
-            val d = try { withTimeout(700) { locked.await() } } catch (t: Throwable) { null }
+            val d = try { withTimeout(550) { locked.await() } } catch (t: Throwable) { null }
             sweepWait = null
             if (d != null) out.add(AfSample(fx, fy, d, heroId ?: "0", System.currentTimeMillis()))
         }

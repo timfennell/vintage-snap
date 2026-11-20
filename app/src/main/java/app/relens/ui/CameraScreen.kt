@@ -159,7 +159,12 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
 
         // ---- LED readout under the finder ----
         val ringM = body.focusM
-        val shownM = ringM ?: liveD?.let { if (it > 0.01f) 1f / it else Float.POSITIVE_INFINITY }
+        // While the mirror is up (the frame and the rangefinder sweep), the ring stays on the
+        // subject: the sweep's hops between points aren't the photographer's focus.
+        val liveM = liveD?.let { if (it > 0.01f) 1f / it else Float.POSITIVE_INFINITY }
+        var heldM by remember { mutableStateOf<Float?>(null) }
+        if (!(body.busy || body.sweeping)) heldM = liveM
+        val shownM = ringM ?: heldM
         Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
             Led("F ${fLabel(body.fNumber)}")
             Led(if (shownM == null) "-- m" else if (shownM.isInfinite()) "∞ m" else "%.2f m".format(shownM))

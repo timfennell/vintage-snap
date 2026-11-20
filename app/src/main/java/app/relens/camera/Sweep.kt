@@ -57,17 +57,24 @@ object Sweep {
         return picked.map { Pair(it.fx.coerceIn(0.05f, 0.95f), it.fy.coerceIn(0.05f, 0.95f)) }
     }
 
-    /** Integrates the gyroscope while a sweep runs: how far (degrees) the camera turned. */
+    /**
+     * The gyroscope while a sweep runs: the camera's net turn from where it was at the
+     * hero frame (per axis, with direction, so hand tremor going back and forth cancels),
+     * and the largest such drift seen (degrees).
+     */
     class Steadiness(context: Context) : SensorEventListener {
         private val sm = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
         private var last = 0L
+        private val angle = FloatArray(3)
         @Volatile var degrees = 0f; private set
-        fun start() { degrees = 0f; last = 0L; sm.getDefaultSensor(Sensor.TYPE_GYROSCOPE)?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) } }
+        fun start() { degrees = 0f; last = 0L; angle.fill(0f); sm.getDefaultSensor(Sensor.TYPE_GYROSCOPE)?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) } }
         fun stop() = sm.unregisterListener(this)
         override fun onSensorChanged(e: SensorEvent) {
             if (last != 0L) {
                 val dt = (e.timestamp - last) / 1e9f
-                degrees += sqrt(e.values[0] * e.values[0] + e.values[1] * e.values[1] + e.values[2] * e.values[2]) * dt * 57.2958f
+                for (i in 0 until 3) angle[i] += e.values[i] * dt
+                val net = sqrt(angle[0] * angle[0] + angle[1] * angle[1] + angle[2] * angle[2]) * 57.2958f
+                if (net > degrees) degrees = net
             }
             last = e.timestamp
         }
