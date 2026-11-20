@@ -109,7 +109,20 @@ class Body(app: Application) : AndroidViewModel(app) {
     val parallaxAvailable: Boolean = runCatching {
         com.google.ar.core.ArCoreApk.getInstance().checkAvailability(app).isSupported
     }.getOrDefault(false)
-    var parallaxOn by mutableStateOf(prefs.getBoolean("parallax", false)); private set
+    // on from the start where the phone has ARCore: better prints, and it teaches the focus
+    var parallaxOn by mutableStateOf(prefs.getBoolean("parallax", parallaxAvailable)); private set
+    /** The one-time explanation, the first time the ghost camera appears. */
+    var parallaxIntroSeen by mutableStateOf(prefs.getBoolean("parallaxIntro", false)); private set
+    fun dismissParallaxIntro() { parallaxIntroSeen = true; prefs.edit().putBoolean("parallaxIntro", true).apply() }
+    /** Bumped when a parallax shot teaches the focus (the switch's label follows it). */
+    var focusLearnTick by mutableIntStateOf(0); private set
+    /** How far a camera's focus calibration has got: (pairs so far, settled). Settled: 3 pairs spanning 0.25 D. */
+    fun focusLearning(id: String?): Pair<Int, Boolean> {
+        if (id == null) return Pair(0, false)
+        val pts = (prefs.getString("afsamples_$id", "") ?: "").split(";").mapNotNull { e ->
+            e.split(":").mapNotNull { it.toFloatOrNull() }.takeIf { it.size == 2 }?.get(1) }
+        return Pair(pts.size, pts.size >= 3 && (pts.max() - pts.min()) >= 0.25f)
+    }
     fun toggleParallax() { parallaxOn = !parallaxOn; prefs.edit().putBoolean("parallax", parallaxOn).apply() }
     /** The capture in progress (the finder shows it), or null. */
     var parallax by mutableStateOf<app.relens.parallax.ParallaxCapture?>(null); private set
@@ -193,6 +206,7 @@ class Body(app: Application) : AndroidViewModel(app) {
         pts += Pair(raw, trueD)
         while (pts.size > 10) pts.removeAt(0)
         prefs.edit().putString(key, pts.joinToString(";") { "${it.first}:${it.second}" }).apply()
+        focusLearnTick++
         val ts = pts.map { it.second }
         var k = rig.afCalibration[id]?.second ?: 1f
         if (pts.size >= 2 && (ts.max() - ts.min()) >= 0.25f) {
@@ -465,6 +479,7 @@ class Body(app: Application) : AndroidViewModel(app) {
                     parallax = null
                     rig.reacquire()
                     if (!ok) message = "parallax not finished: this frame uses single-shot depth"
+                    else if (!parallaxIntroSeen) dismissParallaxIntro()
                 }
                 onShot()
                 busy = false

@@ -48,7 +48,15 @@ class MainActivity : ComponentActivity() {
         val haptics = Haptics(this)
         setContent {
             // The body's lettering: Jost, a free geometric face after Futura.
-            androidx.compose.material3.ProvideTextStyle(androidx.compose.ui.text.TextStyle(fontFamily = Futuraish)) { App(body, haptics) }
+            // The body's lettering is part of the camera: large system font sizes are allowed a
+            // little, not so much that readouts and rings spill out of their places.
+            val d = androidx.compose.ui.platform.LocalDensity.current
+            androidx.compose.runtime.CompositionLocalProvider(
+                androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(d.density, minOf(d.fontScale, 1.15f))) {
+                androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize().background(Palette.leather)) {
+                    androidx.compose.material3.ProvideTextStyle(androidx.compose.ui.text.TextStyle(fontFamily = Futuraish)) { App(body, haptics) }
+                }
+            }
         }
         // Testing from the Mac: --es testshot "<lens name part>": a real shot into the test folder (no roll, no gallery).
         intent.getStringExtra("testshot")?.let { want ->

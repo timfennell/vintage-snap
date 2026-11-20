@@ -77,7 +77,9 @@ class Rig(private val context: Context) {
     private val executor = Executor { handler.post(it) }
 
     /** The back cameras that can be opened (listed or not), widest first. */
-    val cameras: List<PhoneCamera> = (listOf("0", "2", "3") + cm.cameraIdList.toList()).distinct().mapNotNull { id ->
+    val cameras: List<PhoneCamera> = (cm.cameraIdList.toList() +
+            // the physical cameras inside a listed multi-camera (some phones let them be opened by id)
+            cm.cameraIdList.flatMap { id -> runCatching { cm.getCameraCharacteristics(id).physicalCameraIds.toList() }.getOrDefault(emptyList()) }).distinct().mapNotNull { id ->
         runCatching {
             val c = cm.getCameraCharacteristics(id)
             if (c.get(CameraCharacteristics.LENS_FACING) != CameraMetadata.LENS_FACING_BACK) return@runCatching null
@@ -96,15 +98,30 @@ class Rig(private val context: Context) {
                 c.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)!!,
                 c.get(CameraCharacteristics.LENS_INFO_FOCUS_DISTANCE_CALIBRATION) ?: 0)
         }.getOrNull()
-    }.sortedBy { it.f36 }
+    }.distinctBy { (it.f36 * 4).toInt() }        // the same lens listed twice: keep the first (listed) one
+        .sortedBy { it.f36 }
+
+    /**
+     * Cameras found but not listed by the phone (opened by id, as the Nothing's ultra-wide and
+     * periscope are) may refuse to open on another phone: those that do are set aside, and the
+     * lens is framed again on what's left.
+     */
+    private val blocked = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    private val usable: List<PhoneCamera> get() = cameras.filter { it.id !in blocked }
+    private var lastLens: Lens? = null
+    private fun giveUp(cam: PhoneCamera, why: String) {
+        if (cam.id in cm.cameraIdList || !blocked.add(cam.id)) return
+        app.relens.Trace.w("camera ${cam.id} (unlisted) won't open here ($why): set aside")
+        lastLens?.let { l -> handler.post { select(l) } }
+    }
 
     /** The widest focal length any camera reaches (narrower lenses can't be framed). */
-    val widestMM: Float get() = cameras.firstOrNull()?.f36 ?: 24f
+    val widestMM: Float get() = usable.firstOrNull()?.f36 ?: 24f
 
     /** How a lens would be framed, or null if no camera can (too wide, a fisheye, too long to leave ~1 MP). */
     fun framingFor(lens: Lens): Framing? {
-        if (lens.isFisheye || cameras.isEmpty()) return null
-        val cam = cameras.lastOrNull { it.f36 <= lens.focalMM * 1.005f } ?: return null
+        if (lens.isFisheye || usable.isEmpty()) return null
+        val cam = usable.lastOrNull { it.f36 <= lens.focalMM * 1.005f } ?: return null
         val fr = Framing(cam, lens.focalMM / cam.f36)
         return fr.takeIf { it.megapixels >= 1f }
     }
@@ -153,9 +170,11 @@ class Rig(private val context: Context) {
      * Each camera's focus-distance calibration: reading = offset + scale x true dioptres.
      * "Approximate" readings can be well off: the Nothing's periscope locks focus right but
      * reads a chair at 3 m (0.33 D) as 1.13 D and a table at 5 m (0.20 D) as 0.86 D, so
-     * offset 0.45, scale 2.0 (Tim's measurement, 2026-11-19). Others: as read.
+     * offset 0.45, scale 2.0 (Tim's measurement, 2026-11-19), on that phone (model A059P) only.
+ * Others start as read and learn from parallax shots.
      */
-    val afCalibration = mutableMapOf("3" to Pair(0.45f, 2.0f))
+    val afCalibration: MutableMap<String, Pair<Float, Float>> =
+        if (android.os.Build.MODEL == "A059P") mutableMapOf("3" to Pair(0.45f, 2.0f)) else mutableMapOf()
     fun corrected(cameraId: String, raw: Float): Float {
         val (o, k) = afCalibration[cameraId] ?: return raw
         return maxOf((raw - o) / k, 0f)
@@ -213,6 +232,7 @@ class Rig(private val context: Context) {
 
     /** Shoot this lens: opens its camera if it's a different one. */
     fun select(lens: Lens) {
+        lastLens = lens
         val fr = framingFor(lens) ?: framingFor(lens.copy(focalMM = 50f)) ?: return
         handler.post {
             val same = _framing.value?.camera?.id == fr.camera.id && device != null
@@ -228,7 +248,16 @@ class Rig(private val context: Context) {
         _error.value = null
         val gen = ++generation
         val cam = fr.camera
-        safely("open ${cam.id}") {
+        try { openCam(fr, cam, tex, gen) } catch (t: Throwable) {
+            app.relens.Trace.w("camera: open ${cam.id} failed: ${t.message}")
+            _error.value = "camera: ${t.message}"
+            giveUp(cam, t.javaClass.simpleName)
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun openCam(fr: Framing, cam: PhoneCamera, tex: SurfaceTexture, gen: Int) {
+        run {
             characteristics = cm.getCameraCharacteristics(cam.id)
             val ps = previewSize(cam)
             tex.setDefaultBufferSize(ps.width, ps.height)
@@ -260,6 +289,7 @@ class Rig(private val context: Context) {
                     app.relens.Trace.e("camera ${cam.id} error $e")
                     d.close()
                     if (device == d) { device = null; session = null; _error.value = "camera ${cam.id} error $e" }
+                    if (device == null) giveUp(cam, "error $e")
                 }
             })
         }
@@ -599,8 +629,9 @@ class Rig(private val context: Context) {
      */
     suspend fun grabLightMap(dir: File, name: String): Boolean {
         val fr = _framing.value ?: return false
-        val uwCam = cameras.firstOrNull { it.id == "2" } ?: return false
-        if (!ultraWideMap || fr.camera.id == "2") return false
+        // the widest camera, when it is clearly wider than the one the shot was taken on
+        val uwCam = cameras.firstOrNull()?.takeIf { it.f36 < fr.camera.f36 * 0.8f } ?: return false
+        if (!ultraWideMap) return false
         val t0 = System.currentTimeMillis()
         val done = CompletableDeferred<Boolean>()
         var dev: CameraDevice? = null
@@ -617,7 +648,7 @@ class Rig(private val context: Context) {
             var latest: CaptureResult? = null
             var settleUntil = Long.MAX_VALUE
             safely("light map") {
-                cm.openCamera("2", executor, object : CameraDevice.StateCallback() {
+                cm.openCamera(uwCam.id, executor, object : CameraDevice.StateCallback() {
                     override fun onOpened(d: CameraDevice) {
                         dev = d
                         val cfg = SessionConfiguration(SessionConfiguration.SESSION_REGULAR, listOf(OutputConfiguration(r.surface)), executor,

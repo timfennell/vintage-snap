@@ -162,8 +162,11 @@ fun LightTableScreen(body: Body, onBack: () -> Unit, openBench: () -> Unit, init
             if (developing > 0) "$developing in the darkroom" else null,
             if (scale >= 2f) "loupe %.1fx".format(scale) else "pinch to look closer", "tap a frame to see it", "hold to mark it").joinToString("  ·  ")
         Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color(0xE6141312)).navigationBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp)) {
-            Text(foot, color = Palette.cream, fontSize = 11.sp, modifier = Modifier.align(Alignment.CenterStart))
-            Text("bench ›", color = Palette.dim, fontSize = 11.sp, modifier = Modifier.align(Alignment.CenterEnd).clickable(onClick = openBench))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(foot, color = Palette.cream, fontSize = 11.sp, maxLines = 2, modifier = Modifier.weight(1f))
+                Spacer(Modifier.width(8.dp))
+                Text("bench ›", color = Palette.dim, fontSize = 11.sp, modifier = Modifier.clickable(onClick = openBench))
+            }
         }
         viewing?.let { e -> PrintView(e) { viewing = null } }
     }

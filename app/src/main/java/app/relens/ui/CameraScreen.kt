@@ -1,5 +1,6 @@
 package app.relens.ui
 
+import androidx.compose.ui.layout.layout
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -97,7 +98,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
 
     // The ground glass, in screen pixels: the eyepiece effect over the whole body works round it.
     var glass by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
-    Column(Modifier.fillMaxSize().background(Palette.leather).eyepiece(glass, wall = 12.dp)
+    Column(Modifier.portraitBody().fillMaxSize().background(Palette.leather).eyepiece(glass, wall = 12.dp)
         .statusBarsPadding().navigationBarsPadding()) {
         // ---- top plate: what's mounted and loaded, the frame counter ----
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -194,7 +195,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                 sceneEV?.let { ev -> MeterCard(body.shutterPos, body.meteredShutterPos(ev), Modifier.fillMaxSize()) }
                 rigError?.let { Text(it, color = Palette.led, fontSize = 11.sp, modifier = Modifier.align(Alignment.Center).padding(16.dp)) }
                 if (blackout > 0f) Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = blackout)))
-                body.parallax?.let { pc -> ParallaxFinder(pc, Modifier.fillMaxSize()) }
+                body.parallax?.let { pc -> ParallaxFinder(pc, body, Modifier.fillMaxSize()) }
                 if (mirrorUp && (body.busy || body.sweeping) && body.parallax == null) Text("HOLD STEADY", color = Palette.led, fontSize = 16.sp,
                     fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, modifier = Modifier.align(Alignment.Center))
             }
@@ -287,7 +288,8 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                 DeckButton("BAG", Modifier) { openBag() }
                 if (body.parallaxAvailable) {
                     Spacer(Modifier.width(12.dp))
-                    ParallaxSwitch(body.parallaxOn) { body.toggleParallax(); haptics.click() }
+                    @Suppress("UNUSED_VARIABLE") val tick = body.focusLearnTick
+                    ParallaxSwitch(body.parallaxOn, body.focusLearning(framing?.camera?.id)) { body.toggleParallax(); haptics.click() }
                 }
             }
             ShutterRelease(busy = body.busy) {
@@ -646,7 +648,7 @@ fun dofMarks(lens: Lens, n: Float, s: Float): List<Pair<Float, Color>> {
  * shot is followed by the guided left and right frames (ParallaxCapture).
  */
 @Composable
-private fun ParallaxSwitch(on: Boolean, onToggle: () -> Unit) {
+private fun ParallaxSwitch(on: Boolean, focus: Pair<Int, Boolean>, onToggle: () -> Unit) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable(onClick = onToggle).padding(4.dp)) {
         Canvas(Modifier.size(10.dp)) {
             // a little green lamp, glowing when on (the meter tab's green)
@@ -664,6 +666,10 @@ private fun ParallaxSwitch(on: Boolean, onToggle: () -> Unit) {
         }
         Spacer(Modifier.height(4.dp))
         Text("PARALLAX", color = if (on) Palette.cream else Palette.dim, fontSize = 7.sp, letterSpacing = 1.sp)
+        // the focus calibration it teaches (on autofocus shots): learning, then settled; a nudge when off and unsettled
+        val (n, settled) = focus
+        Text(if (settled) "FOCUS ✓" else if (on) "FOCUS ${minOf(n, 3)}/3" else "FOCUS ?",
+            color = if (settled) Color(0xFF73F2B3) else if (on) Palette.dim else Palette.amber, fontSize = 7.sp, letterSpacing = 1.sp)
     }
 }
 
@@ -673,7 +679,7 @@ private fun ParallaxSwitch(on: Boolean, onToggle: () -> Unit) {
  * hint in the finder's own lettering. ✕ gives up (the frame keeps single-shot depth).
  */
 @Composable
-private fun ParallaxFinder(pc: app.relens.parallax.ParallaxCapture, modifier: Modifier) {
+private fun ParallaxFinder(pc: app.relens.parallax.ParallaxCapture, body: Body, modifier: Modifier) {
     val hint by pc.hint.collectAsState()
     val phase by pc.phase.collectAsState()
     val held by pc.held.collectAsState()
@@ -693,7 +699,15 @@ private fun ParallaxFinder(pc: app.relens.parallax.ParallaxCapture, modifier: Mo
             modifier = Modifier.align(Alignment.TopEnd).clickable { pc.cancel() }.padding(12.dp))
         // The hint upright for the photographer, however the phone is held.
         Box(Modifier.fillMaxSize().padding(22.dp), contentAlignment = Alignment.Center) {
-            Text(hint, color = Color(0xFFFFEBCC), fontSize = 15.sp,
+            if (!body.parallaxIntroSeen) Box(Modifier.align(Alignment.Center).padding(20.dp).clip(RoundedCornerShape(8.dp))
+            .background(Color(0xE6141312)).clickable { body.dismissParallaxIntro() }.padding(16.dp)) {
+            Text("PARALLAX\n\nGlide the camera to the ghost on the left, then on the right: each frame is taken by itself " +
+                "when you line up. The three views measure the scene's depth, so the blur falls where it should.\n\n" +
+                "Shot on autofocus (tap to focus), they also teach the camera's focus: once the switch reads FOCUS ✓ you can " +
+                "turn parallax off for moving subjects and quick shots.\n\ntap to close",
+                color = Palette.cream, fontSize = 12.sp, lineHeight = 16.sp)
+        }
+        Text(hint, color = Color(0xFFFFEBCC), fontSize = 15.sp,
                 modifier = Modifier.align(when (held) { 90 -> Alignment.CenterEnd; 270 -> Alignment.CenterStart; 180 -> Alignment.TopCenter; else -> Alignment.BottomCenter })
                     .graphicsLayer { rotationZ = -held.toFloat() })
         }
@@ -731,3 +745,14 @@ private fun ModelsBanner(body: Body) {
         }
     }
 }
+
+/**
+ * The camera body keeps a phone's proportions: on a wide screen (a tablet, an unfolded
+ * foldable, a landscape window: Android 16 lets those rotate a portrait app) it stands centred
+ * at the screen's height rather than stretching sideways.
+ */
+private fun Modifier.portraitBody() = this.then(Modifier.layout { m, c ->
+    val w = if (c.hasBoundedHeight && c.maxWidth > c.maxHeight * 0.62f) (c.maxHeight * 0.56f).toInt() else c.maxWidth
+    val p = m.measure(c.copy(minWidth = w, maxWidth = w))
+    layout(c.maxWidth, p.height) { p.place((c.maxWidth - w) / 2, 0) }
+})
