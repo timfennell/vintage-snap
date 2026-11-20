@@ -119,6 +119,18 @@ For still subjects: a hero shot plus two flanking frames give measured depth
 - Single-shot mode (people, pets, anything moving) stays: Depth Anything +
   Metric3D + the autofocus anchor.
 
+### Phone findings (2026-11-20, Nothing Phone (3a) Pro)
+
+- ARCore: SUPPORTED_INSTALLED; a Shared Camera session works, on camera 0
+  only (CPU images 640x480, 1280x720 or 1920x1080, GPU 1920x1080, 30 fps);
+  depth modes AUTOMATIC and RAW_DEPTH_ONLY supported (no depth sensor).
+  So Parallax runs ARCore on the main camera; lenses on the periscope or
+  ultra-wide switch to the main camera for the guided side frames.
+- Ultra-wide light map: the logical camera 4 streams 0+2 and 3+2 together
+  as YUV, but RAW through it fails, and the only concurrent pair is back 0 +
+  front 1. So the map is one ultra-wide frame taken right after the shot,
+  under HOLD STEADY (about 0.9 s), registered by angle.
+
 ## The lens's own field of view, on 35 mm's 3:2 (Tim, 2026-11-19)
 
 - The finder and the print show exactly what the mounted lens frames, in
