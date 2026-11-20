@@ -286,7 +286,9 @@ class Bench(private val ctx: Context, private val ui: (String) -> Unit) {
             focusX = num("fx") ?: 0.5f, focusY = num("fy") ?: 0.5f,
             cameraFocusD = num("subject")?.let { 1f / it },
             lens = lens, fNumber = num("f") ?: lens.maxAperture, focusM = num("focusm"),
-            stock = stock, push = 0, frame = 1, tiltDeg = pair("tilt"), shiftMM = pair("shift"), publish = false)
+            stock = stock, push = 0, frame = 1, tiltDeg = pair("tilt"), shiftMM = pair("shift"), publish = false,
+            filter = str("filter")?.let { f -> app.relens.optics.lensFilters.first { it.name.contains(f, ignoreCase = true) } }
+                ?: app.relens.optics.lensFilters[0])
         log("develop ${lens.name} f/${job.fNumber} on ${stock.name}, focus ${job.focusX},${job.focusY}")
         val dev = app.relens.engine.Developer(ctx)
         val print = kotlinx.coroutines.runBlocking { dev.develop(job) }

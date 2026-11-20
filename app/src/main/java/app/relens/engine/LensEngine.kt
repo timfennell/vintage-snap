@@ -3,6 +3,8 @@ package app.relens.engine
 import android.opengl.GLES30
 import app.relens.film.FilmStock
 import app.relens.optics.Lens
+import app.relens.optics.LensFilter
+import app.relens.optics.lensFilters
 import android.opengl.GLES31
 import java.nio.ByteBuffer
 import kotlin.math.PI
@@ -44,6 +46,8 @@ data class Look(
     val levelBias: Float = 0f,
     /** A JPEG's clipped point lights are restored this much (0 for RAW, which isn't clipped). */
     val pointBoost: Float = 8f,
+    /** The filter on the lens. */
+    val filter: LensFilter = lensFilters[0],
 ) {
     val focusM: Float get() = 1f / maxOf(focusD, 1e-3f)
 
@@ -236,6 +240,21 @@ class LensEngine(private val gl: Gl) {
             gl.deleteTextures(lin); lin = sm
         }
         dump?.invoke("gather", lin, w, h, 0)
+        val fl = look.filter
+        if (!fl.isNone) timed("filter") {
+            val fo = gl.texture(w, h, GLES30.GL_RGBA16F)
+            val p = gl.use("filter")
+            gl.sampler(p, "uIn", 0, lin)
+            gl.image(0, fo, GLES30.GL_RGBA16F)
+            val tl = maxOf(fl.transmittance, 1e-4f)
+            gl.u3f(p, "uColour", fl.transmission[0] / tl, fl.transmission[1] / tl, fl.transmission[2] / tl)
+            gl.u4f(p, "uStar", fl.starPoints.toFloat(), fl.starStrength, if (fl.spectral) 1f else 0f, 0.35f)
+            gl.u4f(p, "uGlow", fl.glow, fl.soften, fl.veil, 0.9f)
+            val rows = max(64, (1_000_000 / w) / 8 * 8)
+            var y = 0
+            while (y < h) { gl.u2i(p, "uOffset", 0, y); gl.dispatch(w, min(rows, h - y)); GLES30.glFlush(); y += rows }
+            gl.deleteTextures(lin); lin = fo
+        }
         timed("film develop") {
             val p = gl.use("develop")
             gl.sampler(p, "uIn", 0, lin)

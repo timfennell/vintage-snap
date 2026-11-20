@@ -103,7 +103,8 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                 surface?.let { req ->
                     CameraXViewfinder(
                         surfaceRequest = req,
-                        implementationMode = ImplementationMode.EXTERNAL,
+                        // Embedded (a TextureView): the filter's tint can blend over it.
+                        implementationMode = ImplementationMode.EMBEDDED,
                         coordinateTransformer = transformer,
                         contentScale = ContentScale.Fit,
                         modifier = Modifier.fillMaxSize()
@@ -134,13 +135,23 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                             },
                     )
                 }
+                // Through the filter: the finder sees its colour (normalised: the meter makes up the light).
+                val fl = body.filter
+                if (!fl.isNone && fl.stops < 5f) {
+                    val tl = maxOf(fl.transmittance, 1e-4f)
+                    val tint = Color((fl.transmission[0] / tl).coerceIn(0f, 1f), (fl.transmission[1] / tl).coerceIn(0f, 1f),
+                        (fl.transmission[2] / tl).coerceIn(0f, 1f))
+                    if (tint != Color.White) Canvas(Modifier.fillMaxSize()) {
+                        drawRect(tint, blendMode = androidx.compose.ui.graphics.BlendMode.Multiply)
+                    }
+                }
                 FinderOverlay(body.focusX, body.focusY, Modifier.fillMaxSize())
                 when (lens.movement) {
                     is Movement.Tilt -> SharpBand(body, Modifier.fillMaxSize())
                     is Movement.Shift -> ShiftGuides(Modifier.fillMaxSize())
                     Movement.None -> {}
                 }
-                Text("${lens.name}  ·  ${body.stock.name}", color = Palette.cream.copy(alpha = 0.8f), fontSize = 10.sp,
+                Text("${lens.name}${if (body.filter.isNone) "" else " + " + body.filter.name}  ·  ${body.stock.name}", color = Palette.cream.copy(alpha = 0.8f), fontSize = 10.sp,
                     modifier = Modifier.align(Alignment.TopStart).padding(8.dp))
                 if (blackout > 0f) Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = blackout)))
             }

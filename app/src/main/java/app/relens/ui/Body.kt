@@ -16,6 +16,8 @@ import app.relens.engine.DevelopJob
 import app.relens.engine.Developer
 import app.relens.film.filmStocks
 import app.relens.optics.Movement
+import app.relens.optics.fits
+import app.relens.optics.lensFilters
 import app.relens.optics.lensBag
 import kotlinx.coroutines.launch
 import java.io.File
@@ -55,6 +57,9 @@ class Body(app: Application) : AndroidViewModel(app) {
             camera.manualFocus(focusM?.let { if (it.isInfinite()) 0f else 1f / it })
         }
     var stockIndex by mutableIntStateOf(prefs.getInt("stock", 1)); private set
+    /** The filter on the lens (index into lensFilters; 0 = none). */
+    var filterIndex by mutableIntStateOf(prefs.getInt("filter", 0)); private set
+    val filter get() = lensFilters[filterIndex]
     var push by mutableIntStateOf(prefs.getInt("push", 0)); private set
     var framesShot by mutableIntStateOf(prefs.getInt("frames", 0)); private set
     var rollNumber by mutableIntStateOf(prefs.getInt("roll", 1)); private set
@@ -107,6 +112,13 @@ class Body(app: Application) : AndroidViewModel(app) {
         aperturePos = lens.apertureStops.withIndex().minBy { kotlin.math.abs(it.value - n) }.index.toFloat()
         focusPos = Float.NaN
         centreMovements()
+        // An effect filter can't go on the back of a fisheye or mirror lens.
+        if (!lens.fits(filter)) filterIndex = 0
+        save()
+    }
+
+    fun screwOn(index: Int) {
+        filterIndex = if (lens.fits(lensFilters[index])) index else 0
         save()
     }
 
@@ -146,7 +158,7 @@ class Body(app: Application) : AndroidViewModel(app) {
 
     fun save() {
         prefs.edit().putInt("lens", lensIndex).putFloat("aperture", aperturePos).putFloat("focus", focusPos)
-            .putInt("stock", stockIndex).putInt("push", push).putInt("frames", framesShot).putInt("roll", rollNumber).apply()
+            .putInt("stock", stockIndex).putInt("filter", filterIndex).putInt("push", push).putInt("frames", framesShot).putInt("roll", rollNumber).apply()
     }
 
     fun shoot(onShot: () -> Unit = {}) {
@@ -158,12 +170,14 @@ class Body(app: Application) : AndroidViewModel(app) {
         val lens = lens; val n = fNumber; val fm = focusM; val stock = stock; val push = push
         val fx = focusX; val fy = focusY
         val tilt = floatArrayOf(tiltX, tiltY); val shift = floatArrayOf(shiftX, shiftY)
+        val filter = filter
         val moved = when (lens.movement) {
             is Movement.Tilt -> if (tiltX != 0f || tiltY != 0f) " · tilt %.0f°".format(kotlin.math.hypot(tiltX, tiltY)) else ""
             is Movement.Shift -> if (shiftX != 0f || shiftY != 0f) " · shift %.0f/%.0f mm".format(shiftX, shiftY) else ""
             else -> ""
         }
-        val entry = DarkroomEntry(frame, "Roll $rollNumber · frame $frame · ${lens.name} f/%.1f$moved · ${stock.name}".format(n))
+        val withFilter = if (filter.isNone) "" else " + ${filter.name}"
+        val entry = DarkroomEntry(frame, "Roll $rollNumber · frame $frame · ${lens.name} f/%.1f$moved$withFilter · ${stock.name}".format(n))
         viewModelScope.launch {
             try {
                 val name = "R%03d_F%02d_".format(rollNumber, frame) + SimpleDateFormat("HHmmss", Locale.US).format(Date())
@@ -175,7 +189,7 @@ class Body(app: Application) : AndroidViewModel(app) {
                 if (!developer.modelFile.exists()) {
                     entry.status = "no depth model: run scripts/install.sh"; return@launch
                 }
-                val p = developer.develop(DevelopJob(exp.jpeg, exp.dng, fx, fy, exp.cameraFocusD, lens, n, fm, stock, push, frame, tilt, shift))
+                val p = developer.develop(DevelopJob(exp.jpeg, exp.dng, fx, fy, exp.cameraFocusD, lens, n, fm, stock, push, frame, tilt, shift, filter = filter))
                 entry.preview = p.preview; entry.original = p.original
                 entry.status = if (p.uri != null) "in Pictures/Relens · ${p.timings}" else "saved in the app · ${p.timings}"
                 entry.done = true

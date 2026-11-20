@@ -1,0 +1,89 @@
+// The filter in front of the lens (Vintage Click's filter_fx): its colour, with
+// the meter making up the light it loses (a TTL meter: ND changes nothing you
+// see, a red filter on b&w film darkens blue skies), then its effects: a cross
+// screen's spikes (or a diffraction grating's rainbow streaks) off every bright
+// point, a glow round highlights, an overall soften, a veil of scattered light.
+uniform sampler2D uIn;           // RGBA16F, linear, after the lens
+layout(rgba16f, binding = 0) writeonly uniform image2D uOut;
+uniform vec3 uColour;            // transmission / its luminance
+uniform vec4 uStar;              // (points, strength, 1 = grating, angle)
+uniform vec4 uGlow;              // (glow, soften, veil, highlight threshold)
+uniform ivec2 uOffset;
+
+float hashf(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+// Light brighter than thr, keeping its colour.
+vec3 above(vec3 v, float thr) {
+    float l = luma(v);
+    return v * (max(l - thr, 0.0) / max(l, 1e-4));
+}
+// A spectrum colour, h from 0 (violet) to 1 (red), roughly even in brightness.
+vec3 spectrum(float h) {
+    vec3 c = vec3(smoothstep(0.40, 0.85, h) + 0.4 * (1.0 - smoothstep(0.0, 0.12, h)),
+                  1.0 - clamp(abs(h - 0.52) * 2.4, 0.0, 1.0),
+                  1.0 - smoothstep(0.08, 0.50, h));
+    return clamp(c, 0.0, 1.0) * 1.4;
+}
+vec3 at(vec2 q, vec2 inv) { return textureLod(uIn, q * inv, 0.0).rgb * uColour; }
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy) + uOffset;
+    ivec2 sz = imageSize(uOut);
+    if (p.x >= sz.x || p.y >= sz.y) return;
+    vec2 inv = 1.0 / vec2(sz);
+    vec2 pc = vec2(p) + 0.5;
+    vec3 base = at(pc, inv);
+    vec3 add = vec3(0.0);
+    float thr = uGlow.w;
+    float H = float(min(sz.x, sz.y));
+    float jitter = hashf(pc);
+    int points = int(uStar.x);
+    if (points > 0) {
+        bool spectral = uStar.z > 0.5;
+        float L = H * (spectral ? 0.20 : 0.15);
+        int lines = max(1, points / 2);
+        int n = spectral ? 40 : 20;
+        vec3 star = vec3(0.0);
+        for (int j = 0; j < lines; j++) {
+            float a = uStar.w + float(j) * PI / float(lines);
+            vec2 dir = vec2(cos(a), sin(a));
+            for (int s = 0; s < n; s++) {
+                float t = (float(s) + jitter) / float(n);
+                float d = L * t * t;
+                float w = exp(-3.2 * t) * (2.0 * t / float(n)) * 3.0;
+                for (int side = -1; side <= 1; side += 2) {
+                    vec3 v = above(at(pc - dir * d * float(side), inv), thr);
+                    if (max(v.r, max(v.g, v.b)) <= 0.0) continue;
+                    if (spectral) {
+                        float tc = (float(s) + 0.5) / float(n);
+                        star += mix(v * 1.3, luma(v) * spectrum(fract(tc * 2.2)), smoothstep(0.02, 0.10, tc)) * w;
+                    } else star += v * w;
+                }
+            }
+        }
+        add += star * uStar.y;
+    }
+    if (uGlow.x > 0.0 || uGlow.y > 0.0 || uGlow.z > 0.0) {
+        float rot = jitter * 6.2831853;
+        float gthr = thr * 0.45;
+        vec3 nearS = vec3(0.0), farS = vec3(0.0), nearHi = vec3(0.0), farHi = vec3(0.0);
+        for (int k = 0; k < 20; k++) {
+            float t = (float(k) + 0.5) / 20.0, a = float(k) * 2.39996323 + rot;
+            vec3 v = at(pc + vec2(cos(a), sin(a)) * t * t * H * 0.02, inv);
+            nearS += v; nearHi += above(v, gthr);
+        }
+        for (int k = 0; k < 28; k++) {
+            float t = (float(k) + 0.5) / 28.0, a = float(k) * 2.39996323 + rot;
+            vec3 v = at(pc + vec2(cos(a), sin(a)) * t * t * H * 0.09, inv);
+            farS += v; farHi += above(v, gthr);
+        }
+        nearS /= 20.0; farS /= 28.0; nearHi /= 20.0; farHi /= 28.0;
+        add += uGlow.x * (nearHi * 1.2 + farHi * 1.6);
+        add += uGlow.y * (nearS - base);
+        add += uGlow.z * ((farS - base) * 0.6 + farS * 0.12);
+    }
+    imageStore(uOut, p, vec4(max(base + add, 0.0), 1.0));
+}

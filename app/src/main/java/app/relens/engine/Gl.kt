@@ -109,6 +109,7 @@ class Gl(private val assets: AssetManager) : AutoCloseable {
 
     fun u1f(p: Int, n: String, x: Float) = GLES30.glUniform1f(GLES30.glGetUniformLocation(p, n), x)
     fun u2f(p: Int, n: String, x: Float, y: Float) = GLES30.glUniform2f(GLES30.glGetUniformLocation(p, n), x, y)
+    fun u3f(p: Int, n: String, a: Float, b: Float, c: Float) = GLES30.glUniform3f(GLES30.glGetUniformLocation(p, n), a, b, c)
     fun u4f(p: Int, n: String, a: Float, b: Float, c: Float, d: Float) = GLES30.glUniform4f(GLES30.glGetUniformLocation(p, n), a, b, c, d)
     fun u1i(p: Int, n: String, x: Int) = GLES30.glUniform1i(GLES30.glGetUniformLocation(p, n), x)
     fun u1ui(p: Int, n: String, x: Int) = GLES30.glUniform1ui(GLES30.glGetUniformLocation(p, n), x)

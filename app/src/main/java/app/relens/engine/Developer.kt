@@ -45,6 +45,8 @@ data class DevelopJob(
     val shiftMM: FloatArray = floatArrayOf(0f, 0f),
     /** Copy the print into the gallery (the bench's test developments don't). */
     val publish: Boolean = true,
+    /** The filter on the lens. */
+    val filter: app.relens.optics.LensFilter = app.relens.optics.lensFilters[0],
 )
 
 class Print(
@@ -142,7 +144,7 @@ class Developer(private val context: Context) {
         }
         val look = Look(job.lens, job.fNumber, dispA = dispA, dispB = dispB, focusD = focusD, viewFocal = viewFocal,
             tiltD = tiltD, keystone = Movements.keystone(job.lens, job.shiftMM),
-            stock = job.stock, push = job.push, samples = 256, levelBias = -1f,
+            stock = job.stock, push = job.push, samples = 256, levelBias = -1f, filter = job.filter,
             pointBoost = if (job.dng != null) 0f else 8f)
         if (!job.publish) eng.dump = { name, tex, dw, dh, level ->
             if (name == "coc work L0") {
@@ -209,7 +211,8 @@ class Developer(private val context: Context) {
             e.setAttribute(ExifInterface.TAG_LENS_MODEL, ascii(job.lens.name))
             e.setAttribute(ExifInterface.TAG_F_NUMBER, "%.1f".format(job.fNumber))
             e.setAttribute(ExifInterface.TAG_FOCAL_LENGTH, "${job.lens.focalMM.toInt()}/1")
-            e.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, ascii("${job.lens.name} at f/%.1f, focused %.2f m, on %s%s".format(
+            e.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, ascii("${job.lens.name}%s at f/%.1f, focused %.2f m, on %s%s".format(
+                if (job.filter.isNone) "" else " + " + job.filter.name,
                 job.fNumber, look.focusM, job.stock.name, if (job.push != 0) " (push %+d)".format(job.push) else "")))
             e.saveAttributes()
         }

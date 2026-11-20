@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -43,7 +44,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.relens.film.filmStocks
 import app.relens.optics.Movement
+import app.relens.optics.fits
 import app.relens.optics.lensBag
+import app.relens.optics.lensFilters
 import app.relens.optics.lensCollections
 import kotlin.math.pow
 
@@ -65,14 +68,17 @@ private fun Panel(title: String, subtitle: String, onBack: () -> Unit, content: 
 fun LensBagScreen(body: Body, haptics: Haptics, onBack: () -> Unit) {
     val mounted = body.lens
     var shelf by remember { mutableIntStateOf(lensCollections.indexOfFirst { it.name == mounted.collection }.coerceAtLeast(0)) }
-    Panel("CAMERA BAG", lensCollections[shelf].about, onBack) {
+    val filtersShelf = lensCollections.size
+    Panel("CAMERA BAG", if (shelf == filtersShelf) "screw-in and drop-in filters: colour for b&w and colour film, ND, effects"
+        else lensCollections[shelf].about, onBack) {
         Row(Modifier.horizontalScroll(rememberScrollState()).padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            lensCollections.forEachIndexed { i, c ->
-                Text(c.name, color = if (i == shelf) Palette.leather else Palette.cream, fontSize = 12.sp,
+            (lensCollections.map { it.name } + "Filters").forEachIndexed { i, name ->
+                Text(name, color = if (i == shelf) Palette.leather else Palette.cream, fontSize = 12.sp,
                     modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(if (i == shelf) Palette.amber else Palette.panel)
                         .clickable { shelf = i; haptics.tick() }.padding(horizontal = 10.dp, vertical = 6.dp))
             }
         }
+        if (shelf == filtersShelf) { FilterShelf(body, haptics, onBack); return@Panel }
         LazyColumn(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(Palette.panel)) {
             itemsIndexed(lensCollections[shelf].lenses) { _, lens ->
                 val on = lens.name == mounted.name
@@ -91,6 +97,33 @@ fun LensBagScreen(body: Body, haptics: Haptics, onBack: () -> Unit) {
                     }
                     Text(lens.inspiredBy, color = Palette.dim, fontSize = 11.sp)
                 }
+            }
+        }
+    }
+}
+
+/** The filters: tap one to screw it on (a rear-filter lens takes colour and ND only). */
+@Composable
+private fun FilterShelf(body: Body, haptics: Haptics, onBack: () -> Unit) {
+    val lens = body.lens
+    LazyColumn(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(Palette.panel)) {
+        itemsIndexed(lensFilters) { i, f ->
+            val on = i == body.filterIndex
+            val fits = lens.fits(f)
+            Row(Modifier.fillMaxWidth().background(if (on) Color(0x33E8B04A) else Color.Transparent)
+                .clickable(enabled = fits) { body.screwOn(i); haptics.click(); onBack() }
+                .padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+                // a swatch of the filter's colour
+                Box(Modifier.size(18.dp).clip(RoundedCornerShape(9.dp)).background(
+                    Color(f.transmission[0].coerceIn(0f, 1f), f.transmission[1].coerceIn(0f, 1f), f.transmission[2].coerceIn(0f, 1f))))
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text((if (on) "▶ " else "") + f.name, color = when { on -> Palette.amber; fits -> Palette.cream; else -> Palette.dim },
+                        fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    Text(if (fits) f.about else "doesn't fit the ${lens.name}: rear filters take colour and ND only",
+                        color = Palette.dim, fontSize = 11.sp)
+                }
+                if (f.stops >= 0.25f) Text("-%.1f EV".format(f.stops), color = Palette.dim, fontSize = 11.sp)
             }
         }
     }
