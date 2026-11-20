@@ -279,8 +279,10 @@ class Rig(private val context: Context) {
             if (afWatch && af != lastAfState) {
                 lastAfState = af
                 app.relens.Trace.i("AF state $af, lens at %s".format(own.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { "%.2f D (%.2f m)".format(it, 1 / maxOf(it, 1e-3f)) } ?: "-"))
+                if (af == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED) sweepWait?.complete(null)
                 if (af == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED) {
-                    own.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { raw ->
+                    own.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { raw -> sweepWait?.complete(corrected(heroId ?: "0", raw)) }
+                    if (sweepWait == null) own.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { raw ->
                         val id = heroId ?: "0"
                         afSamples.add(AfSample(tapX, tapY, corrected(id, raw), id, System.currentTimeMillis()))
                         while (afSamples.size > 12) afSamples.removeAt(0)
@@ -491,6 +493,40 @@ class Rig(private val context: Context) {
         app.relens.Trace.i("raw test on camera ${fr.camera.id}: $out")
         return out
     }
+
+    /**
+     * The rangefinder sweep, right after the hero frame while the camera is held steady:
+     * autofocus on each point (fractions of the lens's crop) in turn, and keep the corrected
+     * distance where it locks. Points that won't lock (no texture) are dropped. Afterwards
+     * focus goes back to where it was (the tapped subject, or the ring).
+     */
+    suspend fun sweep(points: List<Pair<Float, Float>>): List<AfSample> {
+        val out = ArrayList<AfSample>()
+        val savedRegion = afRegion; val savedManual = manualD; val savedTap = Pair(tapX, tapY)
+        for ((fx, fy) in points) {
+            val locked = CompletableDeferred<Float?>()
+            sweepWait = locked
+            focusAt(fx, fy)
+            val d = try { withTimeout(700) { locked.await() } } catch (t: Throwable) { null }
+            sweepWait = null
+            if (d != null) out.add(AfSample(fx, fy, d, heroId ?: "0", System.currentTimeMillis()))
+        }
+        handler.post {
+            afRegion = savedRegion; manualD = savedManual; tapX = savedTap.first; tapY = savedTap.second
+            afWatch = false
+            safely("restore focus") {
+                val s = session ?: return@post; val p = preview ?: return@post
+                val b = baseRequest(CameraDevice.TEMPLATE_PREVIEW) ?: return@post
+                b.addTarget(p)
+                if (savedRegion != null) b.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START)
+                s.capture(b.build(), resultCallback, handler)
+            }
+            repeat()
+        }
+        app.relens.Trace.i("sweep: ${out.size}/${points.size} locked: " + out.joinToString { "(%.2f,%.2f %.2f m)".format(it.fx, it.fy, 1 / maxOf(it.dioptres, 1e-3f)) })
+        return out
+    }
+    @Volatile private var sweepWait: CompletableDeferred<Float?>? = null
 
     /** Takes a frame: JPEG (and DNG when the camera gives RAW) into [dir]. */
     suspend fun shoot(dir: File, name: String): Exposure {

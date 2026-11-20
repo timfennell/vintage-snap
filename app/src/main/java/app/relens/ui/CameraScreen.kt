@@ -73,7 +73,15 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
     val lens = body.lens
     // The mirror: up for the exposure, the finder black; down again, the picture back.
     var mirrorUp by remember { mutableStateOf(false) }
-    LaunchedEffect(mirrorUp) { if (mirrorUp) { kotlinx.coroutines.delay(150); mirrorUp = false } }
+    // The mirror stays up while the frame is taken and the rangefinder sweep runs (hold steady),
+    // and drops when both are done, as a slow exposure keeps an SLR's finder dark.
+    LaunchedEffect(mirrorUp) {
+        if (mirrorUp) {
+            kotlinx.coroutines.delay(150)
+            while (body.busy || body.sweeping) kotlinx.coroutines.delay(30)
+            mirrorUp = false
+        }
+    }
     val blackout by animateFloatAsState(if (mirrorUp) 1f else 0f,
         androidx.compose.animation.core.tween(if (mirrorUp) 0 else 110), label = "mirror")
 
@@ -144,6 +152,8 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                     modifier = Modifier.align(Alignment.TopStart).padding(8.dp))
                 rigError?.let { Text(it, color = Palette.led, fontSize = 11.sp, modifier = Modifier.align(Alignment.Center).padding(16.dp)) }
                 if (blackout > 0f) Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = blackout)))
+                if (mirrorUp && (body.busy || body.sweeping)) Text("HOLD STEADY", color = Palette.led, fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, modifier = Modifier.align(Alignment.Center))
             }
         }
 

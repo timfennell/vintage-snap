@@ -13,6 +13,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.relens.Trace
 import app.relens.camera.Rig
+import app.relens.camera.Sweep
 import app.relens.engine.DevelopJob
 import app.relens.engine.Developer
 import app.relens.film.filmStocks
@@ -74,6 +75,9 @@ class Body(app: Application) : AndroidViewModel(app) {
     var shiftX by mutableFloatStateOf(0f)
     var shiftY by mutableFloatStateOf(0f)
     var busy by mutableStateOf(false); private set
+    /** The rangefinder sweep after the shot: the finder asks the photographer to hold steady. */
+    var sweeping by mutableStateOf(false); private set
+    private val steadiness = Sweep.Steadiness(app)
     /** The last thing that went wrong, shown on the body until the next shot. */
     var message by mutableStateOf<String?>(null)
     val darkroom = mutableStateListOf<DarkroomEntry>()
@@ -195,6 +199,20 @@ class Body(app: Application) : AndroidViewModel(app) {
                 val framing = rig.framing.value ?: error("no camera for this lens")
                 val exp = rig.shoot(File(getApplication<Application>().getExternalFilesDir("negatives"), ""), name)
                 framesShot = frame; save()
+                // The rangefinder sweep while the camera is still held as it was: distances at a few
+                // well-textured points of this very frame, kept only if the camera didn't turn.
+                sweeping = true
+                steadiness.start()
+                val pts = runCatching { Sweep.points(exp.jpeg, framing.crop) }.getOrDefault(emptyList())
+                var swept = runCatching { rig.sweep(pts) }.getOrDefault(emptyList())
+                steadiness.stop()
+                // allowed turn: a twentieth of the lens's field of view (its long side)
+                val fov = Math.toDegrees(2 * kotlin.math.atan(18.0 / lens.focalMM)).toFloat()
+                if (steadiness.degrees > fov / 20f) {
+                    Trace.w("sweep discarded: the camera turned %.2f degrees (allowed %.2f)".format(steadiness.degrees, fov / 20f))
+                    swept = emptyList()
+                }
+                sweeping = false
                 onShot()
                 busy = false
                 darkroom.add(0, entry)
@@ -203,8 +221,8 @@ class Body(app: Application) : AndroidViewModel(app) {
                 }
                 val p = developer.develop(DevelopJob(exp.jpeg, exp.dng, fx, fy, exp.cameraFocusD, lens, n, fm, stock, push, frame, tilt, shift,
                     filter = filter, crop = framing.crop, focalOverLong = framing.camera.focalMM / framing.camera.sensorLongMM,
-                    // taps from the last half minute on this camera: distance samples for the depth map
-                    afSamples = rig.afSamples.filter { System.currentTimeMillis() - it.timeMs < 30_000 && it.cameraId == framing.camera.id }))
+                    // the sweep's distances, measured on this very frame
+                    afSamples = swept))
                 entry.preview = p.preview; entry.original = p.original
                 entry.status = if (p.uri != null) "in Pictures/Relens · ${p.timings}" else "saved in the app · ${p.timings}"
                 entry.done = true
