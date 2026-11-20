@@ -44,7 +44,10 @@ import kotlin.math.hypot
  * Runs on the main camera (the only one ARCore shares on this phone); the hero's
  * own camera is closed first (Rig.release) and reopened after.
  */
-class ParallaxCapture(private val ctx: Context, val dir: File, subjectM: Float, private val onFire: () -> Unit) : GlTextureLoop.Renderer {
+class ParallaxCapture(private val ctx: Context, val dir: File, subjectM: Float,
+                      /** How the phone is held (0, 90, 180, 270: the orientation listener's degrees). */
+                      private val rotation: () -> Int = { 0 },
+                      private val onFire: () -> Unit) : GlTextureLoop.Renderer {
     enum class Phase { STARTING, LEFT, RIGHT, DONE, FAILED }
 
     private val _phase = MutableStateFlow(Phase.STARTING)
@@ -54,6 +57,9 @@ class ParallaxCapture(private val ctx: Context, val dir: File, subjectM: Float, 
     /** 0 far from the target, 1 on it. */
     private val _closeness = MutableStateFlow(0f)
     val closeness: StateFlow<Float> = _closeness
+    /** How the phone is held, for turning the finder's lettering upright. */
+    private val _held = MutableStateFlow(0)
+    val held: StateFlow<Int> = _held
 
     /** Where the subject is (m), and how far apart the views are: about a fifteenth of it. */
     private val subject = subjectM.coerceIn(0.3f, 20f)
@@ -168,20 +174,37 @@ class ParallaxCapture(private val ctx: Context, val dir: File, subjectM: Float, 
             return true
         }
         val side = if (phase == Phase.LEFT) -1f else 1f
-        val target = o.compose(Pose.makeTranslation(side * baseline, 0f, 0f))
+        // Left and right are the room's, whichever way the phone is held: along the level
+        // line across the hero's view (ARCore's world y is up, against gravity).
+        val f = o.zAxis.let { z -> floatArrayOf(-z[0], -z[1], -z[2]) }
+        val up = floatArrayOf(0f, 1f, 0f)
+        val r = norm(cross(f, up)).takeIf { it.any { c -> c != 0f } } ?: o.xAxis
+        val ot = o.translation
+        val target = Pose(floatArrayOf(ot[0] + side * baseline * r[0], ot[1] + side * baseline * r[1], ot[2] + side * baseline * r[2]),
+            o.rotationQuaternion)
 
-        // How far off: in the hero's own axes (x right, y up, z back), and the turn.
-        val local = o.inverse().transformPoint(pose.translation)
-        val ex = local[0] - side * baseline; val ey = local[1]; val ez = local[2]
+        // How far off: across (the room's right), up, and along the view (back positive), and the turn.
+        val pt = pose.translation; val tt = target.translation
+        val e = floatArrayOf(pt[0] - tt[0], pt[1] - tt[1], pt[2] - tt[2])
+        val ex = dot(e, r); val ey = dot(e, norm(cross(r, f))); val ez = -dot(e, f)
         val lateral = hypot(ex, ey)
         val turn = angleBetween(target, pose)
         val onIt = lateral < 0.015f && abs(ez) < 0.04f && turn < 5f
         _closeness.value = (1f - lateral / baseline).coerceIn(0f, 1f) * (if (turn < 5f) 1f else 0.6f)
+        // The way to go, as the photographer sees it: the move into the screen's axes, turned
+        // to how the phone is held (the hint is drawn upright for them).
+        val held = rotation(); _held.value = held
+        val mv = FloatArray(4)
+        val viewNow = FloatArray(16); cam.getViewMatrix(viewNow, 0)
+        android.opengl.Matrix.multiplyMV(mv, 0, viewNow, 0, floatArrayOf(-e[0], -e[1], -e[2], 0f), 0)
+        val th = Math.toRadians(-held.toDouble())
+        val ux = (mv[0] * kotlin.math.cos(th) - mv[1] * kotlin.math.sin(th)).toFloat()
+        val uy = (mv[0] * kotlin.math.sin(th) + mv[1] * kotlin.math.cos(th)).toFloat()
         _hint.value = when {
             onIt -> "hold…"
             lateral >= 0.015f -> {
-                val dir = if (abs(ex) > abs(ey)) (if (ex > 0) "← left" else "right →") else (if (ey > 0) "↓ lower" else "↑ higher")
-                "$dir  %.1f cm".format(lateral * 100)
+                val arrow = if (abs(ux) > abs(uy)) (if (ux > 0) "→" else "←") else (if (uy > 0) "↑" else "↓")
+                "$arrow  %.1f cm".format(lateral * 100)
             }
             abs(ez) >= 0.04f -> if (ez > 0) "a little closer" else "a little back"
             else -> "turn back toward the subject"
@@ -313,6 +336,10 @@ class ParallaxCapture(private val ctx: Context, val dir: File, subjectM: Float, 
         val fr = JSONObject(); for ((k, v) in shots) fr.put(k, v); j.put("frames", fr)
         File(dir, "parallax.json").writeText(j.toString(1))
     }
+
+    private fun cross(a: FloatArray, b: FloatArray) = floatArrayOf(a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+    private fun dot(a: FloatArray, b: FloatArray) = a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    private fun norm(a: FloatArray): FloatArray { val l = kotlin.math.sqrt(dot(a, a)); return if (l < 1e-6f) floatArrayOf(0f, 0f, 0f) else floatArrayOf(a[0] / l, a[1] / l, a[2] / l) }
 
     private fun Float.fmt() = "%.3f".format(this)
 

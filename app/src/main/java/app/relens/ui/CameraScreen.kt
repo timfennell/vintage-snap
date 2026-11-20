@@ -586,15 +586,18 @@ fun dofMarks(lens: Lens, n: Float, s: Float): List<Pair<Float, Color>> {
 }
 
 /**
- * The parallax switch on the deck: a small lever, its lamp amber when on. On, each
+ * The parallax switch on the deck: a small lever, its lamp glowing green when on. On, each
  * shot is followed by the guided left and right frames (ParallaxCapture).
  */
 @Composable
 private fun ParallaxSwitch(on: Boolean, onToggle: () -> Unit) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable(onClick = onToggle).padding(4.dp)) {
         Canvas(Modifier.size(10.dp)) {
-            if (on) drawCircle(Brush.radialGradient(listOf(Palette.amber.copy(alpha = 0.55f), Color.Transparent)), size.minDimension * 0.9f)
-            drawCircle(if (on) Palette.amber else Color(0xFF2A2622), size.minDimension / 2.6f)
+            // a little green lamp, glowing when on (the meter tab's green)
+            val lamp = Color(0xFF73F2B3)
+            if (on) drawCircle(Brush.radialGradient(listOf(lamp.copy(alpha = 0.6f), Color.Transparent), radius = size.minDimension * 1.1f), size.minDimension * 1.1f)
+            drawCircle(if (on) lamp else Color(0xFF1F2A24), size.minDimension / 2.6f)
+            if (on) drawCircle(Color.White.copy(alpha = 0.6f), size.minDimension / 7f, center + Offset(-size.minDimension / 12f, -size.minDimension / 12f))
         }
         Spacer(Modifier.height(4.dp))
         // the lever: up for on
@@ -604,7 +607,7 @@ private fun ParallaxSwitch(on: Boolean, onToggle: () -> Unit) {
                 .background(Brush.radialGradient(listOf(Palette.chromeHi, Palette.chromeLo))))
         }
         Spacer(Modifier.height(4.dp))
-        Text("PARALLAX", color = if (on) Palette.amber else Palette.dim, fontSize = 7.sp, letterSpacing = 1.sp)
+        Text("PARALLAX", color = if (on) Palette.cream else Palette.dim, fontSize = 7.sp, letterSpacing = 1.sp)
     }
 }
 
@@ -617,6 +620,7 @@ private fun ParallaxSwitch(on: Boolean, onToggle: () -> Unit) {
 private fun ParallaxFinder(pc: app.relens.parallax.ParallaxCapture, modifier: Modifier) {
     val hint by pc.hint.collectAsState()
     val phase by pc.phase.collectAsState()
+    val held by pc.held.collectAsState()
     Box(modifier.background(Color.Black)) {
         androidx.compose.ui.viewinterop.AndroidView(modifier = Modifier.fillMaxSize(), factory = { ctx ->
             android.view.TextureView(ctx).apply { surfaceTextureListener = pc.loop }
@@ -631,7 +635,11 @@ private fun ParallaxFinder(pc: app.relens.parallax.ParallaxCapture, modifier: Mo
             modifier = Modifier.align(Alignment.TopStart).padding(12.dp))
         Text("✕", color = Color(0xFFFFEBCC), fontSize = 18.sp,
             modifier = Modifier.align(Alignment.TopEnd).clickable { pc.cancel() }.padding(12.dp))
-        Text(hint, color = Color(0xFFFFEBCC), fontSize = 15.sp,
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 22.dp))
+        // The hint upright for the photographer, however the phone is held.
+        Box(Modifier.fillMaxSize().padding(22.dp), contentAlignment = Alignment.Center) {
+            Text(hint, color = Color(0xFFFFEBCC), fontSize = 15.sp,
+                modifier = Modifier.align(when (held) { 90 -> Alignment.CenterEnd; 270 -> Alignment.CenterStart; 180 -> Alignment.TopCenter; else -> Alignment.BottomCenter })
+                    .graphicsLayer { rotationZ = -held.toFloat() })
+        }
     }
 }

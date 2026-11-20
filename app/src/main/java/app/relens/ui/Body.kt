@@ -94,7 +94,7 @@ class Body(app: Application) : AndroidViewModel(app) {
     /** Testing from the Mac: a parallax capture on its own, into [dir] (no hero shot, no roll). */
     fun parallaxTest(dir: File, subjectM: Float) {
         viewModelScope.launch {
-            val pc = app.relens.parallax.ParallaxCapture(getApplication(), dir, subjectM) { onParallaxFire() }
+            val pc = app.relens.parallax.ParallaxCapture(getApplication(), dir, subjectM, { rig.deviceRotation }) { onParallaxFire() }
             rig.release(); parallax = pc
             val ok = runCatching { pc.run() }.onFailure { Trace.e("parallax test failed", it) }.getOrDefault(false)
             parallax = null; rig.reacquire()
@@ -323,7 +323,7 @@ class Body(app: Application) : AndroidViewModel(app) {
                 if (parallaxOn && parallaxAvailable) {
                     val subjectM = fm?.takeIf { it.isFinite() } ?: exp.cameraFocusD?.takeIf { it > 0.05f }?.let { 1f / it } ?: 2f
                     val pc = app.relens.parallax.ParallaxCapture(getApplication(),
-                        File(getApplication<Application>().getExternalFilesDir("negatives"), "$name.par"), subjectM) { onParallaxFire() }
+                        File(getApplication<Application>().getExternalFilesDir("negatives"), "$name.par"), subjectM, { rig.deviceRotation }) { onParallaxFire() }
                     rig.release()
                     parallax = pc
                     val ok = runCatching { pc.run() }.onFailure { Trace.e("parallax failed", it) }.getOrDefault(false)
