@@ -124,7 +124,11 @@ class LensEngine(private val gl: Gl) {
      * Develops at [w] x [h]. [src] is the camera picture (RGBA8 texture, any
      * size: it is resampled). Returns the RGBA8 print texture (caller deletes it).
      */
-    fun develop(src: Int, dispLo: Int, guideLo: Int, w: Int, h: Int, look: Look): Int {
+    /** With develop(linear = true): the relensed picture before the film (RGBA16F, linear sRGB); the caller deletes it. */
+    var lastLinear = 0; private set
+
+    fun develop(src: Int, dispLo: Int, guideLo: Int, w: Int, h: Int, look: Look, linear: Boolean = false): Int {
+        lastLinear = 0
         timings.clear()
         val levels = if (singleLevel) 1 else min(7, floor(log2(max(w, h).toFloat())).toInt() + 1)
         var lin = gl.texture(w, h, GLES30.GL_RGBA16F)
@@ -319,6 +323,20 @@ class LensEngine(private val gl: Gl) {
             var y = 0
             while (y < h) { gl.u2i(p, "uOffset", 0, y); gl.dispatch(w, min(rows, h - y)); GLES30.glFlush(); y += rows }
             gl.deleteTextures(lin); lin = fo
+        }
+        if (linear) timed("linear") {
+            val lo = gl.texture(w, h, GLES30.GL_RGBA16F)
+            val p = gl.use("linear")
+            gl.sampler(p, "uIn", 0, lin)
+            gl.image(0, lo, GLES30.GL_RGBA16F)
+            gl.u1f(p, "uExposure", 1f)
+            val open = look.lens.maxAperture / look.fNumber
+            gl.u1f(p, "uVignette", look.lens.vignette * open.pow(1.5f))
+            gl.u1f(p, "uLateralCA", look.lens.lateralCA)
+            gl.u2f(p, "uAxis", axisX, axisY)
+            gl.u1f(p, "uHalfDiag", halfDiag)
+            gl.dispatch(w, h)
+            lastLinear = lo
         }
         timed("film develop") {
             val p = gl.use("develop")

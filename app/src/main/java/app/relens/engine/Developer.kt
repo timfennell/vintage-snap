@@ -56,6 +56,8 @@ data class DevelopJob(
     val afSamples: List<app.relens.camera.AfSample> = emptyList(),
     /** Stops over (+) or under (-) as the body's meter and shutter set it (0: as the phone metered). */
     val exposureStops: Float = 0f,
+    /** Also save a linear DNG of the relensed picture (before the film) beside the print. */
+    val saveDng: Boolean = false,
 )
 
 class Print(
@@ -314,7 +316,8 @@ class Developer(private val context: Context) {
         // The lights' flare is exposed as the picture is.
         val stopGain = Math.pow(2.0, job.exposureStops.toDouble()).toFloat()
         eng.extraLights = eng.extraLights?.map { LightSource(it.x, it.y, it.radius, FloatArray(3) { c -> it.energy[c] * stopGain }, it.blur, it.pixels) }
-        val out = eng.develop(src, dispLo, guideLo, w, h, look); lap("lens+film")
+        val out = eng.develop(src, dispLo, guideLo, w, h, look, linear = job.saveDng); lap("lens+film")
+        val linTex = eng.lastLinear
         Trace.i("exposure: %+.1f stops by the meter and shutter%s".format(job.exposureStops, if (rp != null) ", RAW matched x%.2f".format(exposure) else ""))
         app.relens.Trace.i("lights: " + eng.lights.joinToString { "(%.0f,%.0f r%.0f e%.0f blur%.0f)".format(it.x, it.y, it.radius, it.luma, it.blur) })
         val buf = ByteBuffer.allocateDirect(w * h * 4).order(ByteOrder.nativeOrder())
@@ -324,6 +327,19 @@ class Developer(private val context: Context) {
         lap("readback")
 
         val name = "VINTAGESNAP_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + "_%02d".format(job.frame)
+        // The relensed picture as a linear DNG (no film): streamed off the GPU in strips.
+        if (linTex != 0) {
+            runCatching {
+                val dng = File(context.getExternalFilesDir("prints"), "$name.dng")
+                DngWriter.write(dng, w, h, "Vintage Snap", job.lens.name, "Vintage Snap (${job.stock.name} not applied)") { y0, n, into ->
+                    g.readFloatRows(linTex, w, y0, n, into)
+                }
+                if (job.publish) publish(dng, name, "dng", "image/x-adobe-dng")
+                Trace.i("DNG: ${dng.length() / 1_000_000} MB")
+            }.onFailure { Trace.w("DNG not saved", it) }
+            g.deleteTextures(linTex)
+            lap("dng")
+        }
         val file = File(context.getExternalFilesDir("prints"), "$name.jpg")
         file.outputStream().use { print.compress(Bitmap.CompressFormat.JPEG, 95, it) }
         writeExif(file, job, look)
@@ -409,10 +425,10 @@ class Developer(private val context: Context) {
     }
 
     /** Copies the print into the gallery (Pictures/Relens). */
-    private fun publish(f: File, name: String): Uri? {
+    private fun publish(f: File, name: String, ext: String = "jpg", mime: String = "image/jpeg"): Uri? {
         val values = ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, "$name.jpg")
-            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            put(MediaStore.Images.Media.DISPLAY_NAME, "$name.$ext")
+            put(MediaStore.Images.Media.MIME_TYPE, mime)
             put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Vintage Snap")
             put(MediaStore.Images.Media.IS_PENDING, 1)
         }

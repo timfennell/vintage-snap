@@ -83,6 +83,10 @@ class Body(app: Application) : AndroidViewModel(app) {
     var shiftX by mutableFloatStateOf(0f)
     var shiftY by mutableFloatStateOf(0f)
     var busy by mutableStateOf(false); private set
+    /** Save a linear DNG of each relensed picture (no film) beside the print. */
+    var dngOut by mutableStateOf(prefs.getBoolean("dng", true)); private set
+    fun toggleDng() { dngOut = !dngOut; prefs.edit().putBoolean("dng", dngOut).apply() }
+
     /** Parallax capture: after each shot, ARCore guides two side frames for measured depth. */
     val parallaxAvailable: Boolean = runCatching {
         com.google.ar.core.ArCoreApk.getInstance().checkAvailability(app).isSupported
@@ -340,7 +344,7 @@ class Body(app: Application) : AndroidViewModel(app) {
                 val p = developer.develop(DevelopJob(exp.jpeg, exp.dng, fx, fy, exp.cameraFocusD, lens, n, fm, stock, push, frame, tilt, shift,
                     filter = filter, crop = framing.crop, focalOverLong = framing.camera.focalMM / framing.camera.sensorLongMM,
                     // the sweep's distances, measured on this very frame
-                    afSamples = swept, exposureStops = stops))
+                    afSamples = swept, exposureStops = stops, saveDng = dngOut))
                 entry.preview = p.preview; entry.original = p.original
                 entry.status = if (p.uri != null) "in Pictures/Vintage Snap · ${p.timings}" else "saved in the app · ${p.timings}"
                 entry.done = true

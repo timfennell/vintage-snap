@@ -160,6 +160,18 @@ class Gl(private val assets: AssetManager) : AutoCloseable {
         return FloatArray(w * h * 4).also { buf.asFloatBuffer().get(it) }
     }
 
+    /** Reads [rows] rows of a float texture from row [y0] into [buf] (RGBA floats; the export's strips). */
+    fun readFloatRows(tex: Int, w: Int, y0: Int, rows: Int, buf: ByteBuffer) {
+        val fbo = IntArray(1).also { GLES30.glGenFramebuffers(1, it, 0) }[0]
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fbo)
+        GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, tex, 0)
+        buf.position(0)
+        GLES30.glReadPixels(0, y0, w, rows, GLES30.GL_RGBA, GLES30.GL_FLOAT, buf)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        GLES30.glDeleteFramebuffers(1, intArrayOf(fbo), 0)
+        checkErr("readFloatRows")
+    }
+
     fun checkErr(what: String) {
         val e = GLES30.glGetError()
         if (e != GLES30.GL_NO_ERROR) error("GL error 0x${Integer.toHexString(e)} at $what")

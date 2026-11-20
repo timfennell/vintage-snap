@@ -1,0 +1,24 @@
+// The relensed picture before the film: the lens's fall-off and lateral colour
+// (as in develop.comp), scene-linear in linear sRGB primaries, for the DNG.
+uniform sampler2D uIn;           // RGBA16F, linear, after the lens, flare and filter
+layout(rgba16f, binding = 0) writeonly uniform image2D uOut;
+uniform float uExposure;
+uniform float uVignette;
+uniform float uLateralCA;
+uniform vec2 uAxis;
+uniform float uHalfDiag;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 sz = imageSize(uOut);
+    if (p.x >= sz.x || p.y >= sz.y) return;
+    vec2 pc = vec2(p) + 0.5;
+    vec2 inv = 1.0 / vec2(sz);
+    vec2 q = (pc - uAxis) / uHalfDiag;
+    float vig = 1.0 - uVignette * dot(q, q);
+    vec3 lin;
+    lin.r = textureLod(uIn, (uAxis + (pc - uAxis) * (1.0 - uLateralCA)) * inv, 0.0).r;
+    lin.g = texelFetch(uIn, p, 0).g;
+    lin.b = textureLod(uIn, (uAxis + (pc - uAxis) * (1.0 + uLateralCA)) * inv, 0.0).b;
+    imageStore(uOut, p, vec4(max(lin * uExposure * vig, 0.0), 1.0));
+}

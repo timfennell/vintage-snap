@@ -177,6 +177,16 @@ fun FilmScreen(body: Body, haptics: Haptics, onBack: () -> Unit) {
 @Composable
 fun DarkroomScreen(body: Body, onBack: () -> Unit, openBench: () -> Unit) {
     Panel("DARKROOM", "prints are saved to Pictures/Vintage Snap · hold a print to see the negative's source", onBack) {
+        // Raw files of the relensed pictures: a linear DNG (lens, flare, filter; no film) beside each print.
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(Palette.panel).clickable { body.toggleDng() }
+            .padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("DNG BESIDE EACH PRINT", color = Palette.cream, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                Text("16-bit linear raw of the relensed picture, no film look · about 6 bytes a pixel", color = Palette.dim, fontSize = 10.sp)
+            }
+            Text(if (body.dngOut) "ON" else "OFF", color = if (body.dngOut) Color(0xFF73F2B3) else Palette.dim, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        }
+        Spacer(Modifier.height(10.dp))
         if (body.darkroom.isEmpty()) {
             Text("Nothing developed yet this session.", color = Palette.dim, modifier = Modifier.padding(12.dp))
         }
