@@ -60,6 +60,8 @@ class Body(app: Application) : AndroidViewModel(app) {
     var shiftX by mutableFloatStateOf(0f)
     var shiftY by mutableFloatStateOf(0f)
     var busy by mutableStateOf(false); private set
+    /** The last thing that went wrong, shown on the body until the next shot. */
+    var message by mutableStateOf<String?>(null)
     val darkroom = mutableStateListOf<DarkroomEntry>()
 
     val lens get() = lensBag[lensIndex]
@@ -141,8 +143,10 @@ class Body(app: Application) : AndroidViewModel(app) {
     }
 
     fun shoot(onShot: () -> Unit = {}) {
-        if (busy || framesLeft <= 0) return
+        if (busy) { message = "still taking the last frame…"; return }
+        if (framesLeft <= 0) { message = "roll finished: load film"; return }
         busy = true
+        message = null
         val frame = framesShot + 1
         val lens = lens; val n = fNumber; val fm = focusM; val stock = stock; val push = push
         val fx = focusX; val fy = focusY
@@ -170,6 +174,8 @@ class Body(app: Application) : AndroidViewModel(app) {
                 entry.done = true
             } catch (t: Throwable) {
                 busy = false
+                android.util.Log.e("Relens", "frame failed", t)
+                message = "frame failed: ${t.message ?: t.javaClass.simpleName}"
                 entry.status = "failed: ${t.message}"
                 if (entry !in darkroom) darkroom.add(0, entry)
             }

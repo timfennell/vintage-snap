@@ -147,15 +147,17 @@ class Developer(private val context: Context) {
     }
 
     private fun writeExif(f: File, job: DevelopJob, look: Look) {
+        // EXIF text is ASCII: the "·" in a lens name becomes "-".
+        fun ascii(t: String) = t.replace('·', '-').replace('°', ' ').filter { it.code in 32..126 }
         runCatching {
             val e = ExifInterface(f)
             e.setAttribute(ExifInterface.TAG_MAKE, "Relens")
             e.setAttribute(ExifInterface.TAG_LENS_MAKE, job.lens.name.substringBefore(' '))
-            e.setAttribute(ExifInterface.TAG_LENS_MODEL, job.lens.name)
+            e.setAttribute(ExifInterface.TAG_LENS_MODEL, ascii(job.lens.name))
             e.setAttribute(ExifInterface.TAG_F_NUMBER, "%.1f".format(job.fNumber))
             e.setAttribute(ExifInterface.TAG_FOCAL_LENGTH, "${job.lens.focalMM.toInt()}/1")
-            e.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, "${job.lens.name} at f/%.1f, focused %.2f m, on %s%s".format(
-                job.fNumber, look.focusM, job.stock.name, if (job.push != 0) " (push %+d)".format(job.push) else ""))
+            e.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, ascii("${job.lens.name} at f/%.1f, focused %.2f m, on %s%s".format(
+                job.fNumber, look.focusM, job.stock.name, if (job.push != 0) " (push %+d)".format(job.push) else "")))
             e.saveAttributes()
         }
     }

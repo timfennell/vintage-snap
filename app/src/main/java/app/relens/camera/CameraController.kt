@@ -25,6 +25,7 @@ import androidx.lifecycle.LifecycleOwner
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeout
 import java.io.File
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
@@ -107,22 +108,30 @@ class CameraController(private val context: Context) {
         val jpeg = File(dir, "$name.jpg")
         val dng = File(dir, "$name.dng")
         val focusD = lastFocusD
-        return suspendCancellableCoroutine { cont ->
+        return withTimeout(20_000) { suspendCancellableCoroutine { cont ->
+            val raw = _raw.value
+            fun ready(f: File) = f.exists() && f.length() > 0
             val cb = object : ImageCapture.OnImageSavedCallback {
-                private var saved = 0
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                    saved++
-                    // RAW + JPEG calls back once per file.
-                    if (!_raw.value || saved >= 2) if (cont.isActive) cont.resume(Exposure(jpeg, dng.takeIf { it.exists() }, focusD))
+                    Log.i("Relens", "saved ${output.savedUri} jpeg ${ready(jpeg)} dng ${ready(dng)}")
+                    // RAW + JPEG may report once per file or once for both: done when the JPEG is
+                    // there and (with RAW) the DNG too, or shortly after, with whatever arrived.
+                    if (!cont.isActive) return
+                    if (ready(jpeg) && (!raw || ready(dng))) cont.resume(Exposure(jpeg, dng.takeIf(::ready), focusD))
+                    else if (ready(jpeg)) android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        if (cont.isActive) cont.resume(Exposure(jpeg, dng.takeIf(::ready), focusD))
+                    }, 1500)
                 }
                 override fun onError(e: ImageCaptureException) {
+                    Log.e("Relens", "capture failed", e)
                     if (cont.isActive) cont.resumeWithException(e)
                 }
             }
             val exec = ContextCompat.getMainExecutor(context)
-            if (_raw.value) cap.takePicture(ImageCapture.OutputFileOptions.Builder(dng).build(),
+            Log.i("Relens", "shoot $name raw $raw")
+            if (raw) cap.takePicture(ImageCapture.OutputFileOptions.Builder(dng).build(),
                 ImageCapture.OutputFileOptions.Builder(jpeg).build(), exec, cb)
             else cap.takePicture(ImageCapture.OutputFileOptions.Builder(jpeg).build(), exec, cb)
-        }
+        } }
     }
 }

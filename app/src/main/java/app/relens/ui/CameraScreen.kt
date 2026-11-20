@@ -153,6 +153,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
             Led("${body.framesLeft}")
         }
 
+        body.message?.let { Text(it, color = Palette.led, fontSize = 12.sp, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) }
         // ---- the lens barrel: focus ring (with the DoF scale), aperture ring ----
         val marks = lens.focusMarks
         val focusPos = if (!body.focusPos.isNaN()) body.focusPos else positionFor(lens, shownM ?: 3f)
@@ -186,8 +187,8 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
         // ---- the deck ----
         Row(Modifier.fillMaxWidth().height(116.dp).padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
             DeckButton("BAG", Modifier.weight(1f)) { openBag() }
-            ShutterRelease(enabled = !body.busy && body.framesLeft > 0) {
-                haptics.shutter()
+            ShutterRelease(busy = body.busy) {
+                if (!body.busy && body.framesLeft > 0) haptics.shutter()
                 body.shoot()
             }
             Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
@@ -280,7 +281,7 @@ private fun DeckButton(label: String, modifier: Modifier, onClick: () -> Unit) {
 
 /** A chrome shutter release with a soft collar: it sinks as it is pressed. */
 @Composable
-private fun ShutterRelease(enabled: Boolean, onRelease: () -> Unit) {
+private fun ShutterRelease(busy: Boolean, onRelease: () -> Unit) {
     val src = remember { MutableInteractionSource() }
     val pressed by src.collectIsPressedAsState()
     val s by animateFloatAsState(if (pressed) 0.9f else 1f, label = "shutter")
@@ -288,8 +289,8 @@ private fun ShutterRelease(enabled: Boolean, onRelease: () -> Unit) {
         contentAlignment = Alignment.Center) {
         Box(Modifier.size(64.dp).scale(s).clip(CircleShape)
             .background(Brush.linearGradient(listOf(Palette.chromeHi, Palette.chromeLo, Palette.chromeHi)))
-            .border(2.dp, Color(0xFF555552), CircleShape)
-            .clickable(interactionSource = src, indication = null, enabled = enabled, onClick = onRelease))
+            .border(2.dp, if (busy) Palette.led else Color(0xFF555552), CircleShape)
+            .clickable(interactionSource = src, indication = null, onClick = onRelease))
     }
 }
 
