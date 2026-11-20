@@ -9,9 +9,9 @@ import kotlin.concurrent.thread
 
 /**
  * Runs the bench on launch and shows the log. Start it from the Mac with
- *   adb shell am start -n app.relens.spike/.MainActivity --es flags "slow"
+ *   adb shell am start -n app.relens/.spike.BenchActivity --es flags "slow"
  */
-class MainActivity : Activity() {
+class BenchActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)

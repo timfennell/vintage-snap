@@ -2,9 +2,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-feature android:glEsVersion="0x00030001" android:required="true" />
+    <uses-feature android:name="android.hardware.camera" android:required="true" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <application
-        android:label="Relens spike"
+        android:label="Relens"
         android:largeHeap="true"
         android:hardwareAccelerated="true">
         <!-- The GPU delegate looks for the vendor OpenCL library. -->
@@ -13,13 +16,19 @@
         <uses-native-library android:name="libOpenCL-car.so" android:required="false" />
 
         <activity
-            android:name=".MainActivity"
+            android:name=".ui.MainActivity"
             android:exported="true"
-            android:screenOrientation="portrait">
+            android:screenOrientation="portrait"
+            android:theme="@android:style/Theme.Material.NoActionBar">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- The performance spike (also: adb shell am start -n app.relens/.spike.BenchActivity). -->
+        <activity
+            android:name=".spike.BenchActivity"
+            android:exported="true"
+            android:screenOrientation="portrait" />
     </application>
 </manifest>

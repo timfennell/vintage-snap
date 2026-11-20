@@ -7,13 +7,15 @@ uniform sampler2D uGuideLo;      // RGBA8: the picture the network saw
 uniform sampler2D uSrc;          // RGBA16F: full-resolution linear picture
 layout(r32f, binding = 0) writeonly uniform image2D uOut;
 uniform float uSigmaRange;
+uniform vec4 uWarp;              // the same shift-lens warp as linearize
+uniform vec2 uWarpFZ;
 
 void main() {
     ivec2 p = ivec2(gl_GlobalInvocationID.xy);
     ivec2 sz = imageSize(uOut);
     if (p.x >= sz.x || p.y >= sz.y) return;
     ivec2 lo = textureSize(uDispLo, 0);
-    vec2 fp = (vec2(p) + 0.5) * vec2(lo) / vec2(sz) - 0.5;
+    vec2 fp = shift_uv(vec2(p) + 0.5, vec2(sz), uWarp, uWarpFZ) * vec2(lo) - 0.5;
     ivec2 b = ivec2(floor(fp));
     float g = sqrt(luma(texelFetch(uSrc, p, 0).rgb));     // roughly perceptual
     float acc = 0.0, wsum = 0.0;

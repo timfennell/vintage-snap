@@ -1,20 +1,21 @@
 plugins {
     id("com.android.application")
+    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 // -Pqnn=true builds against ONNX Runtime's QNN package (Snapdragon Hexagon NPU).
 val qnn = (findProperty("qnn") as String?) == "true"
 
 android {
-    namespace = "app.relens.spike"
-    compileSdk = 36
+    namespace = "app.relens"
+    compileSdk { version = release(37) { minorApiLevel = 2 } }
 
     defaultConfig {
-        applicationId = "app.relens.spike"
+        applicationId = "app.relens"   // working name; Tim picks the real one later
         minSdk = 29          // Android 10: GLES 3.1 compute, Camera2 RAW everywhere
         targetSdk = 36
         versionCode = 1
-        versionName = "0.0.1-spike"
+        versionName = "0.1.0"
         ndk { abiFilters += listOf("arm64-v8a") }
         buildConfigField("boolean", "QNN", qnn.toString())
     }
@@ -26,7 +27,7 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
-    buildFeatures { buildConfig = true }
+    buildFeatures { buildConfig = true; compose = true }
     packaging { jniLibs { useLegacyPackaging = true } }   // QNN loads its HTP libs from the lib dir
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -38,6 +39,22 @@ android {
 }
 
 dependencies {
+    val composeBom = platform("androidx.compose:compose-bom:2026.11.01")
+    implementation(composeBom)
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.activity:activity-compose:1.13.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.11.1")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.11.1")
+    // CameraX: preview, RAW (DNG) + JPEG capture, tap-to-focus; Camera2 interop for capture metadata.
+    val camerax = "1.7.0"
+    implementation("androidx.camera:camera-core:$camerax")
+    implementation("androidx.camera:camera-camera2:$camerax")
+    implementation("androidx.camera:camera-lifecycle:$camerax")
+    implementation("androidx.camera:camera-compose:$camerax")
+    implementation("androidx.exifinterface:exifinterface:1.4.1")
+
     // LiteRT (TFLite) 1.x: the classic Interpreter API and its GPU delegate.
     implementation("com.google.ai.edge.litert:litert:1.4.2")
     implementation("com.google.ai.edge.litert:litert-gpu:1.4.2")

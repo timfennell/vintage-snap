@@ -1,6 +1,8 @@
-package app.relens.spike
+package app.relens.engine
 
 import android.opengl.GLES30
+import app.relens.film.FilmStock
+import app.relens.optics.Lens
 import android.opengl.GLES31
 import java.nio.ByteBuffer
 import kotlin.math.PI
@@ -19,18 +21,38 @@ import kotlin.math.sqrt
 data class Look(
     val lens: Lens,
     val fNumber: Float,
-    val focusM: Float,
-    /** Disparity (0...1, normalised network output) to dioptres: the scene's far and near distances. */
-    val nearM: Float = 0.8f,
-    val farM: Float = 50f,
-    /** Disparity at the focus point (from the user's tap). */
-    val focusDisparity: Float = 0.5f,
+    /**
+     * Disparity (the network's, normalised 0...1, near = 1) to dioptres:
+     * D = dispA + dispB * disparity. The app anchors it on the camera's own
+     * focus distance at the tapped point (see Developer); the bench on a near/far guess.
+     */
+    val dispA: Float,
+    val dispB: Float,
+    /** Where the lens is focused, dioptres (1 / metres). */
+    val focusD: Float,
+    /** A tilt lens: dioptres of focus change at the frame's half-diagonal, across and up. */
     val tiltD: FloatArray = floatArrayOf(0f, 0f),
+    /** A shift lens: the picture plane turned (radians) about its horizontal and vertical axes. */
+    val keystone: FloatArray = floatArrayOf(0f, 0f),
+    /** The camera picture's focal length as a fraction of its long side (the Nothing main camera: 5.56 / 8.19 mm). */
+    val viewFocal: Float = 0.68f,
     val stock: FilmStock,
     val push: Int = 0,
     val exposure: Float = 1f,
     val samples: Int = 96,
-)
+) {
+    val focusM: Float get() = 1f / maxOf(focusD, 1e-3f)
+
+    companion object {
+        /** The bench's mapping: disparity 0...1 spans far...near metres. */
+        fun nearFar(lens: Lens, fNumber: Float, nearM: Float, farM: Float, focusDisparity: Float,
+                    stock: FilmStock, samples: Int): Look {
+            val dFar = 1f / farM; val dNear = 1f / nearM
+            return Look(lens, fNumber, dFar, dNear - dFar, dFar + (dNear - dFar) * focusDisparity,
+                stock = stock, samples = samples)
+        }
+    }
+}
 
 /**
  * The GPU lens: picture + low-res disparity in, developed print out, one
@@ -76,8 +98,11 @@ class LensEngine(private val gl: Gl) {
         val axisX = w / 2f; val axisY = h / 2f
         val halfDiag = hypot(w / 2f, h / 2f)
 
+        val warp = warpUniforms(look, w, h)
         timed("linearize") {
             val p = gl.use("linearize")
+            gl.u4f(p, "uWarp", warp[0], warp[1], warp[2], warp[3])
+            gl.u2f(p, "uWarpFZ", warp[4], warp[5])
             gl.sampler(p, "uSrc", 0, src)
             gl.image(0, lin, GLES30.GL_RGBA16F)
             gl.u1f(p, "uGain", look.exposure)
@@ -87,6 +112,8 @@ class LensEngine(private val gl: Gl) {
         dump?.invoke("linearize", lin, w, h, 0)
         timed("depth upsample (JBU)") {
             val p = gl.use("jbu")
+            gl.u4f(p, "uWarp", warp[0], warp[1], warp[2], warp[3])
+            gl.u2f(p, "uWarpFZ", warp[4], warp[5])
             gl.sampler(p, "uDispLo", 0, dispLo)
             gl.sampler(p, "uGuideLo", 1, guideLo)
             gl.sampler(p, "uSrc", 2, lin)
@@ -101,9 +128,10 @@ class LensEngine(private val gl: Gl) {
             gl.sampler(p, "uSrc", 0, lin)
             gl.sampler(p, "uDisp", 1, disp)
             gl.image(0, work, GLES30.GL_RGBA16F)
-            val dFar = 1f / look.farM; val dNear = 1f / look.nearM
-            gl.u2f(p, "uDispToD", dFar, dNear - dFar)
-            gl.u1f(p, "uFocusD", dFar + (dNear - dFar) * look.focusDisparity)
+            gl.u2f(p, "uDispToD", look.dispA, look.dispB)
+            gl.u1f(p, "uFocusD", look.focusD)
+            // A pinhole has no focus: the same blur everywhere (its spot on film).
+            gl.u1f(p, "uBaseCoc", if (look.lens.isPinhole) pinholeRadiusPx(look.lens, w) else 0f)
             gl.u2f(p, "uTiltD", look.tiltD[0], look.tiltD[1])
             gl.u1f(p, "uCocPerD", cocRadiusPxPerDioptre(look.lens, look.fNumber, look.focusM, w))
             gl.u1f(p, "uMaxCoc", maxCoc)
@@ -189,6 +217,29 @@ class LensEngine(private val gl: Gl) {
         }
         gl.deleteTextures(lin, disp, work, tilesA, tilesB)
         return out
+    }
+
+    /**
+     * (tan ax, cos ax, tan ay, cos ay, focal px, zoom): the keystone warp, zoomed
+     * in just enough that no corner of the print falls outside the picture.
+     */
+    private fun warpUniforms(look: Look, w: Int, h: Int): FloatArray {
+        val ax = look.keystone[0]; val ay = look.keystone[1]
+        val ta = kotlin.math.tan(ax); val ca = kotlin.math.cos(ax)
+        val tb = kotlin.math.tan(ay); val cb = kotlin.math.cos(ay)
+        val d = look.viewFocal * maxOf(w, h)
+        fun inside(z: Float): Boolean {
+            for ((cx0, cy0) in listOf(-w / 2f to -h / 2f, w / 2f to -h / 2f, -w / 2f to h / 2f, w / 2f to h / 2f)) {
+                var cx = cx0 / z; var cy = cy0 / z
+                val l1 = d / (d - cy * ta); cx *= l1; cy = l1 * cy / ca
+                val l2 = d / (d - cx * tb); cx = l2 * cx / cb; cy *= l2
+                if (kotlin.math.abs(cx) > w / 2f + 0.5f || kotlin.math.abs(cy) > h / 2f + 0.5f) return false
+            }
+            return true
+        }
+        var z = 1f
+        while (!inside(z) && z < 3f) z += 0.01f
+        return floatArrayOf(ta, ca, tb, cb, d, z)
     }
 
     companion object {

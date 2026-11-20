@@ -1,4 +1,4 @@
-package app.relens.spike
+package app.relens.engine
 
 import android.content.res.AssetManager
 import android.opengl.EGL14

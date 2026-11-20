@@ -13,6 +13,18 @@ import android.graphics.Shader
 import android.opengl.GLES30
 import android.os.Build
 import android.util.Log
+import app.relens.BuildConfig
+import app.relens.engine.DepthMap
+import app.relens.engine.Gl
+import app.relens.engine.depthToBitmap
+import app.relens.engine.LensEngine
+import app.relens.engine.Look
+import app.relens.engine.floatBuffer
+import app.relens.engine.readBack
+import app.relens.film.FilmStock
+import app.relens.film.filmStocks
+import app.relens.optics.Lens
+import app.relens.optics.lensBag
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -27,6 +39,12 @@ import kotlin.random.Random
  *   input.jpg       a test photo (else a synthetic 4000 x 3000 scene is drawn)
  *   models/         .onnx (ONNX Runtime) and .tflite (LiteRT) models
  */
+/** The spike's four lenses, from the catalogue. */
+val spikeLenses: List<Lens> by lazy {
+    listOf("Ohi Kor 50mm f/1.4", "Ohi Kor 85mm f/1.4", "Krasnogorsk Solnce 58mm f/2", "Ohi Reflex-Kor 500mm f/8")
+        .map { n -> lensBag.first { it.name == n } }
+}
+
 class Bench(private val ctx: Context, private val ui: (String) -> Unit) {
     private val dir = ctx.getExternalFilesDir(null)!!
     private val outDir = File(dir, "out").also { it.mkdirs() }
@@ -152,11 +170,10 @@ class Bench(private val ctx: Context, private val ui: (String) -> Unit) {
         val lens = spikeLenses[1]                      // 85 mm f/1.4: the biggest blur, the worst case
         val stock = filmStocks.first { it.name == "Rochester Portrait 400" }
         fun num(k: String, d: Float) = flags.firstOrNull { it.startsWith("$k=") }?.removePrefix("$k=")?.toFloat() ?: d
-        val nearM = num("near", 0.8f); val farM = num("far", 50f); val focusM = num("focusm", 2f)
-        log("scene near %.2f m, far %.1f m, lens focused at %.2f m".format(nearM, farM, focusM))
+        val nearM = num("near", 0.8f); val farM = num("far", 50f)
+        log("scene near %.2f m, far %.1f m".format(nearM, farM))
         fun look(n: Int, s: FilmStock = stock, l: Lens = lens) =
-            Look(lens = l, fNumber = l.maxAperture, focusM = focusM, nearM = nearM, farM = farM,
-                focusDisparity = focusDisp, stock = s, samples = n)
+            Look.nearFar(l, l.maxAperture, nearM, farM, focusDisp, s, n)
 
         if ("debug" in flags) {
             engine.dump = { name, tex, w, h, level ->

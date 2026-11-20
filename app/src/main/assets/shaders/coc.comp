@@ -11,6 +11,7 @@ uniform float uFocusD;           // dioptres in focus at the axis
 uniform vec2 uTiltD;             // dioptres of focus change at the frame's half-diagonal, x and y
 uniform float uCocPerD;          // blur radius px per dioptre
 uniform float uMaxCoc;           // cap, px
+uniform float uBaseCoc;          // blur everywhere (a pinhole's spot), px
 uniform vec2 uAxis;              // optical axis, px
 uniform float uHalfDiag;         // px
 
@@ -22,5 +23,6 @@ void main() {
     float D = uDispToD.x + uDispToD.y * texelFetch(uDisp, p, 0).r;
     float coc = uCocPerD * (uFocusD + dot(uTiltD, q) - D);
     coc = clamp(coc, -uMaxCoc, uMaxCoc);
+    coc = coc >= 0.0 ? coc + uBaseCoc : coc - uBaseCoc;
     imageStore(uOut, p, vec4(texelFetch(uSrc, p, 0).rgb, coc));
 }

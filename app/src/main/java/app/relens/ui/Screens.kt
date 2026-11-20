@@ -1,0 +1,166 @@
+package app.relens.ui
+
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import app.relens.film.filmStocks
+import app.relens.optics.Movement
+import app.relens.optics.lensBag
+import app.relens.optics.lensCollections
+import kotlin.math.pow
+
+@Composable
+private fun Panel(title: String, subtitle: String, onBack: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+    BackHandler(onBack = onBack)
+    Column(Modifier.fillMaxSize().background(Palette.leather).statusBarsPadding().navigationBarsPadding().padding(12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("‹", color = Palette.amber, fontSize = 28.sp, modifier = Modifier.clickable(onClick = onBack).padding(end = 12.dp))
+            Text(title, color = Palette.amber, fontSize = 18.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+        }
+        Text(subtitle, color = Palette.dim, fontSize = 11.sp, modifier = Modifier.padding(start = 26.dp, bottom = 8.dp))
+        content()
+    }
+}
+
+/** The camera bag: Vintage Click's shelves; tap a lens to mount it. */
+@Composable
+fun LensBagScreen(body: Body, haptics: Haptics, onBack: () -> Unit) {
+    val mounted = body.lens
+    var shelf by remember { mutableIntStateOf(lensCollections.indexOfFirst { it.name == mounted.collection }.coerceAtLeast(0)) }
+    Panel("CAMERA BAG", lensCollections[shelf].about, onBack) {
+        Row(Modifier.horizontalScroll(rememberScrollState()).padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            lensCollections.forEachIndexed { i, c ->
+                Text(c.name, color = if (i == shelf) Palette.leather else Palette.cream, fontSize = 12.sp,
+                    modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(if (i == shelf) Palette.amber else Palette.panel)
+                        .clickable { shelf = i; haptics.tick() }.padding(horizontal = 10.dp, vertical = 6.dp))
+            }
+        }
+        LazyColumn(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(Palette.panel)) {
+            itemsIndexed(lensCollections[shelf].lenses) { _, lens ->
+                val on = lens.name == mounted.name
+                Column(Modifier.fillMaxWidth().background(if (on) Color(0x33E8B04A) else Color.Transparent)
+                    .clickable {
+                        body.mount(lensBag.indexOfFirst { it.name == lens.name })
+                        haptics.clunk()
+                        onBack()
+                    }.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                    Row {
+                        Text((if (on) "▶ " else "") + lens.name, color = if (on) Palette.amber else Palette.cream,
+                            fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        val iris = if (lens.isPinhole) "pinhole ${lens.pinholeMM} mm" else if (lens.blades >= 3) "${lens.blades}-blade iris" else "round iris"
+                        val move = when (val m = lens.movement) { is Movement.Tilt -> " · tilt ${m.maxDegrees.toInt()}°"; is Movement.Shift -> " · shift ${m.maxMM.toInt()} mm"; else -> "" }
+                        Text("$iris · close ${(lens.minFocusM * 100).toInt()} cm$move", color = Palette.dim, fontSize = 11.sp)
+                    }
+                    Text(lens.inspiredBy, color = Palette.dim, fontSize = 11.sp)
+                }
+            }
+        }
+    }
+}
+
+/** Loading film: the stock and how it will be rated (push / pull). Loading starts a fresh roll. */
+@Composable
+fun FilmScreen(body: Body, haptics: Haptics, onBack: () -> Unit) {
+    var choice by remember { mutableIntStateOf(body.stockIndex) }
+    var push by remember { mutableIntStateOf(body.push) }
+    Panel("LOAD FILM", "the roll in the camera (frame ${body.framesShot} of ${body.stock.exposures}) is rewound and put away", onBack) {
+        LazyColumn(Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(Palette.panel)) {
+            itemsIndexed(filmStocks) { i, s ->
+                val on = i == choice
+                Row(Modifier.fillMaxWidth().background(if (on) Color(0x33E8B04A) else Color.Transparent)
+                    .clickable { choice = i; haptics.tick() }.padding(horizontal = 12.dp, vertical = 9.dp)) {
+                    Column(Modifier.weight(1f)) {
+                        Text((if (on) "▶ " else "") + s.name, color = if (on) Palette.amber else Palette.cream, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                        Text(s.inspiredBy, color = Palette.dim, fontSize = 11.sp)
+                    }
+                    val kind = if (s.blackAndWhite) "B&W" else if (s.falseColourIR) "IR" else "colour"
+                    Text("ISO ${s.iso.toInt()} · $kind · ${s.exposures} exp", color = Palette.dim, fontSize = 11.sp)
+                }
+            }
+        }
+        val iso = filmStocks[choice].iso
+        Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center) {
+            Text("◀", color = Palette.amber, fontSize = 22.sp, modifier = Modifier.clickable { if (push > -1) { push--; haptics.click() } }.padding(12.dp))
+            Text("rate at EI ${(iso * 2f.pow(push)).toInt()}  " + when {
+                push == 0 -> "(box speed)"; push > 0 -> "(push +$push)"; else -> "(pull $push)"
+            }, color = Palette.amber, fontSize = 15.sp)
+            Text("▶", color = Palette.amber, fontSize = 22.sp, modifier = Modifier.clickable { if (push < 3) { push++; haptics.click() } }.padding(12.dp))
+        }
+        Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(Palette.amber)
+            .clickable { body.loadRoll(choice, push); haptics.clunk(); onBack() }.padding(14.dp), contentAlignment = Alignment.Center) {
+            Text("LOAD ${filmStocks[choice].name.uppercase()}", color = Palette.leather, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+/** The darkroom: prints as they come out. Hold a print to see the camera's own picture. */
+@Composable
+fun DarkroomScreen(body: Body, onBack: () -> Unit, openBench: () -> Unit) {
+    Panel("DARKROOM", "prints are saved to Pictures/Relens · hold a print to see the negative's source", onBack) {
+        if (body.darkroom.isEmpty()) {
+            Text("Nothing developed yet this session.", color = Palette.dim, modifier = Modifier.padding(12.dp))
+        }
+        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            itemsIndexed(body.darkroom) { _, e ->
+                var showOriginal by remember { mutableStateOf(false) }
+                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(Palette.panel).padding(8.dp)) {
+                    val bmp = if (showOriginal) e.original else e.preview
+                    if (bmp != null) {
+                        Image(bmp.asImageBitmap(), null, contentScale = ContentScale.Fit,
+                            modifier = Modifier.fillMaxWidth().aspectRatio(bmp.width / bmp.height.toFloat())
+                                .pointerInput(e) { detectTapGestures(onPress = { showOriginal = true; tryAwaitRelease(); showOriginal = false }) })
+                    } else {
+                        Box(Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
+                            Text(e.status, color = Palette.dim, fontSize = 12.sp)
+                        }
+                    }
+                    Text(e.label, color = Palette.cream, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+                    if (e.done) Text(e.status, color = Palette.dim, fontSize = 10.sp)
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text("performance bench ›", color = Palette.dim, fontSize = 11.sp,
+            modifier = Modifier.align(Alignment.End).clickable(onClick = openBench).padding(6.dp))
+        Spacer(Modifier.width(1.dp))
+    }
+}
