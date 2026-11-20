@@ -130,7 +130,11 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                         cameraDistance = lens.focalMM / 36f * maxOf(size.width, size.height) / density / 72f * 8f
                         val z = 1f + 0.9f * (kotlin.math.abs(shiftView[0]) + kotlin.math.abs(shiftView[1]))
                         scaleX = z; scaleY = z
-                    })
+                    }
+                    // a tilted (or whacked) lens's blur, live: the sharp band and the fall-off either side
+                    .then(if (lens.movement is Movement.Tilt) Modifier.tiltBlur(
+                        Movements.tiltDioptres(lens, floatArrayOf(body.tiltX, body.tiltY)), body.focusX, body.focusY, lens.focalMM, body.fNumber)
+                        else Modifier))
                 // Taps and drags over the finder (a separate layer, so the view's own transform doesn't move them).
                 Box(Modifier.fillMaxSize()
                     .pointerInput(Unit) {

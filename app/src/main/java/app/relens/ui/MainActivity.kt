@@ -94,6 +94,13 @@ class MainActivity : ComponentActivity() {
         if (intent.hasExtra("parallaxtest")) window.decorView.postDelayed({
             body.parallaxTest(java.io.File(getExternalFilesDir("tests"), "par"), intent.getFloatExtra("parallaxtest", 1.5f))
         }, 4000)
+        // --es mount "<lens>" [--ef tiltx d --ef tilty d]: mount a lens (and rock it) for a look at the finder
+        intent.getStringExtra("mount")?.let { want ->
+            window.decorView.postDelayed({
+                app.relens.optics.lensBag.indexOfFirst { it.name.contains(want, ignoreCase = true) }.takeIf { it >= 0 }?.let { body.mount(it) }
+                body.tiltX = intent.getFloatExtra("tiltx", 0f); body.tiltY = intent.getFloatExtra("tilty", 0f)
+            }, 2500)
+        }
         if (intent.hasExtra("logicaltest")) window.decorView.postDelayed({ lifecycleScope.launch { body.rig.logicalTest() } }, 9000)
         // Testing from the Mac: --es rawtest "<lens name part>": a RAW-only capture to a test folder (no roll, no gallery).
         intent.getStringExtra("rawtest")?.let { want ->

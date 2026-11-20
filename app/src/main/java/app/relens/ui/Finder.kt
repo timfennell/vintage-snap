@@ -266,3 +266,61 @@ private fun DrawScope.drawDigit(x: Float, w: Float, h: Float, th: Float, lit: St
     drawPath(litPath, color)
     drawPath(litPath, Color(0xFFFFB08A).copy(alpha = 0.35f), style = Stroke(width = th * 0.25f))
 }
+
+// ---- a tilt (or whacked) lens's blur, live in the finder ---------------------------------------
+
+private const val TILT_BLUR_AGSL = """
+uniform shader image;
+uniform float2 focus;     // the focus point (px)
+uniform float2 dir;       // the way focus changes across the frame (unit)
+uniform float dPerPx;     // dioptres of defocus per pixel along dir
+uniform float rPerD;      // blur radius (px) per dioptre of defocus, at this aperture
+uniform float maxR;
+uniform float halfDof;    // dioptres either side that stay sharp
+
+half4 main(float2 p) {
+    float dD = abs(dot(p - focus, dir) * dPerPx);
+    float r = min(max(dD - halfDof, 0.0) * rPerD, maxR);
+    if (r < 0.6) return image.eval(p);
+    // a disc of 24 samples (Vogel), the pattern turned per pixel so it reads as blur, not rings
+    half4 acc = half4(0);
+    float turn = fract(sin(dot(floor(p), float2(12.9898, 78.233))) * 43758.5453) * 6.2832;
+    for (int i = 0; i < 24; i++) {
+        float a = float(i) * 2.39996 + turn;
+        float rr = sqrt((float(i) + 0.5) / 24.0) * r;
+        acc += image.eval(p + rr * float2(cos(a), sin(a)));
+    }
+    return acc / 24.0;
+}
+"""
+
+/**
+ * The finder's picture blurred as a tilted lens would blur it (Android 13+): the plane of
+ * focus turned by the lens's tilt (Movements.tiltDioptres: dioptres of focus change across
+ * the frame's half-diagonal), each point blurred by its defocus at this aperture. Live there's
+ * no depth, so the scene is taken to be at the focus distance: blur grows away from the sharp
+ * band, the miniature look. The print does it properly, with the depth map.
+ */
+@Composable
+fun Modifier.tiltBlur(tiltDioptres: FloatArray, focusX: Float, focusY: Float, focalMM: Float, fNumber: Float): Modifier {
+    if (Build.VERSION.SDK_INT < 33) return this
+    val g = kotlin.math.hypot(tiltDioptres[0], tiltDioptres[1])
+    if (g < 1e-4f) return this
+    val shader = remember { RuntimeShader(TILT_BLUR_AGSL) }
+    return this.graphicsLayer {
+        val hd = kotlin.math.hypot(size.width / 2, size.height / 2)
+        val f = focalMM / 1000f
+        // image-side blur ~ aperture x focal length x defocus, as a share of the frame's long side (36 mm)
+        val longPx = maxOf(size.width, size.height)
+        val rPerD = 0.5f * (f / fNumber) * f / 0.036f * longPx
+        shader.setFloatUniform("focus", focusX * size.width, focusY * size.height)
+        shader.setFloatUniform("dir", tiltDioptres[0] / g, tiltDioptres[1] / g)
+        shader.setFloatUniform("dPerPx", g / hd)
+        shader.setFloatUniform("rPerD", rPerD)
+        shader.setFloatUniform("maxR", longPx * 0.02f)
+        // what still looks sharp at the finder's size: a circle of about a pixel and a half
+        shader.setFloatUniform("halfDof", 1.5f / maxOf(rPerD, 1e-3f))
+        clip = true
+        renderEffect = RenderEffect.createRuntimeShaderEffect(shader, "image").asComposeRenderEffect()
+    }
+}
