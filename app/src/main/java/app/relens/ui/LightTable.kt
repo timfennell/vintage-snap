@@ -100,7 +100,6 @@ fun LightTableScreen(body: Body, onBack: () -> Unit, openBench: () -> Unit, init
             fun frameRect(strip: Rect, j: Int) = Rect(Offset(strip.left + 5.5f * mm, strip.top + (2f + j * 38f + 1f) * mm), Size(24f * mm, 36f * mm))
             fun toSheet(p: Offset) = (p - pan) / scale
 
-            Canvas(Modifier.fillMaxSize()) { drawImage(table) }
             Canvas(Modifier.fillMaxSize()
                 .pointerInput(Unit) {
                     detectTransformGestures { centroid, panBy, zoom, _ ->
@@ -133,7 +132,12 @@ fun LightTableScreen(body: Body, onBack: () -> Unit, openBench: () -> Unit, init
                         })
                 }) {
                 withTransform({ translate(pan.x, pan.y); scale(scale, scale, Offset.Zero) }) {
-                    glassDust(Rect(toSheet(Offset.Zero), toSheet(Offset(size.width, size.height))), density / 2.625f)
+                    // the glass and the light through it move with the film: the glow (repeated
+                    // in mirror image, so it never seams), then the dust on it
+                    val view = Rect(toSheet(Offset.Zero), toSheet(Offset(size.width, size.height)))
+                    drawRect(androidx.compose.ui.graphics.ShaderBrush(androidx.compose.ui.graphics.ImageShader(table,
+                        androidx.compose.ui.graphics.TileMode.Mirror, androidx.compose.ui.graphics.TileMode.Mirror)), view.topLeft, view.size)
+                    glassDust(view, density / 2.625f)
                     for ((i, st) in strips.withIndex()) {
                         val r = stripRect(i, st.size)
                         drawStrip(r, mm, st, i, frameRect = { j -> frameRect(r, j) }, measurer = measurer)
@@ -410,7 +414,7 @@ private fun DrawScope.greasePencil(fr: Rect, seed: Int, mm: Float) {
     }
 }
 
-/** The light box's glow under the glass: tube banding, a soft mottle, falling off to the edges (fixed). */
+/** The light through the glass: tube banding and a soft mottle (it repeats in mirror image as the table moves). */
 private fun tableGlass(w: Int, h: Int): ImageBitmap {
     val rng = Random(2024)
     val gw = 9; val gh = 7
@@ -432,8 +436,8 @@ private fun tableGlass(w: Int, h: Int): ImageBitmap {
         for (x in 0 until qw) {
             val u = x / qw.toFloat()
             val dx = u - 0.5f; val dy = v - 0.5f
-            var lum = 0.93f + 0.035f * cos(v * 2 * Math.PI.toFloat() * 3.5f + 0.7f) + 0.03f * mottle(u, v)
-            lum *= 1 - 0.32f * (dx * dx + dy * dy) * 2
+            var lum = 0.93f + 0.03f * cos(v * 2 * Math.PI.toFloat() * 3.5f + 0.7f) + 0.016f * mottle(u, v)
+            @Suppress("UNUSED_VARIABLE") val r2 = dx * dx + dy * dy   // no fall-off: the glow repeats as the glass moves
             lum += rng.nextFloat() * 0.012f - 0.006f
             val warm = 0.012f * mottle(1 - v, u)
             fun b(f: Float) = (f * 255).toInt().coerceIn(0, 255)

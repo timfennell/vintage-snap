@@ -60,6 +60,8 @@ data class Framing(val camera: PhoneCamera, val crop: Float) {
     val megapixels: Float get() = longPx * longPx * 2f / 3f / 1e6f
     /** The focal length over the frame's long side after the crop (for Metric3D, the keystone). */
     val focalOverLong: Float get() = camera.focalMM / camera.sensorLongMM * crop
+    /** The camera's role by its reach: ultra-wide, main or tele (for the bag). */
+    val cameraRole: String get() = when { camera.f36 < 20f -> "ultra-wide"; camera.f36 > 50f -> "tele"; else -> "main" }
 }
 
 /**
@@ -120,13 +122,15 @@ class Rig(private val context: Context) {
 
     /** For the log: each camera, and what each lens in [lenses] gets (camera, crop, megapixels) or why it's hidden. */
     fun lensReport(lenses: List<Lens>): String = buildString {
-        for (c in usable) append("camera ${c.id}: %.1f mm (35 mm equiv.), %dx%d, RAW ${c.raw}\n".format(c.f36, c.pixels.width, c.pixels.height))
+        for (c in usable) append("camera ${c.id}: %.1f mm (35 mm equiv.), %dx%d, RAW ${c.raw}, closest focus %s\n".format(c.f36, c.pixels.width, c.pixels.height,
+            if (c.minFocusD > 0f) "%.1f cm".format(100f / c.minFocusD) else "fixed"))
         for (l in lenses) {
             val fr = framingFor(l)
             val why = when {
-                fr != null -> "camera ${fr.camera.id}, crop %.2f, %.1f MP".format(fr.crop, fr.megapixels)
+                fr != null -> "camera ${fr.camera.id}, crop %.2f, %.1f MP".format(fr.crop, fr.megapixels) +
+                    if (fr.camera.f36 > l.focalMM * 1.005f) " (at the camera's %.0f mm view)".format(fr.camera.f36) else ""
                 l.isFisheye -> "hidden: a fisheye"
-                usable.none { it.f36 <= l.focalMM * 1.005f } -> "hidden: wider than any camera"
+                usable.none { it.f36 <= l.focalMM * 1.35f } -> "hidden: wider than any camera"
                 else -> "hidden: under 1 MP"
             }
             append("${l.name}: $why\n")
@@ -139,7 +143,10 @@ class Rig(private val context: Context) {
     /** How a lens would be framed, or null if no camera can (too wide, a fisheye, too long to leave ~1 MP). */
     fun framingFor(lens: Lens): Framing? {
         if (lens.isFisheye || usable.isEmpty()) return null
-        val cam = usable.lastOrNull { it.f36 <= lens.focalMM * 1.005f } ?: return null
+        val cam = usable.lastOrNull { it.f36 <= lens.focalMM * 1.005f }
+            // A lens a little wider than any camera (the 13 mm on a 16 mm ultra-wide) is shown at the
+            // widest view there is, uncropped, keeping its own rendering (Framing.wider says so).
+            ?: return usable.first().takeIf { it.f36 <= lens.focalMM * 1.35f }?.let { Framing(it, 1f) }
         val fr = Framing(cam, lens.focalMM / cam.f36)
         return fr.takeIf { it.megapixels >= 1f }
     }
