@@ -134,6 +134,8 @@ class MainActivity : ComponentActivity() {
         }
         // --ez fetchmodels true (testing from the Mac): start the depth models' download
         if (intent.getBooleanExtra("fetchmodels", false)) body.downloadModels()
+        // --ez lensreport true: what each lens gets on this phone, into the log
+        if (intent.getBooleanExtra("lensreport", false)) app.relens.Trace.i("lens report:\n" + body.rig.lensReport(app.relens.optics.lensBag))
         if (intent.hasExtra("logicaltest")) window.decorView.postDelayed({ lifecycleScope.launch { body.rig.logicalTest() } }, 9000)
         // Testing from the Mac: --es rawtest "<lens name part>": a RAW-only capture to a test folder (no roll, no gallery).
         intent.getStringExtra("rawtest")?.let { want ->

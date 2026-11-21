@@ -79,7 +79,10 @@ class Rig(private val context: Context) {
     /** The back cameras that can be opened (listed or not), widest first. */
     val cameras: List<PhoneCamera> = (cm.cameraIdList.toList() +
             // the physical cameras inside a listed multi-camera (some phones let them be opened by id)
-            cm.cameraIdList.flatMap { id -> runCatching { cm.getCameraCharacteristics(id).physicalCameraIds.toList() }.getOrDefault(emptyList()) }).distinct().mapNotNull { id ->
+            cm.cameraIdList.flatMap { id -> runCatching { cm.getCameraCharacteristics(id).physicalCameraIds.toList() }.getOrDefault(emptyList()) } +
+            // and cameras the phone doesn't list at all but will open by id (the Nothing's ultra-wide
+            // "2" and periscope "3"); any that refuse to open are set aside (giveUp)
+            (0..9).map { it.toString() }).distinct().mapNotNull { id ->
         runCatching {
             val c = cm.getCameraCharacteristics(id)
             if (c.get(CameraCharacteristics.LENS_FACING) != CameraMetadata.LENS_FACING_BACK) return@runCatching null
@@ -113,6 +116,21 @@ class Rig(private val context: Context) {
         if (cam.id in cm.cameraIdList || !blocked.add(cam.id)) return
         app.relens.Trace.w("camera ${cam.id} (unlisted) won't open here ($why): set aside")
         lastLens?.let { l -> handler.post { select(l) } }
+    }
+
+    /** For the log: each camera, and what each lens in [lenses] gets (camera, crop, megapixels) or why it's hidden. */
+    fun lensReport(lenses: List<Lens>): String = buildString {
+        for (c in usable) append("camera ${c.id}: %.1f mm (35 mm equiv.), %dx%d, RAW ${c.raw}\n".format(c.f36, c.pixels.width, c.pixels.height))
+        for (l in lenses) {
+            val fr = framingFor(l)
+            val why = when {
+                fr != null -> "camera ${fr.camera.id}, crop %.2f, %.1f MP".format(fr.crop, fr.megapixels)
+                l.isFisheye -> "hidden: a fisheye"
+                usable.none { it.f36 <= l.focalMM * 1.005f } -> "hidden: wider than any camera"
+                else -> "hidden: under 1 MP"
+            }
+            append("${l.name}: $why\n")
+        }
     }
 
     /** The widest focal length any camera reaches (narrower lenses can't be framed). */
@@ -274,8 +292,10 @@ class Rig(private val context: Context) {
             // the ultra-wide itself already has it.
             logicalOpen = useLogical && logicalId != null && cam.id != "2"
             if (logicalOpen && cam.id != "2") uwReader = ImageReader.newInstance(1280, 960, ImageFormat.YUV_420_888, 2)
+            var everOpened = false
             cm.openCamera(if (logicalOpen) logicalId!! else cam.id, executor, object : CameraDevice.StateCallback() {
                 override fun onOpened(d: CameraDevice) {
+                    everOpened = true
                     if (gen != generation) { d.close(); return }          // superseded while opening
                     device = d; startSession(d, gen)
                 }
@@ -289,7 +309,9 @@ class Rig(private val context: Context) {
                     app.relens.Trace.e("camera ${cam.id} error $e")
                     d.close()
                     if (device == d) { device = null; session = null; _error.value = "camera ${cam.id} error $e" }
-                    if (device == null) giveUp(cam, "error $e")
+                    // only a camera that never opened, for the open still wanted, is set aside (an old
+                    // session's error during a lens change is not this camera refusing)
+                    if (!everOpened && gen == generation) giveUp(cam, "error $e")
                 }
             })
         }
