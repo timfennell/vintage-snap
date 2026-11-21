@@ -115,19 +115,20 @@ object Flare {
 
         // Each light judged against the scene: how many stops it stands above the scene's key
         // (its geometric-mean brightness). A clipped light's face is estimated that way too: a
-        // small source well above the key (11.5 stops), a big bright area less so (7), rather
+        // small source well above the key (12 stops), a big bright area less so (9), rather
         // than a fixed multiple of "white", so a lamp in a dim room flares harder than the same
         // clip in daylight. Ghost chains need the light to stand out (3 to 6.5 stops) and to be
-        // compact: a broad bright area (a window, sky) gives veiling glare only.
+        // compact: a broad bright area (over a few percent of the frame: a window, sky) gives veiling
+        // glare only.
         class Judged(val hot: Float, val ghost: Float, val score: Float)
         val judged = lights.map { s ->
             val perPx = maxOf(s.luma / maxOf(s.pixels, 1), 1e-4f)
             val area = s.pixels / npx
-            val clippedStops = 11.5f + (7f - 11.5f) * smoothstep(0.002f, 0.03f, area)
+            val clippedStops = 12f + (9f - 12f) * smoothstep(0.004f, 0.06f, area)
             val radiance = if (perPx < 0.85f) perPx else maxOf(perPx, key * Math.pow(2.0, clippedStops.toDouble()).toFloat())
             val stops = kotlin.math.log2(radiance / key)
             val stand = smoothstep(3f, 6.5f, stops)
-            val compact = 1f - smoothstep(0.006f, 0.03f, area)
+            val compact = 1f - smoothstep(0.03f, 0.10f, area)
             val u = s.x / w; val v = s.y / h
             val fade = 1f - smoothstep(0.2f, 0.6f, maxOf(maxOf(-u, u - 1), maxOf(-v, v - 1)))
             Judged(radiance / perPx, stand * compact, stand * compact * s.luma * (radiance / perPx) * fade)
