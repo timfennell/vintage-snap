@@ -126,6 +126,22 @@ class Developer(private val context: Context) {
         File(out.path + ".json").writeText("{\"width\":${rp.width},\"height\":${rp.height},\"ms\":$ms}")
     }
 
+    /**
+     * Test (from the Mac): Depth Anything on a whole JPEG (no lens crop), the normalised
+     * disparity written as little-endian float32 (row 0 first) + `<out>.json` with the size
+     * and time. The iOS port runs its Core ML conversion on the same JPEG and compares.
+     */
+    suspend fun depthTest(jpeg: File, out: File) = withContext(dispatcher) {
+        val photo = decodeUpright(jpeg)
+        val t0 = System.nanoTime()
+        val est = (depth ?: DepthEstimator(modelFile).also { depth = it }).estimate(photo.bmp)
+        val ms = (System.nanoTime() - t0) / 1_000_000
+        val b = java.nio.ByteBuffer.allocate(est.depth.data.size * 4).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        b.asFloatBuffer().put(est.depth.data)
+        out.writeBytes(b.array())
+        File(out.path + ".json").writeText("{\"width\":${est.depth.w},\"height\":${est.depth.h},\"ms\":$ms,\"model\":\"${modelFile.name}\"}")
+    }
+
     suspend fun develop(job: DevelopJob): Print = withContext(dispatcher) {
         val t = LinkedHashMap<String, Long>()
         var t0 = System.nanoTime()

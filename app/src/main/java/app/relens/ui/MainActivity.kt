@@ -110,6 +110,17 @@ class MainActivity : ComponentActivity() {
                 }
             }, 3000)
         }
+        // Testing from the Mac: --es depthtest R001_F01_154320: Depth Anything on that negative's
+        // whole JPEG into files/tests/depth_<neg>.f32, to compare with the iOS port.
+        intent.getStringExtra("depthtest")?.let { neg ->
+            window.decorView.postDelayed({
+                lifecycleScope.launch {
+                    val r = runCatching { body.developer.depthTest(java.io.File(getExternalFilesDir("negatives"), "$neg.jpg"),
+                        java.io.File(getExternalFilesDir("tests"), "depth_$neg.f32")) }
+                    android.util.Log.i("Relens", "depthtest $neg: ${r.exceptionOrNull()?.message ?: "ok"}")
+                }
+            }, 3000)
+        }
         // --ef parallaxtest <subject m>: the parallax guide on its own, into files/tests/par.
         if (intent.hasExtra("parallaxtest")) window.decorView.postDelayed({
             body.parallaxTest(java.io.File(getExternalFilesDir("tests"), "par"), intent.getFloatExtra("parallaxtest", 1.5f))
