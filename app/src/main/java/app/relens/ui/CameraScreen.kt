@@ -83,6 +83,9 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
     body.onParallaxFire = { haptics.sounds.fire(1f / 60) }   // ARCore's frames: a quick release
     // the live depth map (split prism, live blur), while the camera screen is up
     val liveDepth by body.liveDepth.collectAsState()
+    // the prism's halves glide to where the (smoothed) defocus puts them, rather than snapping
+    val prismTarget = body.centreD?.let { c -> body.finderFocusD?.let { it - c } } ?: 0f
+    val prismShift by animateFloatAsState(prismTarget, androidx.compose.animation.core.spring(dampingRatio = 0.9f, stiffness = 120f), label = "prism")
     androidx.compose.runtime.DisposableEffect(Unit) { body.startLiveDepth(); onDispose { body.stopLiveDepth() } }
     // Leaving the app hands the camera back (Android takes it from background apps anyway);
     // coming back opens it again, with nothing left over from the time away.
@@ -151,15 +154,12 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                         scaleX = z; scaleY = z
                     }
                     // the lens's blur, live: depth of field from the live depth map, and a tilt's plane
-                    .lensBlur(liveDepth, framing?.crop ?: 1f,
+                    // (the depth's blur only while the DOF lever is held: live, it lags and jumps)
+                    .lensBlur(liveDepth?.takeIf { body.dofPreview }, framing?.crop ?: 1f,
                         if (lens.movement is Movement.Tilt) Movements.tiltDioptres(lens, floatArrayOf(body.tiltX, body.tiltY)) else floatArrayOf(0f, 0f),
                         body.focusX, body.focusY, body.finderFocusD, lens.focalMM, body.fNumber)
                     // the split-image spot and microprism collar at the centre
-                    .splitPrism(liveDepth?.let { ld ->
-                        val fd = body.finderFocusD ?: return@let null
-                        val c = ld.a + ld.b * ld.map.medianAround(0.5f + 0f, 0.5f, 0.03f)
-                        fd - c
-                    }, lens.focalMM, lens.maxAperture))
+                    .splitPrism(prismShift, lens.focalMM, lens.maxAperture))
                 // Taps and drags over the finder (a separate layer, so the view's own transform doesn't move them).
                 Box(Modifier.fillMaxSize()
                     .pointerInput(Unit) {
@@ -319,7 +319,9 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                 if (!body.busy && body.framesLeft > 0) { haptics.shutter(body.shutterSeconds); mirrorUp = true }
                 body.shoot(onShot = { haptics.advance() })
             }
-            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) {
+                DofLever(body.dofPreview) { held -> body.dofPreview = held; if (held) haptics.tick() }
+                Spacer(Modifier.width(12.dp))
                 val last = body.darkroom.firstOrNull()
                 Box(Modifier.size(64.dp).clip(RoundedCornerShape(6.dp)).background(Palette.panel)
                     .border(1.dp, Palette.panelHi, RoundedCornerShape(6.dp)).clickable { openDarkroom() },
@@ -783,3 +785,21 @@ private fun Modifier.portraitBody() = this.then(Modifier.layout { m, c ->
     val p = m.measure(c.copy(minWidth = w, maxWidth = w))
     layout(c.maxWidth, p.height) { p.place((c.maxWidth - w) / 2, 0) }
 })
+
+/**
+ * The depth-of-field preview lever: held, the finder shows the lens's blur at the set aperture
+ * (from the live depth map); let go, the clean live view. As on an SLR, where the finder is
+ * wide open until the lever stops the lens down.
+ */
+@Composable
+private fun DofLever(held: Boolean, onHeld: (Boolean) -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(4.dp)
+        .pointerInput(Unit) { detectTapGestures(onPress = { onHeld(true); tryAwaitRelease(); onHeld(false) }) }) {
+        Spacer(Modifier.height(14.dp))
+        Box(Modifier.size(30.dp).clip(CircleShape)
+            .background(Brush.radialGradient(if (held) listOf(Palette.chromeLo, Color(0xFF2A2A28)) else listOf(Palette.chromeHi, Palette.chromeLo)))
+            .border(1.dp, Palette.panelHi, CircleShape))
+        Spacer(Modifier.height(8.dp))
+        Text("DOF", color = if (held) Palette.cream else Palette.dim, fontSize = 7.sp, letterSpacing = 1.sp)
+    }
+}

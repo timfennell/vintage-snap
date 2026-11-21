@@ -139,12 +139,21 @@ class Body(app: Application) : AndroidViewModel(app) {
                     val px = IntArray(map.w * map.h) { i -> val v = (map.data[i].coerceIn(0f, 1f) * 255).toInt(); (0xFF shl 24) or (v shl 16) or (v shl 8) or v }
                     val bmp = Bitmap.createBitmap(px, map.w, map.h, Bitmap.Config.ARGB_8888)
                     liveDepth.value = LiveDepth(map, bmp, a, b)
+                    // the centre's distance, eased over a few maps so the prism doesn't twitch
+                    val c = a + b * map.medianAround(0.5f, 0.5f, 0.03f)
+                    val prev = centreD
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { centreD = if (prev == null) c else prev + (c - prev) * 0.4f }
                     kotlinx.coroutines.delay(40)
                 }
             } finally { est.close() }
         }
     }
     fun stopLiveDepth() { liveJob?.cancel(); liveJob = null }
+
+    /** The depth-of-field preview lever held: the finder shows the lens's blur at the set aperture. */
+    var dofPreview by mutableStateOf(false)
+    /** The subject's distance at the finder's centre (dioptres), smoothed over a few depth maps (the split prism). */
+    var centreD by mutableStateOf<Float?>(null); private set
 
     /** The focus distance the finder shows, dioptres: the ring's, or the lens's own on autofocus. */
     val finderFocusD: Float? get() = focusM?.let { if (it.isInfinite()) 0f else 1f / it } ?: rig.liveFocusD.value
