@@ -113,7 +113,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                     color = Palette.dim, fontSize = 10.sp)
             }
             Spacer(Modifier.width(10.dp))
-            FrameCounter(body.framesShot, body.stock.exposures, Modifier.clickable { openFilm() })
+            FrameCounter(body.counterShows, body.stock.exposures, Modifier.clickable { openFilm() })
         }
 
         // ---- the finder: the lens's own field of view, 3:2 like 35 mm film (2:3 held upright) ----
@@ -514,8 +514,11 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.wire(a: Offset, b: 
  */
 @Composable
 private fun FrameCounter(shot: Int, total: Int, modifier: Modifier = Modifier) {
+    // In step with the film advance recordings: the lever's stroke starts about half a second in
+    // and the ratchet lands at about 1.1 s; the dial turns through the stroke and settles on it.
     val turn by animateFloatAsState(shot.toFloat(),
-        androidx.compose.animation.core.spring(dampingRatio = 0.5f, stiffness = 300f), label = "counter")
+        androidx.compose.animation.core.tween(durationMillis = 600, delayMillis = 500,
+            easing = androidx.compose.animation.core.FastOutSlowInEasing), label = "counter")
     val measurer = androidx.compose.ui.text.rememberTextMeasurer()
     Canvas(modifier.size(48.dp)) {
         val c = center

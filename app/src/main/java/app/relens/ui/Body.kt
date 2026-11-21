@@ -78,6 +78,8 @@ class Body(app: Application) : AndroidViewModel(app) {
     val filter get() = lensFilters[filterIndex]
     var push by mutableIntStateOf(prefs.getInt("push", 0)); private set
     var framesShot by mutableIntStateOf(prefs.getInt("frames", 0)); private set
+    /** What the frame counter shows: it moves when the film is wound on (with the advance sound), not when the frame is taken. */
+    var counterShows by mutableIntStateOf(framesShot); private set
     var rollNumber by mutableIntStateOf(prefs.getInt("roll", 1)); private set
     /** Where the photographer last tapped, fractions of the upright frame. */
     var focusX by mutableFloatStateOf(0.5f)
@@ -405,7 +407,7 @@ class Body(app: Application) : AndroidViewModel(app) {
     }
 
     fun loadRoll(stock: Int, pushStops: Int) {
-        stockIndex = stock; push = pushStops; framesShot = 0; rollNumber++
+        stockIndex = stock; push = pushStops; framesShot = 0; counterShows = 0; rollNumber++
         save()
     }
 
@@ -482,6 +484,7 @@ class Body(app: Application) : AndroidViewModel(app) {
                     if (!ok) message = "parallax not finished: this frame uses single-shot depth"
                     else if (!parallaxIntroSeen) dismissParallaxIntro()
                 }
+                counterShows = framesShot           // the lever's stroke turns the counter (with its sound)
                 onShot()
                 busy = false
                 darkroom.add(0, entry)
