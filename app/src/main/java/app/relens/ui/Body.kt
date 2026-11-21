@@ -114,6 +114,7 @@ class Body(app: Application) : AndroidViewModel(app) {
     val liveModel: File get() = File(getApplication<Application>().getExternalFilesDir(null), "models/da2s_fp32.onnx")
 
     fun startLiveDepth() {
+        startLiveCalibration()
         if (liveJob?.isActive == true || !liveModel.exists()) return
         liveJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.Default) {
             val est = runCatching { app.relens.engine.DepthEstimator(liveModel, Pair(168, 224)) }
@@ -148,7 +149,43 @@ class Body(app: Application) : AndroidViewModel(app) {
             } finally { est.close() }
         }
     }
-    fun stopLiveDepth() { liveJob?.cancel(); liveJob = null }
+    fun stopLiveDepth() { liveJob?.cancel(); liveJob = null; calibJob?.cancel(); calibJob = null }
+
+    /**
+     * The focus calibration learning while the shot is composed, not only at the shutter: every
+     * six seconds or so on autofocus, once the lens has settled, Metric3D measures a preview frame
+     * and its distance at the focus point is paired with the lens's own reading there (weight 1/5:
+     * a rough measure, many of them). The same view held still isn't counted again and again.
+     */
+    private var calibJob: kotlinx.coroutines.Job? = null
+    private var lastLivePair: Pair<Float, Long>? = null
+    private fun startLiveCalibration() {
+        if (calibJob?.isActive == true) return
+        calibJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.Default) {
+            while (true) {
+                kotlinx.coroutines.delay(6000)
+                val fr = rig.framing.value ?: continue
+                if (busy || parallax != null || !focusPos.isNaN()) continue
+                val raw = rig.liveRaw ?: continue
+                if (rig.liveAfState != 2 && rig.liveAfState != 4) continue        // passively focused, or locked
+                val now = System.currentTimeMillis()
+                val last = lastLivePair
+                if (last != null && kotlin.math.abs(raw - last.first) < 0.04f && now - last.second < 45_000) continue   // the same view, held
+                val shot = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    finderView?.takeIf { it.isAvailable }?.getBitmap(384, 512)
+                } ?: continue
+                val md = runCatching { developer.metricModel()?.estimate(shot, fr.camera.focalMM / fr.camera.sensorLongMM) }
+                    .onFailure { Trace.w("live calibration: metric failed", it) }.getOrNull()
+                shot.recycle()
+                if (md == null || busy) continue
+                val z = md.medianAround(0.5f + (focusX - 0.5f) / (1.125f * fr.crop), 0.5f + (focusY - 0.5f) / fr.crop, 0.04f)
+                if (z !in 0.15f..30f) continue
+                lastLivePair = Pair(raw, now)
+                val id = fr.camera.id
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { learnFocus(id, raw, 1f / z, 0.2f) }
+            }
+        }
+    }
 
     /** The depth-of-field preview lever held: the finder shows the lens's blur at the set aperture. */
     var dofPreview by mutableStateOf(false)

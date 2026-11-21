@@ -90,6 +90,8 @@ class Developer(private val context: Context) {
     private var engine: LensEngine? = null
     private var depth: DepthEstimator? = null
     private var metric: MetricDepth? = null
+    /** Metric3D, loaded once and shared (prints, and the live focus calibration while composing). */
+    @Synchronized fun metricModel(): MetricDepth? = if (!metricFile.exists()) null else metric ?: MetricDepth(metricFile).also { metric = it }
     val metricFile: File get() = File(context.getExternalFilesDir(null), "models/metric3d_vits.onnx")
     /** The phone camera's focal length over its sensor's long side (the Nothing main camera: 5.56 / 8.19 mm). */
     var viewFocal = 0.68f

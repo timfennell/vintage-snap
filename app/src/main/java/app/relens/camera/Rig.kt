@@ -189,6 +189,9 @@ class Rig(private val context: Context) {
     /** A scan has been seen since the last trigger: only a lock after one is a new measurement. */
     @Volatile private var sawScan = false
     private var lastAfState = -1
+    /** The lens's raw focus reading and autofocus state in the latest preview frame (the live calibration). */
+    @Volatile var liveRaw: Float? = null; private set
+    @Volatile var liveAfState: Int = -1; private set
     private var tapX = 0.5f; private var tapY = 0.5f
 
     /**
@@ -410,7 +413,9 @@ class Rig(private val context: Context) {
                 }
                 if ((af == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED || af == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED) && sawScan) afWatch = false
             }
+            liveAfState = af
             own.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { rawD ->
+                liveRaw = rawD
                 val d = corrected(heroId ?: "0", rawD)
                 lastFocusD = d
                 val prev = _focusD.value
