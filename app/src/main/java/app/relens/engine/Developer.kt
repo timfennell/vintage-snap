@@ -139,7 +139,67 @@ class Developer(private val context: Context) {
         val b = java.nio.ByteBuffer.allocate(est.depth.data.size * 4).order(java.nio.ByteOrder.LITTLE_ENDIAN)
         b.asFloatBuffer().put(est.depth.data)
         out.writeBytes(b.array())
-        File(out.path + ".json").writeText("{\"width\":${est.depth.w},\"height\":${est.depth.h},\"ms\":$ms,\"model\":\"${modelFile.name}\"}")
+        // Metric3D on the same picture (the main camera's focal over sensor long side) and the
+        // relative-to-metric fit (disparity = a * rel + b), written beside it.
+        var fit = ""
+        if (metricFile.exists()) {
+            val md = (metric ?: MetricDepth(metricFile).also { metric = it }).estimate(photo.bmp, 5.56f / 8.19f)
+            val mb = java.nio.ByteBuffer.allocate(md.data.size * 4).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+            mb.asFloatBuffer().put(md.data)
+            File(out.parentFile, out.name.replace("depth_", "metric_")).writeBytes(mb.array())
+            val ab = MetricDepth.fit(est.depth, md)
+            fit = ",\"metricWidth\":${md.w},\"metricHeight\":${md.h},\"a\":${ab[0]},\"b\":${ab[1]}"
+        }
+        // The depth at full resolution along the picture's edges (LensEngine's jbu + refine,
+        // the same sigmas, no shift-lens warp), on the RAW developed alone: jbu_<neg>.f32.
+        val raw16 = File(jpeg.parentFile, jpeg.nameWithoutExtension + ".raw16")
+        val rawMeta = File(jpeg.parentFile, jpeg.nameWithoutExtension + ".rawmeta.json")
+        if (raw16.exists() && rawMeta.exists()) {
+            val g = gl ?: Gl(context.assets).also { gl = it; engine = LensEngine(it) }
+            val rp = RawDeveloper.develop(g, raw16, rawMeta)
+            val dm = est.depth
+            val dispLo = g.texture(dm.w, dm.h, android.opengl.GLES30.GL_R32F, linear = false)
+            g.upload(dispLo, dm.w, dm.h, android.opengl.GLES30.GL_RED, android.opengl.GLES30.GL_FLOAT, floatBuffer(dm.data))
+            val guideLo = g.texture(dm.w, dm.h, android.opengl.GLES30.GL_RGBA8)
+            upload(g, guideLo, Bitmap.createScaledBitmap(est.seen, dm.w, dm.h, true))
+            val w = rp.width; val h = rp.height
+            var disp = g.texture(w, h, android.opengl.GLES30.GL_R32F, linear = false)
+            val p = g.use("jbu")
+            g.u4f(p, "uWarp", 0f, 1f, 0f, 1f); g.u2f(p, "uWarpFZ", 1f, 1f)
+            g.sampler(p, "uDispLo", 0, dispLo); g.sampler(p, "uGuideLo", 1, guideLo); g.sampler(p, "uSrc", 2, rp.tex)
+            g.image(0, disp, android.opengl.GLES30.GL_R32F)
+            g.u1f(p, "uSigmaRange", 0.08f)
+            g.dispatch(w, h)
+            val tmp = g.texture(w, h, android.opengl.GLES30.GL_R32F, linear = false)
+            val pr = g.use("refine")
+            g.u1f(pr, "uSigmaRange", 0.05f)
+            var from = disp; var to = tmp
+            for (step in intArrayOf(1, 2, 4)) {
+                g.sampler(pr, "uDisp", 0, from); g.sampler(pr, "uSrc", 1, rp.tex)
+                g.u1i(pr, "uStep", step); g.image(0, to, android.opengl.GLES30.GL_R32F)
+                g.dispatch(w, h)
+                val t = from; from = to; to = t
+            }
+            disp = from
+            g.finish()
+            val rows = 64
+            val buf = java.nio.ByteBuffer.allocateDirect(w * rows * 16).order(java.nio.ByteOrder.nativeOrder())
+            val o = java.nio.ByteBuffer.allocate(w * rows * 4).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+            java.io.FileOutputStream(File(out.parentFile, out.name.replace("depth_", "jbu_"))).channel.use { ch ->
+                var y = 0
+                while (y < h) {
+                    val n = minOf(rows, h - y)
+                    g.readFloatRows(disp, w, y, n, buf)
+                    val f = buf.asFloatBuffer()
+                    o.clear()
+                    for (i in 0 until w * n) o.putFloat(f.get(i * 4))
+                    o.flip(); ch.write(o)
+                    y += n
+                }
+            }
+            g.deleteTextures(rp.tex, dispLo, guideLo, disp, to)
+        }
+        File(out.path + ".json").writeText("{\"width\":${est.depth.w},\"height\":${est.depth.h},\"ms\":$ms,\"model\":\"${modelFile.name}\"$fit}")
     }
 
     suspend fun develop(job: DevelopJob): Print = withContext(dispatcher) {
