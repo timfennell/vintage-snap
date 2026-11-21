@@ -73,7 +73,12 @@ fun depthToBitmap(m: DepthMap): Bitmap {
  * static 392 x 518 export; a portrait picture is turned to landscape for it
  * and the depth turned back. The session is kept between photos.
  */
-class DepthEstimator(private val model: File) : AutoCloseable {
+/**
+ * Depth Anything V2 Small through ONNX Runtime. A model exported at a fixed size runs at that
+ * size; the original (free height and width) runs at [size] (height, width of the landscape
+ * input, multiples of 14): 770 x 1036 for prints, a small one for the live finder.
+ */
+class DepthEstimator(private val model: File, size: Pair<Int, Int> = Pair(770, 1036)) : AutoCloseable {
     private val env = OrtEnvironment.getEnvironment()
     private val session: OrtSession = OrtSession.SessionOptions().use { o ->
         o.setIntraOpNumThreads(4)
@@ -84,7 +89,8 @@ class DepthEstimator(private val model: File) : AutoCloseable {
     private val inH: Int; private val inW: Int
     init {
         val shape = (session.inputInfo[inName]!!.info as TensorInfo).shape
-        inH = shape[2].toInt(); inW = shape[3].toInt()
+        inH = shape[2].toInt().takeIf { it > 0 } ?: size.first
+        inW = shape[3].toInt().takeIf { it > 0 } ?: size.second
     }
 
     class Result(val depth: DepthMap, val seen: Bitmap)

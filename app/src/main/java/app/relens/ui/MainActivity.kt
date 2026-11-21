@@ -144,6 +144,18 @@ class MainActivity : ComponentActivity() {
         if (intent.getBooleanExtra("fetchmodels", false)) body.downloadModels()
         // --ez lensreport true: what each lens gets on this phone, into the log
         if (intent.getBooleanExtra("lensreport", false)) app.relens.Trace.i("lens report:\n" + body.rig.lensReport(app.relens.optics.lensBag))
+        // --ez livedepthbench true: time the free-size depth model at the live finder's size
+        if (intent.getBooleanExtra("livedepthbench", false)) lifecycleScope.launch(kotlinx.coroutines.Dispatchers.Default) {
+            val f = java.io.File(getExternalFilesDir(null), "models/da2s_fp32.onnx")
+            for ((h, w) in listOf(140 to 182, 168 to 224, 196 to 266)) runCatching {
+                app.relens.engine.DepthEstimator(f, Pair(h, w)).use { d ->
+                    val b = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+                    d.estimate(b)
+                    val t0 = System.nanoTime(); repeat(3) { d.estimate(b) }
+                    app.relens.Trace.i("live depth bench %dx%d: %d ms".format(h, w, (System.nanoTime() - t0) / 3_000_000))
+                }
+            }.onFailure { app.relens.Trace.w("live depth bench $h x $w failed", it) }
+        }
         if (intent.hasExtra("logicaltest")) window.decorView.postDelayed({ lifecycleScope.launch { body.rig.logicalTest() } }, 9000)
         // Testing from the Mac: --es rawtest "<lens name part>": a RAW-only capture to a test folder (no roll, no gallery).
         intent.getStringExtra("rawtest")?.let { want ->

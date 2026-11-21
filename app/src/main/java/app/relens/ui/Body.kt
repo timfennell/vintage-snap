@@ -94,6 +94,61 @@ class Body(app: Application) : AndroidViewModel(app) {
     val models = Models(app)
     fun downloadModels() { viewModelScope.launch { models.download() } }
 
+    // ---- live depth for the finder: the split prism and the live blur ----
+
+    /**
+     * A depth map of the finder's picture, live (three or so a second): relative depth from the
+     * network on a small copy of the preview, put to scale as disparity = [a] + [b] x relative by
+     * the lens's own focus distance at the focus point (fresh while autofocusing, held when the
+     * ring is taken by hand). [bmp]: the relative depth in its red channel, for the shaders.
+     */
+    class LiveDepth(val map: app.relens.engine.DepthMap, val bmp: Bitmap, val a: Float, val b: Float)
+    val liveDepth = kotlinx.coroutines.flow.MutableStateFlow<LiveDepth?>(null)
+    /** The finder's view (set by the screen): the live depth's source. */
+    var finderView: android.view.TextureView? = null
+    private var liveJob: kotlinx.coroutines.Job? = null
+    private var liveAnchor: Pair<Float, Float>? = null       // (relative, dioptres) at the focus point
+    private var liveFrames = 0
+
+    /** The depth model for the live finder: the original free-size Depth Anything (models/da2s_fp32.onnx). */
+    val liveModel: File get() = File(getApplication<Application>().getExternalFilesDir(null), "models/da2s_fp32.onnx")
+
+    fun startLiveDepth() {
+        if (liveJob?.isActive == true || !liveModel.exists()) return
+        liveJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.Default) {
+            val est = runCatching { app.relens.engine.DepthEstimator(liveModel, Pair(168, 224)) }
+                .onFailure { Trace.w("live depth: model didn't load", it) }.getOrNull() ?: return@launch
+            try {
+                while (kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]?.isActive == true) {
+                    if (busy || parallax != null) { kotlinx.coroutines.delay(300); continue }
+                    val shot = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        finderView?.takeIf { it.isAvailable }?.getBitmap(168, 224)
+                    } ?: run { kotlinx.coroutines.delay(300); continue }
+                    if (++liveFrames == 6) { runCatching {
+                        File(getApplication<Application>().getExternalFilesDir("tests"), "live_src.png").outputStream().use { shot.compress(Bitmap.CompressFormat.PNG, 100, it) } } }
+                    val map = est.estimate(shot).depth; shot.recycle()
+                    // scale: the lens focused at the focus point (autofocus) tells its distance there
+                    // (the focus point is in the finder's crop; the map covers the whole preview)
+                    val cr = rig.framing.value?.crop ?: 1f
+                    val relF = map.medianAround(0.5f + (focusX - 0.5f) / (1.125f * cr), 0.5f + (focusY - 0.5f) / cr, 0.04f)
+                    val lensD = rig.liveFocusD.value
+                    if (focusPos.isNaN() && lensD != null && lensD > 0.02f) liveAnchor = Pair(relF, lensD)
+                    val (ar, ad) = liveAnchor ?: Pair(relF, 0.5f)
+                    val a = 0.02f
+                    val b = maxOf((ad - a) / maxOf(ar, 0.05f), 0.01f)
+                    val px = IntArray(map.w * map.h) { i -> val v = (map.data[i].coerceIn(0f, 1f) * 255).toInt(); (0xFF shl 24) or (v shl 16) or (v shl 8) or v }
+                    val bmp = Bitmap.createBitmap(px, map.w, map.h, Bitmap.Config.ARGB_8888)
+                    liveDepth.value = LiveDepth(map, bmp, a, b)
+                    kotlinx.coroutines.delay(40)
+                }
+            } finally { est.close() }
+        }
+    }
+    fun stopLiveDepth() { liveJob?.cancel(); liveJob = null }
+
+    /** The focus distance the finder shows, dioptres: the ring's, or the lens's own on autofocus. */
+    val finderFocusD: Float? get() = focusM?.let { if (it.isInfinite()) 0f else 1f / it } ?: rig.liveFocusD.value
+
     /** Keepers ringed on the light table, kept between launches ("roll:frame"). */
     fun isMarked(roll: Int, frame: Int) = "$roll:$frame" in (prefs.getStringSet("marks", emptySet()) ?: emptySet())
     fun toggleMark(e: DarkroomEntry) {

@@ -267,59 +267,142 @@ private fun DrawScope.drawDigit(x: Float, w: Float, h: Float, th: Float, lit: St
     drawPath(litPath, Color(0xFFFFB08A).copy(alpha = 0.35f), style = Stroke(width = th * 0.25f))
 }
 
-// ---- a tilt (or whacked) lens's blur, live in the finder ---------------------------------------
+// ---- the lens's blur, live in the finder: depth of field and the tilt plane -----------------
 
-private const val TILT_BLUR_AGSL = """
+private const val LENS_BLUR_AGSL = """
 uniform shader image;
+uniform shader depth;     // the live depth map (relative, red), over the camera's whole preview
+uniform float2 depthSize;
+uniform float2 pscale;    // finder -> preview: the crop the finder shows, about the centre
+uniform float hasDepth;
+uniform float a;          // disparity = a + b x relative
+uniform float b;
+uniform float focusD;     // the focus distance, dioptres
 uniform float2 focus;     // the focus point (px)
-uniform float2 dir;       // the way focus changes across the frame (unit)
-uniform float dPerPx;     // dioptres of defocus per pixel along dir
+uniform float2 dir;       // a tilt's way of changing focus across the frame (unit)
+uniform float dPerPx;     // a tilt's dioptres per pixel along dir (0: none)
 uniform float rPerD;      // blur radius (px) per dioptre of defocus, at this aperture
 uniform float maxR;
-uniform float halfDof;    // dioptres either side that stay sharp
+uniform float halfDof;
+uniform float2 size;
 
 half4 main(float2 p) {
-    float dD = abs(dot(p - focus, dir) * dPerPx);
-    float r = min(max(dD - halfDof, 0.0) * rPerD, maxR);
+    // where this point's subject is, and where the lens is focused for it
+    float d = focusD;
+    if (hasDepth > 0.5) {
+        float2 uv = 0.5 + (p / size - 0.5) * pscale;
+        d = a + b * depth.eval(uv * depthSize).r;
+    }
+    float plane = focusD + dot(p - focus, dir) * dPerPx;
+    float r = min(max(abs(d - plane) - halfDof, 0.0) * rPerD, maxR);
     if (r < 0.6) return image.eval(p);
-    // a disc of 24 samples (Vogel), the pattern turned per pixel so it reads as blur, not rings
     half4 acc = half4(0);
     float turn = fract(sin(dot(floor(p), float2(12.9898, 78.233))) * 43758.5453) * 6.2832;
     for (int i = 0; i < 24; i++) {
-        float a = float(i) * 2.39996 + turn;
+        float ang = float(i) * 2.39996 + turn;
         float rr = sqrt((float(i) + 0.5) / 24.0) * r;
-        acc += image.eval(p + rr * float2(cos(a), sin(a)));
+        acc += image.eval(p + rr * float2(cos(ang), sin(ang)));
     }
     return acc / 24.0;
 }
 """
 
 /**
- * The finder's picture blurred as a tilted lens would blur it (Android 13+): the plane of
- * focus turned by the lens's tilt (Movements.tiltDioptres: dioptres of focus change across
- * the frame's half-diagonal), each point blurred by its defocus at this aperture. Live there's
- * no depth, so the scene is taken to be at the focus distance: blur grows away from the sharp
- * band, the miniature look. The print does it properly, with the depth map.
+ * The finder's picture blurred as the mounted lens would blur it (Android 13+): each point by
+ * its defocus, from the live depth map ([live]: the scene's distances) against the focus
+ * distance, and for a tilt lens against the turned plane of focus (Movements.tiltDioptres).
+ * Without a depth map yet the scene is taken to be at the focus distance (only a tilt blurs).
  */
 @Composable
-fun Modifier.tiltBlur(tiltDioptres: FloatArray, focusX: Float, focusY: Float, focalMM: Float, fNumber: Float): Modifier {
-    if (Build.VERSION.SDK_INT < 33) return this
+fun Modifier.lensBlur(live: Body.LiveDepth?, crop: Float, tiltDioptres: FloatArray, focusX: Float, focusY: Float,
+                      focusD: Float?, focalMM: Float, fNumber: Float): Modifier {
+    if (Build.VERSION.SDK_INT < 33 || focusD == null) return this
     val g = kotlin.math.hypot(tiltDioptres[0], tiltDioptres[1])
-    if (g < 1e-4f) return this
-    val shader = remember { RuntimeShader(TILT_BLUR_AGSL) }
+    if (live == null && g < 1e-4f) return this
+    val shader = remember { RuntimeShader(LENS_BLUR_AGSL) }
     return this.graphicsLayer {
         val hd = kotlin.math.hypot(size.width / 2, size.height / 2)
         val f = focalMM / 1000f
-        // image-side blur ~ aperture x focal length x defocus, as a share of the frame's long side (36 mm)
         val longPx = maxOf(size.width, size.height)
         val rPerD = 0.5f * (f / fNumber) * f / 0.036f * longPx
+        shader.setFloatUniform("size", size.width, size.height)
+        shader.setFloatUniform("focusD", focusD)
         shader.setFloatUniform("focus", focusX * size.width, focusY * size.height)
-        shader.setFloatUniform("dir", tiltDioptres[0] / g, tiltDioptres[1] / g)
-        shader.setFloatUniform("dPerPx", g / hd)
+        shader.setFloatUniform("dir", if (g > 1e-4f) tiltDioptres[0] / g else 0f, if (g > 1e-4f) tiltDioptres[1] / g else 0f)
+        shader.setFloatUniform("dPerPx", if (g > 1e-4f) g / hd else 0f)
         shader.setFloatUniform("rPerD", rPerD)
         shader.setFloatUniform("maxR", longPx * 0.02f)
-        // what still looks sharp at the finder's size: a circle of about a pixel and a half
         shader.setFloatUniform("halfDof", 1.5f / maxOf(rPerD, 1e-3f))
+        shader.setFloatUniform("pscale", 1f / (1.125f * crop), 1f / crop)
+        if (live != null) {
+            shader.setInputShader("depth", android.graphics.BitmapShader(live.bmp, android.graphics.Shader.TileMode.CLAMP, android.graphics.Shader.TileMode.CLAMP))
+            shader.setFloatUniform("depthSize", live.bmp.width.toFloat(), live.bmp.height.toFloat())
+            shader.setFloatUniform("hasDepth", 1f); shader.setFloatUniform("a", live.a); shader.setFloatUniform("b", live.b)
+        } else {
+            shader.setInputShader("depth", android.graphics.BitmapShader(android.graphics.Bitmap.createBitmap(1, 1, android.graphics.Bitmap.Config.ARGB_8888),
+                android.graphics.Shader.TileMode.CLAMP, android.graphics.Shader.TileMode.CLAMP))
+            shader.setFloatUniform("depthSize", 1f, 1f)
+            shader.setFloatUniform("hasDepth", 0f); shader.setFloatUniform("a", 0f); shader.setFloatUniform("b", 0f)
+        }
+        clip = true
+        renderEffect = RenderEffect.createRuntimeShaderEffect(shader, "image").asComposeRenderEffect()
+    }
+}
+
+// ---- the split prism and its microprism collar ------------------------------------------------
+
+private const val SPLIT_AGSL = """
+uniform shader image;
+uniform float2 centre;
+uniform float r;          // the split spot's radius (px)
+uniform float shift;      // how far the halves stand apart (px, signed: which way the focus is off)
+uniform float prisms;     // the collar's shimmer (px)
+
+float hash(float2 q) { return fract(sin(dot(q, float2(127.1, 311.7))) * 43758.5453); }
+
+half4 main(float2 p) {
+    float2 d = p - centre;
+    float dist = length(d);
+    if (dist < r) {
+        // the split image: the top half one way, the bottom the other; a fine dark line between
+        float side = d.y < 0.0 ? 1.0 : -1.0;
+        half4 c = image.eval(p + float2(side * shift, 0.0));
+        float line = smoothstep(0.6, 1.4, abs(d.y));
+        float rim = smoothstep(r, r - 1.5, dist);
+        return half4(c.rgb * (0.82 + 0.18 * line) * (0.85 + 0.15 * rim), 1.0);
+    }
+    if (dist < r * 1.6) {
+        // the microprism collar: tiny prisms that break an out-of-focus picture into a shimmer
+        float cell = max(r * 0.09, 2.0);
+        float2 q = floor(d / cell);
+        float2 o = (float2(hash(q), hash(q + 17.0)) - 0.5) * 2.0 * prisms;
+        half4 c = image.eval(p + o);
+        float edge = smoothstep(r * 1.6, r * 1.55, dist) * smoothstep(r, r + 1.5, dist);
+        return half4(mix(image.eval(p).rgb, c.rgb * 0.92, edge), 1.0);
+    }
+    return image.eval(p);
+}
+"""
+
+/**
+ * The SLR's focusing aids at the finder's centre (Android 13+): a split-image spot whose halves
+ * stand apart by how far the focus is off the subject there ([defocusD] dioptres, signed), and
+ * a microprism collar that shimmers while it's off. The shift is the defocus blur the lens
+ * would give wide open (as the prism sees it), half a spot at most.
+ */
+@Composable
+fun Modifier.splitPrism(defocusD: Float?, focalMM: Float, maxAperture: Float): Modifier {
+    if (Build.VERSION.SDK_INT < 33) return this
+    val shader = remember { RuntimeShader(SPLIT_AGSL) }
+    return this.graphicsLayer {
+        val r = minOf(size.width, size.height) * 0.085f
+        val f = focalMM / 1000f
+        val rPerD = 0.5f * (f / maxAperture) * f / 0.036f * maxOf(size.width, size.height)
+        val sh = ((defocusD ?: 0f) * rPerD * 0.8f).coerceIn(-0.6f * r, 0.6f * r)
+        shader.setFloatUniform("centre", size.width / 2f, size.height / 2f)
+        shader.setFloatUniform("r", r)
+        shader.setFloatUniform("shift", sh)
+        shader.setFloatUniform("prisms", minOf(kotlin.math.abs(sh) * 0.5f, r * 0.12f))
         clip = true
         renderEffect = RenderEffect.createRuntimeShaderEffect(shader, "image").asComposeRenderEffect()
     }

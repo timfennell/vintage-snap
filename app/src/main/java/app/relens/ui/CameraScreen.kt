@@ -81,6 +81,9 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
     val raw = framing?.camera?.raw == true
     val lens = body.lens
     body.onParallaxFire = { haptics.sounds.fire(1f / 60) }   // ARCore's frames: a quick release
+    // the live depth map (split prism, live blur), while the camera screen is up
+    val liveDepth by body.liveDepth.collectAsState()
+    androidx.compose.runtime.DisposableEffect(Unit) { body.startLiveDepth(); onDispose { body.stopLiveDepth() } }
     // Leaving the app hands the camera back (Android takes it from background apps anyway);
     // coming back opens it again, with nothing left over from the time away.
     val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
@@ -147,10 +150,16 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                         val z = 1f + 0.9f * (kotlin.math.abs(shiftView[0]) + kotlin.math.abs(shiftView[1]))
                         scaleX = z; scaleY = z
                     }
-                    // a tilted (or whacked) lens's blur, live: the sharp band and the fall-off either side
-                    .then(if (lens.movement is Movement.Tilt) Modifier.tiltBlur(
-                        Movements.tiltDioptres(lens, floatArrayOf(body.tiltX, body.tiltY)), body.focusX, body.focusY, lens.focalMM, body.fNumber)
-                        else Modifier))
+                    // the lens's blur, live: depth of field from the live depth map, and a tilt's plane
+                    .lensBlur(liveDepth, framing?.crop ?: 1f,
+                        if (lens.movement is Movement.Tilt) Movements.tiltDioptres(lens, floatArrayOf(body.tiltX, body.tiltY)) else floatArrayOf(0f, 0f),
+                        body.focusX, body.focusY, body.finderFocusD, lens.focalMM, body.fNumber)
+                    // the split-image spot and microprism collar at the centre
+                    .splitPrism(liveDepth?.let { ld ->
+                        val fd = body.finderFocusD ?: return@let null
+                        val c = ld.a + ld.b * ld.map.medianAround(0.5f + 0f, 0.5f, 0.03f)
+                        fd - c
+                    }, lens.focalMM, lens.maxAperture))
                 // Taps and drags over the finder (a separate layer, so the view's own transform doesn't move them).
                 Box(Modifier.fillMaxSize()
                     .pointerInput(Unit) {
@@ -336,6 +345,7 @@ private fun Finder(body: Body, crop: Float, modifier: Modifier) {
         modifier = modifier,
         factory = { ctx ->
             android.view.TextureView(ctx).apply {
+                body.finderView = this
                 // The crop is a scale about the view's centre: apply it once the view has a size
                 // (Compose's update can run before layout, when the centre would be the corner).
                 addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ -> applyCrop(v as android.view.TextureView) }
