@@ -93,9 +93,10 @@ fun LensBagScreen(body: Body, haptics: Haptics, onBack: () -> Unit) {
                         haptics.lensMounted()
                         onBack()
                     }.padding(horizontal = 12.dp, vertical = 10.dp)) {
-                    Row {
-                        Text((if (on) "▶ " else "") + lens.name, color = if (on) Palette.amber else Palette.cream,
-                            fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    // the name on its line, the specs on the next (a long note can't crush the name)
+                    Text((if (on) "▶ " else "") + lens.name, color = if (on) Palette.amber else Palette.cream,
+                        fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    run {
                         val iris = if (lens.isPinhole) "pinhole ${lens.pinholeMM} mm" else if (lens.blades >= 3) "${lens.blades}-blade iris" else "round iris"
                         val move = when (val m = lens.movement) { is Movement.Tilt -> " · tilt ${m.maxDegrees.toInt()}°"; is Movement.Shift -> " · shift ${m.maxMM.toInt()} mm"; else -> "" }
                         val fr = body.rig.framingFor(lens)
@@ -104,7 +105,7 @@ fun LensBagScreen(body: Body, haptics: Haptics, onBack: () -> Unit) {
                         val wider = fr != null && fr.camera.f36 > lens.focalMM * 1.005f
                         Text("$iris · close ${(lens.minFocusM * 100).toInt()} cm$move · $cam %.1f MP".format(fr?.megapixels ?: 0f) +
                             if (wider) " · at the ultra-wide's %.0f mm view".format(fr!!.camera.f36) else "",
-                            color = Palette.dim, fontSize = 11.sp)
+                            color = Palette.amber.copy(alpha = 0.75f), fontSize = 11.sp)
                     }
                     Text(lens.inspiredBy, color = Palette.dim, fontSize = 11.sp)
                 }
