@@ -44,8 +44,9 @@ class Haptics(context: Context) {
     fun clunk() = primitive(if (Build.VERSION.SDK_INT >= 31) VibrationEffect.Composition.PRIMITIVE_THUD
         else VibrationEffect.Composition.PRIMITIVE_CLICK, 1f, VibrationEffect.EFFECT_HEAVY_CLICK)
 
-    fun shutter() {
-        sounds.play(Sounds.Event.SHUTTER)
+    /** The shutter firing at [seconds] (its recording at that speed), with the mirror's feel. */
+    fun shutter(seconds: Float = 1f / 125) {
+        sounds.fire(seconds)
         if (vib.areAllPrimitivesSupported(VibrationEffect.Composition.PRIMITIVE_CLICK)) {
             vib.vibrate(VibrationEffect.startComposition()
                 .addPrimitive(VibrationEffect.Composition.PRIMITIVE_CLICK, 1f)          // mirror up

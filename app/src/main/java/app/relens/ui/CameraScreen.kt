@@ -80,7 +80,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
     val rigError by body.rig.error.collectAsState()
     val raw = framing?.camera?.raw == true
     val lens = body.lens
-    body.onParallaxFire = { haptics.sounds.play(Sounds.Event.SHUTTER, 0.8f) }
+    body.onParallaxFire = { haptics.sounds.fire(1f / 60) }   // ARCore's frames: a quick release
     // The mirror: up for the exposure, the finder black; down again, the picture back.
     var mirrorUp by remember { mutableStateOf(false) }
     // The mirror stays up while the frame is taken and the rangefinder sweep runs (hold steady),
@@ -293,7 +293,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                 }
             }
             ShutterRelease(busy = body.busy) {
-                if (!body.busy && body.framesLeft > 0) { haptics.shutter(); mirrorUp = true }
+                if (!body.busy && body.framesLeft > 0) { haptics.shutter(body.shutterSeconds); mirrorUp = true }
                 body.shoot(onShot = { haptics.advance() })
             }
             Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
