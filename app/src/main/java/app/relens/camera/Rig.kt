@@ -303,7 +303,7 @@ class Rig(private val context: Context) {
             if (cam.raw) {
                 val rs = characteristics!!.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)!!
                     .getOutputSizes(ImageFormat.RAW_SENSOR).maxBy { it.width * it.height }
-                rawReader = ImageReader.newInstance(rs.width, rs.height, ImageFormat.RAW_SENSOR, 2)
+                rawReader = ImageReader.newInstance(rs.width, rs.height, ImageFormat.RAW_SENSOR, 3)
             }
             if (heroId != cam.id) afSamples.clear()
             heroId = cam.id
@@ -660,6 +660,9 @@ class Rig(private val context: Context) {
     @Volatile private var sweepWait: CompletableDeferred<Float?>? = null
 
     /** Takes a frame: JPEG (and DNG when the camera gives RAW) into [dir]. */
+    /** Merge a burst of RAW frames into each negative (RawMerge): BURST_EXTRA more than the first. */
+    var burstMerge = true
+
     /** The hero shot's own capture result (its exposure, for the light map's exposure ratio). */
     @Volatile private var lastShotResult: CaptureResult? = null
     /** After each shot, a frame from the ultra-wide to find the lights round the picture. */
@@ -743,8 +746,17 @@ class Rig(private val context: Context) {
         val jr = jpegReader!!; val rr = rawReader
         var jpegImage: Image? = null; var rawImage: Image? = null; var result: CaptureResult? = null
         var rawGiveUp = false
+        // the burst's extra RAW frames, copied as they come (merged into the negative: RawMerge)
+        val extraN = if (rr != null && burstMerge) BURST_EXTRA else 0
+        val extras = java.util.Collections.synchronizedList(ArrayList<ShortArray>())
+        var extrasGiveUp = false; var extrasWaiting = false
         fun finish() {
             val ji = jpegImage ?: return
+            if (rawImage != null && result != null && extras.size < extraN && !extrasGiveUp) {
+                if (!extrasWaiting) { extrasWaiting = true
+                    handler.postDelayed({ if (!done.isCompleted) { extrasGiveUp = true; finish() } }, 1500) }
+                return
+            }
             if (rr != null && !rawGiveUp && (rawImage == null || result == null)) {
                 if (rawImage != null && result == null) return
                 // Some cameras accept a RAW stream and never fill it: don't lose the frame over it.
@@ -763,6 +775,14 @@ class Rig(private val context: Context) {
                     // For the developer: the sensor's values as plain 16-bit, and what it needs to read them.
                     runCatching {
                         RawNegative.write(File(dir, "$name.raw16"), File(dir, "$name.rawmeta.json"), ri, characteristics!!, result!!, (fr.camera.sensorOrientation + deviceRotation) % 360)
+                        // the burst's other frames merged in: less noise, the same picture
+                        val ex = synchronized(extras) { extras.toList() }
+                        // a test shot keeps its single first frame beside the merge (to compare)
+                        if (ex.isNotEmpty() && name == "testshot") {
+                            File(dir, "$name.raw16").copyTo(File(dir, "$name.single.raw16"), overwrite = true)
+                            File(dir, "$name.rawmeta.json").copyTo(File(dir, "$name.single.rawmeta.json"), overwrite = true)
+                        }
+                        if (ex.isNotEmpty()) RawMerge.merge(File(dir, "$name.raw16"), File(dir, "$name.rawmeta.json"), ex, ri.width, ri.height)
                     }.onFailure { app.relens.Trace.w("raw negative not written", it) }
                     DngCreator(characteristics!!, result!!).use { dc ->
                         dc.setOrientation(exifOrientation(fr.camera.sensorOrientation))
@@ -783,7 +803,12 @@ class Rig(private val context: Context) {
             img.close()
         }, handler)
         jr.setOnImageAvailableListener({ r -> jpegImage = r.acquireNextImage(); app.relens.Trace.i("jpeg in"); finish() }, handler)
-        rr?.setOnImageAvailableListener({ r -> rawImage = r.acquireNextImage(); app.relens.Trace.i("raw in"); finish() }, handler)
+        rr?.setOnImageAvailableListener({ r ->
+            val img = r.acquireNextImage() ?: return@setOnImageAvailableListener
+            if (rawImage == null) { rawImage = img; app.relens.Trace.i("raw in") }
+            else { runCatching { extras += RawMerge.copy(img) }; img.close() }    // an extra: copied, given back
+            finish()
+        }, handler)
         handler.post { try {
             // This phone's camera fills a RAW stream only in a request of its own (RAW and
             // JPEG together: the JPEG only). So a burst: the RAW frame, then the JPEG frame.
@@ -800,6 +825,11 @@ class Rig(private val context: Context) {
                 set(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE, CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE_ON)
             }.build())
             reqs.add(jpegReq)
+            // the extra RAW frames for the merge, the same as the first
+            val extraReqs = (1..extraN).map {
+                baseRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)!!.apply { addTarget(rr!!.surface) }.build()
+            }
+            reqs.addAll(extraReqs)
             // The ultra-wide's view of the same moment (where the lights are, round the picture):
             // a request of its own, since this phone fails a RAW request that also feeds it.
             val uwReq = uw?.let { u -> baseRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)!!.apply { addTarget(u.surface) }.build() }
@@ -810,11 +840,13 @@ class Rig(private val context: Context) {
                     if (logicalOpen) { lastHeroResult = heroId?.let { t.physicalCameraTotalResults[it] } }
                     // The DNG needs the RAW frame's own result (the hero camera's, on the logical camera).
                     val t = if (logicalOpen) heroId?.let { t.physicalCameraTotalResults[it] } ?: t else t
+                    if (r in extraReqs) return                    // the merge's frames: their results aren't the negative's
                     if (r != jpegReq || rr == null) { if (result == null || r != jpegReq) result = t }
                     if (rr == null) result = t
                     finish()
                 }
                 override fun onCaptureFailed(ss: CameraCaptureSession, r: CaptureRequest, f: android.hardware.camera2.CaptureFailure) {
+                    if (r in extraReqs) { app.relens.Trace.w("a merge frame failed (${f.reason})"); return }
                     if (r == uwReq) { app.relens.Trace.w("ultra-wide frame failed (${f.reason}): no light map"); return }
                     app.relens.Trace.e("capture failed (${f.reason}) on the ${if (r == jpegReq) "JPEG" else "RAW"} request, logical $logicalOpen")
                     done.completeExceptionally(IllegalStateException("capture failed (${f.reason})"))
@@ -847,6 +879,8 @@ class Rig(private val context: Context) {
     }
 
     companion object {
+        const val BURST_EXTRA = 3
+
         /** A point of the upright 3:2 crop to the upright 4:3 full frame (fractions), portrait or landscape. */
         fun cropToFull(fx: Float, fy: Float, fr: Framing, portrait: Boolean = true): Pair<Float, Float> {
             // Upright portrait full frame: 3 wide by 4 tall. The crop: 1/crop of the long (4) side,

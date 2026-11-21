@@ -41,6 +41,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         app.relens.Trace.init(this)
         if (intent.getBooleanExtra("logical", false)) body.rig.useLogical = true
+        // --ez nomerge true (testing): single RAW frames, no burst merge
+        if (intent.getBooleanExtra("nomerge", false)) body.rig.burstMerge = false
         enableEdgeToEdge()
         // the volume keys turn the camera's sounds (the media volume)
         volumeControlStream = android.media.AudioManager.STREAM_MUSIC
