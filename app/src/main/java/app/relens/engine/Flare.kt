@@ -20,9 +20,6 @@ class LightSource(val x: Float, val y: Float, val radius: Float, val energy: Flo
 object Flare {
     const val MAX_LIGHTS = 8
     const val ROWS = 4 + 3 * MAX_LIGHTS + 1      // lens, filter, 3 per light, the leak row
-    /** How much brighter than white a clipped light really is: a small lamp, a big window. */
-    var HOT_SMALL = 400f
-    var HOT_LARGE = 40f
 
     /** Joins bright tiles (8-neighbours) into lights; the [MAX_LIGHTS] brightest. */
     fun join(tw: Int, th: Int, energy: FloatArray, where: FloatArray): List<LightSource> {
@@ -103,28 +100,50 @@ object Flare {
      * clipped: their energy is restored roughly).
      */
     fun rows(lights: List<LightSource>, w: Int, h: Int, lens: Lens, fNumber: Float, filter: LensFilter,
-             tiltDeg: FloatArray, gain: Float): FloatArray {
+             tiltDeg: FloatArray, gain: Float, sceneKey: Float = 0.12f): FloatArray {
         val f = FloatArray(ROWS * 4)
         val seed = seedOf(lens)
         val diag = hypot(w.toFloat(), h.toFloat())
         val npx = w.toFloat() * h
+        val key = maxOf(sceneKey, 1e-3f)
         fun row(i: Int, a: Float, b: Float, c: Float, d: Float) { f[4 * i] = a; f[4 * i + 1] = b; f[4 * i + 2] = c; f[4 * i + 3] = d }
         row(0, lights.size.toFloat(), lens.blades.toFloat(), lens.bladeRotation, min(1f, lens.maxAperture / fNumber))
         row(1, if (singleCoated(lens)) 1f else 0f, seed + 10000f * dustGrade(lens) + if (bubbles(lens)) 40000f else 0f,
             lens.obstruction, lens.squeeze)
         row(2, 0.5f, 0.5f, 0.008f + lens.lateralCA * 4,
             0.15f + (kotlin.math.abs(lens.curvatureRadial) + kotlin.math.abs(lens.curvatureTangential)) * 0.6f + kotlin.math.abs(lens.sphericalAberration) * 0.3f)
-        row(3, if (filter.isNone) 0f else 1f, 0f, 0f, 0f)
-        for ((i, s) in lights.withIndex()) {
-            // A lamp's face clips the sensor: what was measured is "white", while the light is
-            // tens of times brighter (Vintage Click's lights carry their true radiance). A
-            // clipped light gets that back: most for a small, compact source, less for a big
-            // bright area (a window), which would otherwise veil everything.
-            val perPx = s.luma / maxOf(s.pixels, 1)
+
+        // Each light judged against the scene: how many stops it stands above the scene's key
+        // (its geometric-mean brightness). A clipped light's face is estimated that way too: a
+        // small source well above the key (11.5 stops), a big bright area less so (7), rather
+        // than a fixed multiple of "white", so a lamp in a dim room flares harder than the same
+        // clip in daylight. Ghost chains need the light to stand out (3 to 6.5 stops) and to be
+        // compact: a broad bright area (a window, sky) gives veiling glare only.
+        class Judged(val hot: Float, val ghost: Float, val score: Float)
+        val judged = lights.map { s ->
+            val perPx = maxOf(s.luma / maxOf(s.pixels, 1), 1e-4f)
             val area = s.pixels / npx
-            val hot = if (perPx < 0.85f) 1f
-                else (HOT_SMALL * Math.pow((HOT_LARGE / HOT_SMALL).toDouble(), smoothstep(0.002f, 0.03f, area).toDouble()).toFloat())
-            val k = gain * lens.flareBoost * flareProne(lens) * hot / npx
+            val clippedStops = 11.5f + (7f - 11.5f) * smoothstep(0.002f, 0.03f, area)
+            val radiance = if (perPx < 0.85f) perPx else maxOf(perPx, key * Math.pow(2.0, clippedStops.toDouble()).toFloat())
+            val stops = kotlin.math.log2(radiance / key)
+            val stand = smoothstep(3f, 6.5f, stops)
+            val compact = 1f - smoothstep(0.006f, 0.03f, area)
+            val u = s.x / w; val v = s.y / h
+            val fade = 1f - smoothstep(0.2f, 0.6f, maxOf(maxOf(-u, u - 1), maxOf(-v, v - 1)))
+            Judged(radiance / perPx, stand * compact, stand * compact * s.luma * (radiance / perPx) * fade)
+        }
+        // Only the two strongest throw ghost chains (more is clutter): the second by how it
+        // compares with the first, both a little less when two are at it; the rest keep their
+        // glare and starburst.
+        val ranked = judged.indices.sortedByDescending { judged[it].score }.filter { judged[it].ghost > 0.01f }.take(2)
+        val ghostW = FloatArray(lights.size)
+        ranked.forEachIndexed { r, i ->
+            ghostW[i] = judged[i].ghost * (if (r == 0) 1f else kotlin.math.sqrt(judged[i].score / maxOf(judged[ranked[0]].score, 1e-6f)).coerceAtMost(1f))
+        }
+        if (ranked.size == 2) for (i in ranked) ghostW[i] /= 1.3f
+        row(3, if (filter.isNone) 0f else 1f, ranked.size.toFloat(), 0f, 0f)
+        for ((i, s) in lights.withIndex()) {
+            val k = gain * lens.flareBoost * flareProne(lens) * judged[i].hot / npx
             // Off the picture (found in the camera's wider frame): its flare fades as it goes,
             // rather than stopping at a line (Flare.swift).
             val u = s.x / w; val v = s.y / h
@@ -132,6 +151,7 @@ object Flare {
             val fade = 1f - smoothstep(0.2f, 0.6f, beyond)
             row(4 + 3 * i, u, v, s.radius / diag, fade)
             row(5 + 3 * i, s.energy[0] * k, s.energy[1] * k, s.energy[2] * k, s.blur / diag)
+            row(6 + 3 * i, ghostW[i], 0f, 0f, 0f)
         }
         // A loose lens's leak: the gap opens on the side it is rocked away from.
         if (lens.leak > 0) {

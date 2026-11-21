@@ -69,8 +69,25 @@ object RawDeveloper {
         val uw = if (rot == 90 || rot == 270) h else w; val uh = if (rot == 90 || rot == 270) w else h
         val levels = 6
         val out = gl.texture(uw, uh, GLES30.GL_RGBA16F, levels = levels)
+        // Hot and stuck photosites out first (hotpix.comp), into a clean copy the demosaic reads.
+        val clean = IntArray(1).also { GLES30.glGenTextures(1, it, 0) }[0]
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, clean)
+        GLES30.glTexStorage2D(GLES30.GL_TEXTURE_2D, 1, GLES30.GL_R32UI, w, h)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
+        run {
+            val hp = gl.use("hotpix")
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0); GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, rawTex)
+            GLES30.glUniform1i(GLES30.glGetUniformLocation(hp, "uRaw"), 0)
+            val bk = m.getJSONArray("black")
+            gl.u1f(hp, "uBlack", ((0 until 4).sumOf { bk.getDouble(it) } / 4).toFloat())
+            gl.u1f(hp, "uWhite", m.getDouble("white").toFloat())
+            android.opengl.GLES31.glBindImageTexture(0, clean, 0, false, 0, android.opengl.GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
+            gl.dispatch(w, h)
+            android.opengl.GLES31.glMemoryBarrier(android.opengl.GLES31.GL_TEXTURE_FETCH_BARRIER_BIT)
+        }
         val p = gl.use("rawdev")
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0); GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, rawTex)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0); GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, clean)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(p, "uRaw"), 0)
         gl.sampler(p, "uShading", 1, shading)
         gl.u1f(p, "uHasShading", if (sw > 0) 1f else 0f)
@@ -88,7 +105,7 @@ object RawDeveloper {
         gl.finish()
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, out)
         GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
-        gl.deleteTextures(rawTex, shading)
+        gl.deleteTextures(rawTex, clean, shading)
         gl.checkErr("raw develop")
         app.relens.Trace.i("raw developed ${w}x$h -> ${uw}x$uh, rotate $rot, illuminant mix %.2f, neutral %s".format(t, neutral.joinToString { "%.3f".format(it) }))
         return RawPicture(out, uw, uh, levels)

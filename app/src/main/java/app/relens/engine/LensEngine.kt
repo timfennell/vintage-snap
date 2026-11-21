@@ -53,6 +53,8 @@ data class Look(
     /** Flare from the lights found in the picture; [flareGain] restores clipped JPEG light (RAW ~1). */
     val flare: Boolean = true,
     val flareGain: Float = 3f,
+    /** The scene's key: its geometric-mean brightness in the working light (lights are judged against it). */
+    val sceneKey: Float = 0.12f,
     /** A tilt lens's tilt, degrees (a whacked lens's leak opens on the side it's rocked away from). */
     val tiltDeg: FloatArray = floatArrayOf(0f, 0f),
     /** Where the frame is in the source texture (uv origin, uv size): the lens's crop of the camera's frame. */
@@ -301,7 +303,7 @@ class LensEngine(private val gl: Gl) {
             gl.deleteTextures(eTex, wTex)
             // Found over the camera's whole frame when there is one (lights just off the picture too).
             lights = extraLights?.sortedByDescending { it.luma }?.take(Flare.MAX_LIGHTS) ?: Flare.join(ltw, lth, e, wh)
-            val rows = Flare.rows(lights, w, h, look.lens, look.fNumber, look.filter, look.tiltDeg, look.flareGain)
+            val rows = Flare.rows(lights, w, h, look.lens, look.fNumber, look.filter, look.tiltDeg, look.flareGain, look.sceneKey)
             if (lights.isNotEmpty() || look.lens.leak > 0f) {
                 val fo = gl.texture(w, h, GLES30.GL_RGBA16F)
                 p = gl.use("flare")

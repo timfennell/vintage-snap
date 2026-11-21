@@ -75,6 +75,7 @@ fun LightTableScreen(body: Body, onBack: () -> Unit, openBench: () -> Unit, init
     BackHandler(onBack = onBack)
     var scale by remember { mutableFloatStateOf(initialScale) }
     var pan by remember { mutableStateOf(Offset.Zero) }
+    var centred by remember { mutableStateOf(false) }
     var viewing by remember { mutableStateOf<DarkroomEntry?>(null) }
     val measurer = rememberTextMeasurer()
     // The session's frames by roll, oldest first, cut into strips of six.
@@ -99,6 +100,15 @@ fun LightTableScreen(body: Body, onBack: () -> Unit, openBench: () -> Unit, init
             }
             fun frameRect(strip: Rect, j: Int) = Rect(Offset(strip.left + 5.5f * mm, strip.top + (2f + j * 38f + 1f) * mm), Size(24f * mm, 36f * mm))
             fun toSheet(p: Offset) = (p - pan) / scale
+            // Opened on the newest frame: the last of the latest roll, in the middle of the table
+            // at the zoom it opens at (once, when the frames are there).
+            androidx.compose.runtime.LaunchedEffect(strips.size, wPx, hPx) {
+                if (centred || strips.isEmpty()) return@LaunchedEffect
+                val i = strips.lastIndex; val st = strips[i]
+                val c = frameRect(stripRect(i, st.size), st.lastIndex).center
+                pan = Offset(wPx / 2f, hPx / 2f) - c * scale
+                centred = true
+            }
 
             Canvas(Modifier.fillMaxSize()
                 .pointerInput(Unit) {

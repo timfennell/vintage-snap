@@ -387,7 +387,17 @@ class Developer(private val context: Context) {
         // The frame now matches the lens: its own focal length over the frame's 36 mm long side
         // (old uncropped shots: the phone's framing, the "equivalent" stand-in).
         val vf = if (job.crop > 0f) job.lens.focalMM / 36f else viewFocal
-        val look = Look(job.lens, job.fNumber, dispA = dispA, dispB = dispB, focusD = focusD, viewFocal = vf,
+        // The scene's key: the geometric mean of its brightness (bright spots don't drag it up),
+        // in the working light the lights are measured in (the print's exposure included).
+        val sceneKey = run {
+            val sm = Bitmap.createScaledBitmap(photo.bmp, 48, maxOf(1, 48 * photo.bmp.height / photo.bmp.width), true)
+            val px = IntArray(sm.width * sm.height); sm.getPixels(px, 0, sm.width, 0, 0, sm.width, sm.height); sm.recycle()
+            fun lin(c: Int) = (c / 255.0).let { if (it <= 0.04045) it / 12.92 else Math.pow((it + 0.055) / 1.055, 2.4) }
+            val logMean = px.sumOf { q -> kotlin.math.ln(0.2126 * lin((q shr 16) and 255) + 0.7152 * lin((q shr 8) and 255) + 0.0722 * lin(q and 255) + 1e-4) } / px.size
+            (kotlin.math.exp(logMean) * Math.pow(2.0, job.exposureStops.toDouble())).toFloat()
+        }
+        Trace.i("scene key %.3f".format(sceneKey))
+        val look = Look(job.lens, job.fNumber, dispA = dispA, dispB = dispB, focusD = focusD, viewFocal = vf, sceneKey = sceneKey,
             tiltD = tiltD, keystone = Movements.keystone(job.lens, job.shiftMM),
             stock = job.stock, push = job.push, reciprocity = job.reciprocity, samples = 256, levelBias = -1f, filter = job.filter,
             tiltDeg = job.tiltDeg, flareGain = if (rp != null) 1f else 3f,

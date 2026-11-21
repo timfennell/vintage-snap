@@ -1,0 +1,35 @@
+// Stuck and hot photosites, before demosaicing (a phone's RAW comes off the sensor without
+// the defect correction its ISP would do). Each photosite is set against its eight nearest
+// of the same colour, two away on the Bayer grid: one standing well above even the
+// second-brightest of them is a defect, not detail, and takes their median. Using the
+// second-brightest keeps real edges and small highlights (two bright neighbours are
+// enough to vouch for one); left alone, a single hot photosite becomes a coloured cross
+// after demosaicing and blooms into a bokeh disc.
+precision highp usampler2D;
+precision highp uimage2D;
+uniform usampler2D uRaw;                         // R16UI, the sensor's values
+layout(r32ui, binding = 0) writeonly uniform uimage2D uOut;
+uniform float uBlack;                            // the mean black level
+uniform float uWhite;
+
+void main() {
+    ivec2 s = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 sz = textureSize(uRaw, 0);
+    if (s.x >= sz.x || s.y >= sz.y) return;
+    float c = float(texelFetch(uRaw, s, 0).r);
+    float n[8];
+    int k = 0;
+    for (int dy = -2; dy <= 2; dy += 2) for (int dx = -2; dx <= 2; dx += 2) {
+        if (dx == 0 && dy == 0) continue;
+        n[k++] = float(texelFetch(uRaw, clamp(s + ivec2(dx, dy), ivec2(0), sz - 1), 0).r);
+    }
+    // sort the eight (small: an insertion sort)
+    for (int i = 1; i < 8; i++) { float v = n[i]; int j = i - 1; while (j >= 0 && n[j] > v) { n[j + 1] = n[j]; j--; } n[j + 1] = v; }
+    float range = max(uWhite - uBlack, 1.0);
+    float second = n[6] - uBlack;
+    float median = 0.5 * (n[3] + n[4]);
+    float over = c - uBlack;
+    // well above the second-brightest neighbour: by half again, and by a few percent of full scale
+    bool hot = over > second * 1.5 + 0.03 * range;
+    imageStore(uOut, s, uvec4(uint(hot ? median : c), 0u, 0u, 0u));
+}
