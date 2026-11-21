@@ -107,21 +107,7 @@ class Developer(private val context: Context) {
         val t0 = System.nanoTime()
         val rp = RawDeveloper.develop(g, raw16, meta)
         val ms = (System.nanoTime() - t0) / 1_000_000
-        val rows = 64
-        val buf = java.nio.ByteBuffer.allocateDirect(rp.width * rows * 16).order(java.nio.ByteOrder.nativeOrder())
-        val half = java.nio.ByteBuffer.allocate(rp.width * rows * 8).order(java.nio.ByteOrder.LITTLE_ENDIAN)
-        java.io.FileOutputStream(out).channel.use { ch ->
-            var y = 0
-            while (y < rp.height) {
-                val n = minOf(rows, rp.height - y)
-                g.readFloatRows(rp.tex, rp.width, y, n, buf)
-                val f = buf.asFloatBuffer()
-                half.clear()
-                for (i in 0 until rp.width * n * 4) half.putShort(android.util.Half.toHalf(f.get(i)))
-                half.flip(); ch.write(half)
-                y += n
-            }
-        }
+        writeHalf(g, rp.tex, rp.width, rp.height, out)
         g.deleteTextures(rp.tex)
         File(out.path + ".json").writeText("{\"width\":${rp.width},\"height\":${rp.height},\"ms\":$ms}")
     }
@@ -200,6 +186,28 @@ class Developer(private val context: Context) {
             g.deleteTextures(rp.tex, dispLo, guideLo, disp, to)
         }
         File(out.path + ".json").writeText("{\"width\":${est.depth.w},\"height\":${est.depth.h},\"ms\":$ms,\"model\":\"${modelFile.name}\"$fit}")
+    }
+
+    /** Test (from the Mac): where to write the picture right after the gather (before flare, filter, film). */
+    var gatherDump: File? = null
+
+    /** An RGBA float texture as little-endian half floats, row 0 first (for the iOS port's checks). */
+    private fun writeHalf(g: Gl, tex: Int, w: Int, h: Int, out: File) {
+        val rows = 64
+        val buf = java.nio.ByteBuffer.allocateDirect(w * rows * 16).order(java.nio.ByteOrder.nativeOrder())
+        val half = java.nio.ByteBuffer.allocate(w * rows * 8).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        java.io.FileOutputStream(out).channel.use { ch ->
+            var y = 0
+            while (y < h) {
+                val n = minOf(rows, h - y)
+                g.readFloatRows(tex, w, y, n, buf)
+                val f = buf.asFloatBuffer()
+                half.clear()
+                for (i in 0 until w * n * 4) half.putShort(android.util.Half.toHalf(f.get(i)))
+                half.flip(); ch.write(half)
+                y += n
+            }
+        }
     }
 
     suspend fun develop(job: DevelopJob): Print = withContext(dispatcher) {
@@ -384,6 +392,10 @@ class Developer(private val context: Context) {
             srcRect = srcRect, srcLinear = rp != null, exposure = exposure * Math.pow(2.0, job.exposureStops.toDouble()).toFloat(),
             pointBoost = if (rp != null) 0f else 8f)
         if (!job.publish) eng.dump = { name, tex, dw, dh, level ->
+            gatherDump?.takeIf { name == "gather" }?.let { f ->
+                writeHalf(g, tex, dw, dh, f)
+                File(f.path + ".json").writeText("{\"width\":$dw,\"height\":$dh,\"dispA\":$dispA,\"dispB\":$dispB,\"focusD\":$focusD,\"exposure\":$exposure}")
+            }
             if (name == "coc work L0") {
                 // Bench: the signed blur radius along a horizontal line at the focus point and at 70 % down.
                 val f = g.readFloat(tex, dw, dh, level)

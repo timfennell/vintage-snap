@@ -92,7 +92,11 @@ class MainActivity : ComponentActivity() {
                         intent.getFloatExtra("fx", 0.5f), intent.getFloatExtra("fy", 0.5f), null, lens,
                         intent.getFloatExtra("f", lens.maxAperture), fm, stock, 0, 0, publish = false,
                         crop = intent.getFloatExtra("crop", 0f), focalOverLong = 5.56f / 8.19f, saveDng = intent.getBooleanExtra("dng", false), plate = !intent.getBooleanExtra("noplate", false))
+                    // --ez dumpgather true: also the picture right after the gather (lens_<neg>.f16), for the iOS port.
+                    body.developer.gatherDump = if (intent.getBooleanExtra("dumpgather", false))
+                        java.io.File(getExternalFilesDir("tests"), "lens_$neg.f16") else null
                     val r = runCatching { body.developer.develop(job) }
+                    body.developer.gatherDump = null
                     r.getOrNull()?.file?.copyTo(java.io.File(getExternalFilesDir("tests"), "redevelop_$neg.jpg"), overwrite = true)
                     android.util.Log.i("Relens", "redevelop $neg: ${r.getOrNull()?.timings ?: r.exceptionOrNull()?.message}")
                 }
