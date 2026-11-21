@@ -95,8 +95,10 @@ class Developer(private val context: Context) {
     /** The depth model: the 1036 px export (5.6 s, resolves chair legs) if present, else the 518 px one. */
     val modelFile: File get() {
         val dir = File(context.getExternalFilesDir(null), "models")
-        return listOf("da2s_fp32_770x1036.onnx", "da2s_fp32_392x518.onnx").map { File(dir, it) }.firstOrNull { it.exists() }
-            ?: File(dir, "da2s_fp32_770x1036.onnx")
+        // the fixed-size 770 x 1036 export where an older install has it, else the free-size original
+        // (run at 770 x 1036: DepthEstimator's default size)
+        return listOf("da2s_fp32_770x1036.onnx", "da2s_fp32.onnx").map { File(dir, it) }.firstOrNull { it.exists() }
+            ?: File(dir, "da2s_fp32.onnx")
     }
 
     /**
@@ -377,7 +379,15 @@ class Developer(private val context: Context) {
             app.relens.Trace.i("subject at the tap %.2f m".format(1 / subjectD))
         }
         val tiltD = Movements.tiltDioptres(job.lens, job.tiltDeg)
-        var focusD = job.focusM?.let { if (it.isInfinite()) 0f else 1f / it } ?: subjectD
+        // The ring at infinity means the scene's far end in focus: the depth never puts anything at
+        // true infinity (distant trees land at tens of metres), so focusing beyond them left the
+        // background soft on a long lens. Focus on the farthest part of the scene instead.
+        val farD = run {
+            val sorted = dm.data.copyOf().also { it.sort() }
+            maxOf(dispA + dispB * sorted[(sorted.size * 0.02).toInt()], 0f)
+        }
+        var focusD = job.focusM?.let { if (it.isInfinite()) farD else 1f / it } ?: subjectD
+        if (job.focusM?.isInfinite() == true) Trace.i("ring at infinity: focus on the far end, %.1f m".format(1f / maxOf(farD, 1e-3f)))
         // On the subject: with a tilted plane, keep the tapped point (not the frame's centre) sharp.
         if (job.focusM == null) {
             val hd = kotlin.math.hypot(w / 2f, h / 2f)

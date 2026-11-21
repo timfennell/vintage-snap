@@ -156,7 +156,12 @@ class Body(app: Application) : AndroidViewModel(app) {
     var centreD by mutableStateOf<Float?>(null); private set
 
     /** The focus distance the finder shows, dioptres: the ring's, or the lens's own on autofocus. */
-    val finderFocusD: Float? get() = focusM?.let { if (it.isInfinite()) 0f else 1f / it } ?: rig.liveFocusD.value
+    val finderFocusD: Float? get() = focusM?.let { if (it.isInfinite()) liveFarD ?: 0f else 1f / it } ?: rig.liveFocusD.value
+    /** The scene's far end in the live depth (dioptres): where the ring's infinity focuses. */
+    private val liveFarD: Float? get() = liveDepth.value?.let { ld ->
+        val sorted = ld.map.data.copyOf().also { it.sort() }
+        maxOf(ld.a + ld.b * sorted[(sorted.size * 0.02).toInt()], 0f)
+    }
 
     /** Keepers ringed on the light table, kept between launches ("roll:frame"). */
     fun isMarked(roll: Int, frame: Int) = "$roll:$frame" in (prefs.getStringSet("marks", emptySet()) ?: emptySet())

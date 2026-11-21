@@ -14,14 +14,17 @@ import java.security.MessageDigest
 /**
  * The depth models the developer needs, too big for the APK: fetched once from the project's
  * GitHub release (models-v1) into the app's files/models, each checked against its SHA-256.
- *  - Depth Anything V2 Small (Apache-2.0), exported at 770 x 1036: the relative depth.
+ *  - Depth Anything V2 Small (Apache-2.0), free size: the relative depth (prints, live finder).
  *  - Metric3D v2 ViT-S (BSD-2): the scale, when a frame has no parallax depth.
  */
 class Models(private val context: Context) {
     class Model(val name: String, val sha256: String, val bytes: Long)
 
+    // The original free-size Depth Anything serves both the prints (run at 770 x 1036) and the
+    // live finder (a small size); phones that already have the older fixed-size export keep it
+    // for prints and fetch this one for the finder.
     val models = listOf(
-        Model("da2s_fp32_770x1036.onnx", "85d9eebe30a28d469d473e659610251fc559fb486c3234882f50682cd3e1bce7", 99_060_764),
+        Model("da2s_fp32.onnx", "afb6a5c28f3b6bf1618c6e43f02073ef9dfdc70e937502d51603e57b0a1df10c", 99_060_839),
         Model("metric3d_vits.onnx", "674a665052f01bb2b64687200182f3380f0a462f4b6ef2e51fefd06c84d8ee75", 150_739_433),
     )
     private val base = "https://github.com/timfennell/vintage-snap/releases/download/models-v1/"
