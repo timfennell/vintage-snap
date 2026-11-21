@@ -244,6 +244,18 @@ class Rig(private val context: Context) {
     /** Opens the mounted lens's camera again after [release]. */
     fun reacquire() = handler.post { if (texture != null && device == null) _framing.value?.let { open(it) } }
 
+    /**
+     * The app went to the background: Android takes the camera from background apps (error 3,
+     * "disabled"), so let it go cleanly first. [resume] opens it again and clears what showed.
+     */
+    fun pause() = handler.post { paused = true; close() }
+    fun resume() = handler.post {
+        paused = false
+        _error.value = null
+        if (texture != null && device == null) _framing.value?.let { open(it) }
+    }
+    @Volatile private var paused = false
+
     fun attach(t: SurfaceTexture) = handler.post { texture = t; _framing.value?.let { open(it) } }
     fun detach() = handler.post { close(); texture = null }
 
@@ -309,16 +321,20 @@ class Rig(private val context: Context) {
                 override fun onDisconnected(d: CameraDevice) {
                     app.relens.Trace.w("camera ${cam.id} disconnected (current ${device == d})")
                     d.close()
-                    if (device == d) { device = null; session = null; _error.value = "camera ${cam.id} was taken away; reopening"
-                        handler.postDelayed({ _framing.value?.let { if (device == null) open(it) } }, 500) }
+                    if (device == d && !paused) { device = null; session = null; _error.value = "camera ${cam.id} was taken away; reopening"
+                        handler.postDelayed({ _framing.value?.let { if (device == null && !paused) open(it) } }, 500) }
+                    else if (device == d) { device = null; session = null }
                 }
                 override fun onError(d: CameraDevice, e: Int) {
                     app.relens.Trace.e("camera ${cam.id} error $e")
                     d.close()
-                    if (device == d) { device = null; session = null; _error.value = "camera ${cam.id} error $e" }
+                    // disabled (3) is Android taking the camera from an app in the background: not
+                    // worth showing; it opens again when the app comes back (resume)
+                    val quiet = e == ERROR_CAMERA_DISABLED || paused
+                    if (device == d) { device = null; session = null; if (!quiet) _error.value = "camera ${cam.id} error $e" }
                     // only a camera that never opened, for the open still wanted, is set aside (an old
                     // session's error during a lens change is not this camera refusing)
-                    if (!everOpened && gen == generation) giveUp(cam, "error $e")
+                    if (!everOpened && gen == generation && !quiet) giveUp(cam, "error $e")
                 }
             })
         }

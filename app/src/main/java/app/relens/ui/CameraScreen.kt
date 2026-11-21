@@ -81,6 +81,20 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
     val raw = framing?.camera?.raw == true
     val lens = body.lens
     body.onParallaxFire = { haptics.sounds.fire(1f / 60) }   // ARCore's frames: a quick release
+    // Leaving the app hands the camera back (Android takes it from background apps anyway);
+    // coming back opens it again, with nothing left over from the time away.
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    androidx.compose.runtime.DisposableEffect(lifecycle) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, ev ->
+            when (ev) {
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> if (body.parallax == null && !body.busy) body.rig.pause()
+                androidx.lifecycle.Lifecycle.Event.ON_START -> body.rig.resume()
+                else -> {}
+            }
+        }
+        lifecycle.addObserver(obs)
+        onDispose { lifecycle.removeObserver(obs) }
+    }
     // The mirror: up for the exposure, the finder black; down again, the picture back.
     var mirrorUp by remember { mutableStateOf(false) }
     // The mirror stays up while the frame is taken and the rangefinder sweep runs (hold steady),
