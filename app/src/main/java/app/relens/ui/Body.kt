@@ -190,9 +190,10 @@ class Body(app: Application) : AndroidViewModel(app) {
     /** How far a camera's focus calibration has got: (pairs so far, settled). Settled: 3 pairs spanning 0.25 D. */
     fun focusLearning(id: String?): Pair<Int, Boolean> {
         if (id == null) return Pair(0, false)
-        val pts = (prefs.getString("afsamples_$id", "") ?: "").split(";").mapNotNull { e ->
-            e.split(":").mapNotNull { it.toFloatOrNull() }.takeIf { it.size == 2 }?.get(1) }
-        return Pair(pts.size, pts.size >= 3 && (pts.max() - pts.min()) >= 0.25f)
+        val pts = loadPairs(id)
+        val w = pts.sumOf { it.third.toDouble() }.toFloat()
+        val ts = pts.map { it.second }
+        return Pair(kotlin.math.round(w).toInt(), w >= 3f && ts.isNotEmpty() && (ts.max() - ts.min()) >= 0.25f)
     }
     fun toggleParallax() { parallaxOn = !parallaxOn; prefs.edit().putBoolean("parallax", parallaxOn).apply() }
     /** The capture in progress (the finder shows it), or null. */
@@ -268,31 +269,53 @@ class Body(app: Application) : AndroidViewModel(app) {
      * per camera fix its calibration (reading = offset + scale x true dioptres): a line
      * once they span distances, else just the offset, keeping the scale.
      */
-    private fun learnFocus(id: String, raw: Float, trueD: Float) {
+    /**
+     * The focus calibration teaching itself, from every autofocus shot on every camera: the lens's
+     * own reading at the lock, against the frame's measured distance at the focus point.
+     * ARCore's (a parallax shot) counts fully; Metric3D's (any shot) a third, since it is rougher.
+     * The last 24 pairs per camera set reading = offset + scale x true dioptres by a weighted
+     * line refitted without outliers; until they span 0.25 D only the offset moves.
+     */
+    private fun learnFocus(id: String, raw: Float, trueD: Float, weight: Float) {
         if (trueD !in 0.05f..6f || raw <= 0f) return
         val key = "afsamples_$id"
-        val pts = (prefs.getString(key, "") ?: "").split(";").mapNotNull { e ->
-            e.split(":").mapNotNull { it.toFloatOrNull() }.takeIf { it.size == 2 }?.let { Pair(it[0], it[1]) }
-        }.toMutableList()
-        pts += Pair(raw, trueD)
-        while (pts.size > 10) pts.removeAt(0)
-        prefs.edit().putString(key, pts.joinToString(";") { "${it.first}:${it.second}" }).apply()
+        val pts = loadPairs(id).toMutableList()
+        pts += Triple(raw, trueD, weight)
+        while (pts.size > 24) pts.removeAt(0)
+        prefs.edit().putString(key, pts.joinToString(";") { "${it.first}:${it.second}:${it.third}" }).apply()
         focusLearnTick++
-        val ts = pts.map { it.second }
+        var keep = pts.map { true }.toBooleanArray()
         var k = rig.afCalibration[id]?.second ?: 1f
-        if (pts.size >= 2 && (ts.max() - ts.min()) >= 0.25f) {
-            val mt = ts.average(); val mr = pts.map { it.first }.average()
-            var sxy = 0.0; var sxx = 0.0
-            for ((r, t) in pts) { sxy += (t - mt) * (r - mr); sxx += (t - mt) * (t - mt) }
-            val fitK = (sxy / sxx).toFloat()
-            if (fitK in 0.5f..3.5f) k = fitK
+        var o = 0f
+        repeat(3) {
+            val sel = pts.filterIndexed { i, _ -> keep[i] }
+            val sw = sel.sumOf { it.third.toDouble() }
+            val mt = sel.sumOf { (it.second * it.third).toDouble() } / sw
+            val mr = sel.sumOf { (it.first * it.third).toDouble() } / sw
+            val spread = (sel.maxOfOrNull { it.second } ?: 0f) - (sel.minOfOrNull { it.second } ?: 0f)
+            if (sel.size >= 2 && spread >= 0.25f) {
+                var sxy = 0.0; var sxx = 0.0
+                for ((r, t, w) in sel) { sxy += w * (t - mt) * (r - mr); sxx += w * (t - mt) * (t - mt) }
+                val fitK = (sxy / sxx).toFloat()
+                if (fitK in 0.5f..3.5f) k = fitK
+            }
+            o = (mr - k * mt).toFloat()
+            // drop the pairs the line can't explain (a lock on something else, a bad estimate)
+            val res = pts.map { kotlin.math.abs(it.first - (o + k * it.second)) }
+            val med = res.sorted()[res.size / 2]
+            keep = res.map { it <= 3f * maxOf(med, 0.03f) }.toBooleanArray()
         }
-        val o = pts.map { it.first - k * it.second }.average().toFloat()
         val old = rig.afCalibration[id]
         rig.afCalibration[id] = Pair(o, k)
         prefs.edit().putString("afcal_$id", "$o,$k").apply()
-        Trace.i("focus calibration from parallax, camera $id: read %.3f D at a measured %.2f m; now reading = %.3f + %.3f x true (%d pairs; was %s)".format(
-            raw, 1 / trueD, o, k, pts.size, old?.let { "%.3f + %.3f".format(it.first, it.second) } ?: "none"))
+        Trace.i("focus calibration, camera $id: read %.3f D at a measured %.2f m (weight %.2f); now reading = %.3f + %.3f x true (%d pairs; was %s)".format(
+            raw, 1 / trueD, weight, o, k, pts.size, old?.let { "%.3f + %.3f".format(it.first, it.second) } ?: "none"))
+    }
+
+    /** A camera's saved pairs: (reading, true dioptres, weight); older pairs (no weight) count fully. */
+    private fun loadPairs(id: String) = (prefs.getString("afsamples_$id", "") ?: "").split(";").mapNotNull { e ->
+        val v = e.split(":").mapNotNull { it.toFloatOrNull() }
+        when (v.size) { 2 -> Triple(v[0], v[1], 1f); 3 -> Triple(v[0], v[1], v[2]); else -> null }
     }
 
     fun collimateSet() {
@@ -564,7 +587,11 @@ class Body(app: Application) : AndroidViewModel(app) {
                     filter = filter, crop = framing.crop, focalOverLong = framing.camera.focalMM / framing.camera.sensorLongMM,
                     // the sweep's distances, measured on this very frame
                     afSamples = swept, exposureStops = stops, saveDng = dngOut, reciprocity = recip))
-                if (lockRaw != null && p.arFocusD != null) learnFocus(heroCam, lockRaw, p.arFocusD)
+                // every autofocus frame teaches the focus calibration: ARCore's measure fully, Metric3D's a third
+                if (lockRaw != null) when {
+                    p.arFocusD != null -> learnFocus(heroCam, lockRaw, p.arFocusD, 1f)
+                    p.metricFocusD != null -> learnFocus(heroCam, lockRaw, p.metricFocusD, 0.33f)
+                }
                 entry.preview = p.preview; entry.original = p.original; entry.file = p.file
                 // the light table finds it again after a restart
                 runCatching {

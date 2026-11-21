@@ -76,6 +76,8 @@ class Print(
     val timings: String,
     /** ARCore's measured distance at the focus point (dioptres), when the frame had parallax. */
     val arFocusD: Float? = null,
+    /** Metric3D's estimate at the focus point (dioptres), on frames without parallax: a rougher measure. */
+    val metricFocusD: Float? = null,
 )
 
 /**
@@ -286,6 +288,7 @@ class Developer(private val context: Context) {
         // Without Metric3D: disparity ~ 1 / distance, the far end at infinity.
         val dTap = dm.medianAround(job.focusX, job.focusY)
         val camD = job.cameraFocusD?.takeIf { it > 0.05f }
+        var metricFocusD: Float? = null          // Metric3D's distance at the focus point (for the focus calibration)
         var dispA: Float; var dispB: Float
         if (arFit != null) {
             // Measured: ARCore's line, with the focus point pinned exactly on its distance when
@@ -313,6 +316,7 @@ class Developer(private val context: Context) {
             val farD = maxOf(fitA + fitB * dFar, 1f / 60f)
             val anchor: Pair<Float, Float>? = if (job.focusM == null) {
                 val fitTap = fitA + fitB * dTap
+                metricFocusD = fitTap
                 // Metric3D misjudges very close things (a hand at 0.2 m put at 0.66 m): allow 5x.
                 val ok = camD != null && (camD / maxOf(fitTap, 1e-3f)) in 0.2f..5f
                 app.relens.Trace.i("AF anchor: tap rel %.2f, camera %s, fit %.2f m%s".format(dTap,
@@ -516,7 +520,7 @@ class Developer(private val context: Context) {
         print.recycle(); photo.bmp.recycle(); if (full.bmp !== photo.bmp) full.bmp.recycle()
         val timings = t.entries.joinToString("  ") { "${it.key} ${it.value} ms" }
         app.relens.Trace.i("developed $name: $timings (subject %.2f m, focus %.2f m)".format(1 / subjectD, look.focusM))
-        Print(uri, file, preview, original, timings, arFocusD)
+        Print(uri, file, preview, original, timings, arFocusD, metricFocusD)
     }
 
     private class Upright(val bmp: Bitmap)
