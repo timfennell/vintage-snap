@@ -190,7 +190,7 @@ class MainActivity : ComponentActivity() {
         // --es screen darkroom (testing from the Mac): open on that screen
         var screen by rememberSaveable { mutableStateOf(intent.getStringExtra("screen") ?: "camera") }
         when (screen) {
-            "bag" -> LensBagScreen(body, haptics) { screen = "camera" }
+            "bag" -> LensBagScreen(body, haptics, onBack = { screen = "camera" }, startShelf = intent.getStringExtra("shelf"))
             "film" -> FilmScreen(body, haptics) { screen = "camera" }
             "darkroom" -> LightTableScreen(body, initialScale = intent.getFloatExtra("tablezoom", 1f), onBack = { screen = "camera" },
                 openBench = { startActivity(Intent(this, BenchActivity::class.java)) })

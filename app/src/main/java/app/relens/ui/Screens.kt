@@ -65,20 +65,28 @@ private fun Panel(title: String, subtitle: String, onBack: () -> Unit, content: 
 
 /** The camera bag: Vintage Click's shelves; tap a lens to mount it. */
 @Composable
-fun LensBagScreen(body: Body, haptics: Haptics, onBack: () -> Unit) {
+fun LensBagScreen(body: Body, haptics: Haptics, onBack: () -> Unit, startShelf: String? = null) {
     val mounted = body.lens
-    var shelf by remember { mutableIntStateOf(lensCollections.indexOfFirst { it.name == mounted.collection }.coerceAtLeast(0)) }
+    var shelf by remember { mutableIntStateOf((lensCollections.map { it.name } + "Filters" + "Film").indexOf(startShelf).takeIf { it >= 0 }
+        ?: lensCollections.indexOfFirst { it.name == mounted.collection }.coerceAtLeast(0)) }
     val filtersShelf = lensCollections.size
-    Panel("CAMERA BAG", if (shelf == filtersShelf) "screw-in and drop-in filters: colour for b&w and colour film, ND, effects"
-        else lensCollections[shelf].about, onBack) {
-        Row(Modifier.horizontalScroll(rememberScrollState()).padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            (lensCollections.map { it.name } + "Filters").forEachIndexed { i, name ->
+    val filmShelf = lensCollections.size + 1
+    Panel("CAMERA BAG", when (shelf) {
+        filtersShelf -> "screw-in and drop-in filters: colour for b&w and colour film, ND, effects"
+        filmShelf -> "film: loading a roll rewinds the one in the camera (frame ${body.framesShot} of ${body.stock.exposures})"
+        else -> lensCollections[shelf].about }, onBack) {
+        // the shelves' tabs, scrolled so the open one shows (Filters and Film sit at the end)
+        val tabs = rememberScrollState()
+        androidx.compose.runtime.LaunchedEffect(tabs.maxValue) { if (shelf >= filtersShelf) tabs.scrollTo(tabs.maxValue) }
+        Row(Modifier.horizontalScroll(tabs).padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            (lensCollections.map { it.name } + "Filters" + "Film").forEachIndexed { i, name ->
                 Text(name, color = if (i == shelf) Palette.leather else Palette.cream, fontSize = 12.sp,
                     modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(if (i == shelf) Palette.amber else Palette.panel)
                         .clickable { shelf = i; haptics.tick() }.padding(horizontal = 10.dp, vertical = 6.dp))
             }
         }
         if (shelf == filtersShelf) { FilterShelf(body, haptics, onBack); return@Panel }
+        if (shelf == filmShelf) { FilmShelf(body, haptics, onBack); return@Panel }
         // Read the shelf here, not inside the lazy list's content lambda: that runs on a
         // snapshot change, and can see the Filters index before this recomposes away.
         val lenses = lensCollections.getOrNull(shelf)?.lenses.orEmpty().filter { body.rig.framingFor(it) != null }
@@ -144,9 +152,16 @@ private fun FilterShelf(body: Body, haptics: Haptics, onBack: () -> Unit) {
 /** Loading film: the stock and how it will be rated (push / pull). Loading starts a fresh roll. */
 @Composable
 fun FilmScreen(body: Body, haptics: Haptics, onBack: () -> Unit) {
+    Panel("LOAD FILM", "the roll in the camera (frame ${body.framesShot} of ${body.stock.exposures}) is rewound and put away", onBack) {
+        FilmShelf(body, haptics, onBack)
+    }
+}
+
+/** The film stocks, the rating (push / pull) and LOAD: on its own screen, and as the camera bag's Film shelf. */
+@Composable
+private fun ColumnScope.FilmShelf(body: Body, haptics: Haptics, onLoaded: () -> Unit) {
     var choice by remember { mutableIntStateOf(body.stockIndex) }
     var push by remember { mutableIntStateOf(body.push) }
-    Panel("LOAD FILM", "the roll in the camera (frame ${body.framesShot} of ${body.stock.exposures}) is rewound and put away", onBack) {
         LazyColumn(Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(Palette.panel)) {
             itemsIndexed(filmStocks) { i, s ->
                 val on = i == choice
@@ -171,10 +186,9 @@ fun FilmScreen(body: Body, haptics: Haptics, onBack: () -> Unit) {
             Text("▶", color = Palette.amber, fontSize = 22.sp, modifier = Modifier.clickable { if (push < 3) { push++; haptics.click() } }.padding(12.dp))
         }
         Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(Palette.amber)
-            .clickable { body.loadRoll(choice, push); haptics.filmLoaded(); onBack() }.padding(14.dp), contentAlignment = Alignment.Center) {
+            .clickable { body.loadRoll(choice, push); haptics.filmLoaded(); onLoaded() }.padding(14.dp), contentAlignment = Alignment.Center) {
             Text("LOAD ${filmStocks[choice].name.uppercase()}", color = Palette.leather, fontWeight = FontWeight.Bold)
         }
-    }
 }
 
 /** The darkroom: prints as they come out. Hold a print to see the camera's own picture. */
