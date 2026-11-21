@@ -21,8 +21,10 @@ class Sounds(context: Context) {
         DIAL("shutter-change"),
     }
 
+    // Played as game audio (the media volume, which the volume keys turn): as "sonification"
+    // they followed a quiet system channel and were barely audible at full volume.
     private val pool = SoundPool.Builder().setMaxStreams(6).setAudioAttributes(
-        AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+        AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_GAME)
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build()).build()
     private val takes = HashMap<Event, MutableList<Int>>()
     private val last = HashMap<Event, Int>()

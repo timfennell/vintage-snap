@@ -42,6 +42,8 @@ class MainActivity : ComponentActivity() {
         app.relens.Trace.init(this)
         if (intent.getBooleanExtra("logical", false)) body.rig.useLogical = true
         enableEdgeToEdge()
+        // the volume keys turn the camera's sounds (the media volume)
+        volumeControlStream = android.media.AudioManager.STREAM_MUSIC
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         // The app owns files/models (scripts/install.sh pushes the depth model there).
         File(getExternalFilesDir(null), "models").mkdirs()
@@ -90,8 +92,8 @@ class MainActivity : ComponentActivity() {
                     val fm = intent.getFloatExtra("focusm", -1f).takeIf { it > 0 }
                     val job = app.relens.engine.DevelopJob(java.io.File(dir, "$neg.jpg"), java.io.File(dir, "$neg.dng").takeIf { it.exists() },
                         intent.getFloatExtra("fx", 0.5f), intent.getFloatExtra("fy", 0.5f), null, lens,
-                        intent.getFloatExtra("f", lens.maxAperture), fm, stock, 0, 0, publish = false,
-                        crop = intent.getFloatExtra("crop", 0f), focalOverLong = 5.56f / 8.19f, saveDng = intent.getBooleanExtra("dng", false), plate = !intent.getBooleanExtra("noplate", false))
+                        intent.getFloatExtra("f", lens.maxAperture), fm, stock, intent.getIntExtra("push", 0), 0, publish = false,
+                        crop = intent.getFloatExtra("crop", 0f), focalOverLong = 5.56f / 8.19f, saveDng = intent.getBooleanExtra("dng", false), plate = !intent.getBooleanExtra("noplate", false), reciprocity = intent.getFloatExtra("recip", 0f))
                     // --ez dumpgather true: also the picture right after the gather (lens_<neg>.f16), for the iOS port.
                     body.developer.gatherDump = if (intent.getBooleanExtra("dumpgather", false))
                         java.io.File(getExternalFilesDir("tests"), "lens_$neg.f16") else null

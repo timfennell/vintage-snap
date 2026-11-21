@@ -40,6 +40,8 @@ data class Look(
     val viewFocal: Float = 0.68f,
     val stock: FilmStock,
     val push: Int = 0,
+    /** Reciprocity failure in this exposure (stops past 1/4 s): the film's look shifts with it. */
+    val reciprocity: Float = 0f,
     val exposure: Float = 1f,
     val samples: Int = 96,
     /** Mip level offset for the gather: 0 for the preview, -1 for a print (finer, less smearing). */
@@ -346,7 +348,7 @@ class LensEngine(private val gl: Gl) {
             val p = gl.use("develop")
             gl.sampler(p, "uIn", 0, lin)
             gl.image(0, out, GLES30.GL_RGBA8)
-            gl.u4fv(p, "uF", look.stock.developed(look.push).packed())
+            gl.u4fv(p, "uF", look.stock.developed(look.push, look.reciprocity).packed())
             gl.u1f(p, "uExposure", 1f)
             val open = look.lens.maxAperture / look.fNumber
             gl.u1f(p, "uVignette", look.lens.vignette * open.pow(1.5f))

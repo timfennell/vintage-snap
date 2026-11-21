@@ -58,6 +58,8 @@ data class DevelopJob(
     val exposureStops: Float = 0f,
     /** Also save a linear DNG of the relensed picture (before the film) beside the print. */
     val saveDng: Boolean = false,
+    /** Reciprocity failure in this exposure (stops): the film's look shifts with it. */
+    val reciprocity: Float = 0f,
     /** Use the parallax side frames for what lies behind the foreground (off: compare). */
     val plate: Boolean = true,
 )
@@ -387,7 +389,7 @@ class Developer(private val context: Context) {
         val vf = if (job.crop > 0f) job.lens.focalMM / 36f else viewFocal
         val look = Look(job.lens, job.fNumber, dispA = dispA, dispB = dispB, focusD = focusD, viewFocal = vf,
             tiltD = tiltD, keystone = Movements.keystone(job.lens, job.shiftMM),
-            stock = job.stock, push = job.push, samples = 256, levelBias = -1f, filter = job.filter,
+            stock = job.stock, push = job.push, reciprocity = job.reciprocity, samples = 256, levelBias = -1f, filter = job.filter,
             tiltDeg = job.tiltDeg, flareGain = if (rp != null) 1f else 3f,
             srcRect = srcRect, srcLinear = rp != null, exposure = exposure * Math.pow(2.0, job.exposureStops.toDouble()).toFloat(),
             pointBoost = if (rp != null) 0f else 8f)

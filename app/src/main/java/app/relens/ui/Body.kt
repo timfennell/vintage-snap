@@ -155,7 +155,7 @@ class Body(app: Application) : AndroidViewModel(app) {
         return shutterSpeeds[a].second * (shutterSpeeds[a + 1].second / shutterSpeeds[a].second).pow(t)
     }
     /** Reciprocity failure past 1/4 s: film answers less than the time suggests (meters don't know). */
-    private fun reciprocity(t: Float) = if (t <= 0.25f) 0f else (if (stock.blackAndWhite) 0.5f else 0.25f) * kotlin.math.log2(t / 0.25f)
+    fun reciprocity(t: Float) = if (t <= 0.25f) 0f else (if (stock.blackAndWhite) 0.5f else 0.25f) * kotlin.math.log2(t / 0.25f)
     /**
      * Stops over (+) or under (-) for the film: the scene's EV as metered, against the EV of
      * the f-number and speed at the rated EI, less the filter's light and reciprocity.
@@ -434,6 +434,7 @@ class Body(app: Application) : AndroidViewModel(app) {
         val filter = filter
         // the exposure at the shutter: the hero frame's metered brightness against the settings
         val stops = (rig.lastEV ?: rig.sceneEV.value)?.let { exposureStops(it) } ?: 0f
+        val recip = reciprocity(shutterSeconds)
         val moved = when (lens.movement) {
             is Movement.Tilt -> if (tiltX != 0f || tiltY != 0f) " · tilt %.0f°".format(kotlin.math.hypot(tiltX, tiltY)) else ""
             is Movement.Shift -> if (shiftX != 0f || shiftY != 0f) " · shift %.0f/%.0f mm".format(shiftX, shiftY) else ""
@@ -490,7 +491,7 @@ class Body(app: Application) : AndroidViewModel(app) {
                 val p = developer.develop(DevelopJob(exp.jpeg, exp.dng, fx, fy, exp.cameraFocusD, lens, n, fm, stock, push, frame, tilt, shift,
                     filter = filter, crop = framing.crop, focalOverLong = framing.camera.focalMM / framing.camera.sensorLongMM,
                     // the sweep's distances, measured on this very frame
-                    afSamples = swept, exposureStops = stops, saveDng = dngOut))
+                    afSamples = swept, exposureStops = stops, saveDng = dngOut, reciprocity = recip))
                 if (lockRaw != null && p.arFocusD != null) learnFocus(heroCam, lockRaw, p.arFocusD)
                 entry.preview = p.preview; entry.original = p.original; entry.file = p.file
                 // the light table finds it again after a restart

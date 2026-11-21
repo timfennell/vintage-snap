@@ -30,22 +30,55 @@ data class FilmStock(
     /** Colour infrared: layers see infrared, red, green; printed red, green, blue. */
     val falseColourIR: Boolean = false,
 ) {
-    /** The stock as the lab develops it after rating it [p] stops faster (+) or slower (-). */
-    fun developed(p: Int): FilmStock {
-        if (p == 0) return this
+    /**
+     * The stock as the lab develops it after rating it [p] stops faster (+) or slower (-), and
+     * as a long exposure leaves it ([reciprocityStops] of failure, past 1/4 s).
+     *
+     * Pushed: the film had less light and longer development. The shadows sink into the toe
+     * and block up (the light they never got), highlights build density, contrast climbs,
+     * grain grows stronger and coarser, the fog rises, colour gets punchier. Pulled: more
+     * light, less development: lower contrast, an open toe that keeps the shadows, finer grain,
+     * gentler colour. Reciprocity failure: the shadows lose more than the highlights (contrast
+     * rises), and colour films drift: slide films toward green-cyan, negatives toward
+     * magenta-blue; black-and-white only gains contrast. Exposure itself is the meter's and
+     * the shutter's business (Body.exposureStops); this is the look.
+     */
+    fun developed(p: Int, reciprocityStops: Float = 0f): FilmStock {
         val x = p.toFloat()
-        return if (p > 0) copy(
-            contrast = contrast * (1 + 0.12f * x),
-            toe = toe * (1 + 0.06f * x),
-            shoulder = shoulder * (1 + 0.08f * x),
-            grain = grain * (1 + 0.3f * x),
-            blackLift = blackLift + 0.006f * x,
-            saturation = saturation * (1 + 0.04f * x),
-        ) else copy(
-            contrast = contrast * (1 + 0.10f * x),
-            shoulder = shoulder * (1 + 0.08f * x),
-            grain = grain * (1 + 0.15f * x),
-        )
+        var s = when {
+            p > 0 -> copy(
+                contrast = contrast * (1 + 0.15f * x),
+                toe = toe * (1 + 0.30f * x),
+                shoulder = shoulder * (1 + 0.10f * x),
+                grain = grain * (1 + 0.35f * x),
+                grainSize = grainSize * (1 + 0.12f * x),
+                blackLift = blackLift + 0.008f * x,
+                saturation = saturation * (1 + 0.06f * x),
+            )
+            p < 0 -> copy(
+                contrast = contrast * (1 + 0.09f * x),
+                toe = toe * (1 + 0.18f * x),
+                shoulder = shoulder * (1 + 0.06f * x),
+                grain = grain * (1 + 0.20f * x),
+                grainSize = grainSize * (1 + 0.08f * x),
+                saturation = saturation * (1 + 0.06f * x),
+            )
+            else -> this
+        }
+        val r = reciprocityStops.coerceIn(0f, 3f)
+        if (r > 0f) {
+            val cast = when {
+                blackAndWhite || falseColourIR -> floatArrayOf(0f, 0f, 0f)
+                "slide" in inspiredBy -> floatArrayOf(-0.03f, 0.02f, 0.01f)     // per stop of failure
+                else -> floatArrayOf(0.01f, -0.025f, 0.02f)
+            }
+            s = s.copy(
+                contrast = s.contrast * (1 + 0.07f * r),
+                toe = s.toe * (1 + 0.10f * r),
+                balance = FloatArray(3) { s.balance[it] * (1 + cast[it] * r) },
+            )
+        }
+        return s
     }
 
     /** Packed for the shaders as 8 vec4s, the layout of Shaders.swift's `F[]`. */
