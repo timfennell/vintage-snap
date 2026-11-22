@@ -21,37 +21,38 @@ base = np.dstack([np.full((N, N), 0.045), np.full((N, N), 0.040), np.full((N, N)
 base *= (1.0 - 0.45 * np.clip(d - 0.3, 0, 1))[..., None]
 
 # ---- the ground glass: portrait 2:3, rounded corners
-gw, gh = dp(38), dp(57)
-gx0, gy0 = C - gw / 2, C - gh / 2
+gw, gh = dp(33), dp(49.5)
+GY = C - dp(4.5)                                   # the glass sits a little high: the readout goes under it
+gx0, gy0 = C - gw / 2, GY - gh / 2
 glass_mask = Image.new("L", (N, N), 0)
 ImageDraw.Draw(glass_mask).rounded_rectangle([gx0, gy0, gx0 + gw, gy0 + gh], radius=dp(3.2), fill=255)
 gm = np.asarray(glass_mask, np.float32) / 255
 
 # frosted warm glass: a hot spot in the middle falling off to the corners, grain, Fresnel rings
-gd = np.hypot((xx - C) / (gw / 2), (yy - C) / (gh / 2))
+gd = np.hypot((xx - C) / (gw / 2), (yy - GY) / (gh / 2))
 lum = 0.93 - 0.20 * np.clip(gd, 0, 1.5) ** 1.6
 col = np.dstack([lum * 0.97, lum * 0.90, lum * 0.79])
 grain = rng.normal(0, 0.035, (N, N)).astype(np.float32)
 grain = np.asarray(Image.fromarray(((grain + 0.5) * 255).clip(0, 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(DP * 0.12)), np.float32) / 255 - 0.5
 col += grain[..., None] * 0.5
-rings = 0.012 * (np.cos(np.hypot(xx - C, yy - C) / dp(1.6) * 2 * math.pi) > 0.92)
+rings = 0.012 * (np.cos(np.hypot(xx - C, yy - GY) / dp(1.6) * 2 * math.pi) > 0.92)
 col -= rings[..., None]
 
 # ---- the split prism and microprism collar at the centre
-r_collar, r_spot = dp(6.2), dp(3.5)
-rc = np.hypot(xx - C, yy - C)
+r_collar, r_spot = dp(5.6), dp(3.2)
+rc = np.hypot(xx - C, yy - GY)
 collar = (rc < r_collar) & (rc >= r_spot)
 # microprism shimmer: a fine checker of light and dark
-chk = ((np.floor((xx - C) / dp(0.55)) + np.floor((yy - C) / dp(0.55))) % 2) * 2 - 1
+chk = ((np.floor((xx - C) / dp(0.5)) + np.floor((yy - GY) / dp(0.5))) % 2) * 2 - 1
 col[collar] -= 0.05
 col[collar] += (chk[collar] * 0.035)[:, None]
 spot = rc < r_spot
 col[spot] *= 1.03
 # the split image: a dark vertical edge in the scene, broken and shifted at the horizontal divide
-edge_top = spot & (yy < C) & (np.abs(xx - (C - dp(0.9))) < dp(0.55))
-edge_bot = spot & (yy >= C) & (np.abs(xx - (C + dp(0.9))) < dp(0.55))
+edge_top = spot & (yy < GY) & (np.abs(xx - (C - dp(0.9))) < dp(0.55))
+edge_bot = spot & (yy >= GY) & (np.abs(xx - (C + dp(0.9))) < dp(0.55))
 col[edge_top | edge_bot] = [0.18, 0.15, 0.12]
-divide = spot & (np.abs(yy - C) < dp(0.12))
+divide = spot & (np.abs(yy - GY) < dp(0.12))
 col[divide] -= 0.12
 ring_line = np.abs(rc - r_spot) < dp(0.18)
 col[ring_line] -= 0.10
@@ -71,7 +72,7 @@ col -= cmk[..., None] * 0.35
 
 # ---- the meter strip: frosted, coming in from the glass's left edge, red caps, dashes, needle
 sx0, sw = gx0 - dp(2.0), dp(7.0)
-sh = gh * 0.62; sy0 = C - sh / 2
+sh = gh * 0.62; sy0 = GY - sh / 2
 strip = Image.new("L", (N, N), 0)
 ImageDraw.Draw(strip).rounded_rectangle([sx0, sy0, sx0 + sw, sy0 + sh], radius=dp(0.8), fill=255)
 st = np.asarray(strip, np.float32) / 255 * gm
@@ -96,7 +97,7 @@ col = col * (1 - da[..., 3:4] * gm[..., None]) + da[..., :3] * (da[..., 3:4] * g
 # the needle, in from outside the frame
 nd = Image.new("L", (N, N), 0)
 ny = sy0 + cap + 3.3 * (sh - 2 * cap) / n
-ImageDraw.Draw(nd).line([gx0 - dp(14), C + dp(3), gx0 + dp(1.6), ny], fill=255, width=int(dp(0.45)))
+ImageDraw.Draw(nd).line([gx0 - dp(14), GY + dp(3), gx0 + dp(1.6), ny], fill=255, width=int(dp(0.45)))
 ndm = np.asarray(nd, np.float32) / 255 * gm
 col = col * (1 - ndm[..., None]) + np.array([0.78, 0.09, 0.06]) * ndm[..., None]
 # soft shadow where the strip goes under the frame's edge
@@ -110,9 +111,11 @@ glass = np.asarray(gimg, np.float32) / 255
 out = base * (1 - gm[..., None]) + glass * gm[..., None]
 
 # the glass's light blooming past its edge into the dark surround (the finder's glow)
-glow = Image.fromarray((gm * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(dp(4.0)))
-gl = np.asarray(glow, np.float32) / 255 * (1 - gm)
-out += gl[..., None] * np.array([0.42, 0.36, 0.28]) * 0.55
+gimg8 = Image.fromarray((gm * 255).astype(np.uint8))
+tight = np.asarray(gimg8.filter(ImageFilter.GaussianBlur(dp(1.6))), np.float32) / 255 * (1 - gm)
+wide = np.asarray(gimg8.filter(ImageFilter.GaussianBlur(dp(7.0))), np.float32) / 255 * (1 - gm)
+out += tight[..., None] * np.array([0.95, 0.85, 0.68]) * 0.85      # a bright halo hugging the glass
+out += wide[..., None] * np.array([0.60, 0.48, 0.32]) * 0.75       # and a warm spill into the eyepiece
 
 # the HUD index: green reflected light at the strip's inner edge, glowing, with a ghost
 hud = Image.new("L", (N, N), 0); hd = ImageDraw.Draw(hud)
@@ -129,6 +132,36 @@ green = np.array([0.10, 0.80, 0.32])
 a = np.clip(h * 0.9 + gh_ * 0.18, 0, 1)[..., None]
 out = out * (1 - a) + green * a                       # the reflected green, holding its colour on the bright glass
 out += green * (hb * 0.22)[..., None] * (1 - h)[..., None]   # and its bloom
+
+# ---- the red seven-segment readout under the finder: "125", unlit segments faintly there
+SEG = {"0": "abcdef", "1": "bc", "2": "abged", "3": "abgcd", "4": "fgbc", "5": "afgcd", "6": "afgcde",
+       "7": "abc", "8": "abcdefg", "9": "abcdfg"}
+def seg_polys(x, y, w, h, t, slant):
+    """The seven segments of a digit whose box is x, y, w, h (stroke t), slanted like an LED's."""
+    def P(px, py): return (px + slant * (y + h - py), py)
+    m = y + h / 2
+    hz = lambda yy: [P(x + t, yy - t / 2), P(x + w - t, yy - t / 2), P(x + w - t / 2, yy), P(x + w - t, yy + t / 2), P(x + t, yy + t / 2), P(x + t / 2, yy)]
+    vt = lambda xx, y0, y1: [P(xx, y0 + t / 2), P(xx + t / 2, y0 + t), P(xx + t / 2, y1 - t), P(xx, y1 - t / 2), P(xx - t / 2, y1 - t), P(xx - t / 2, y0 + t)]
+    return {"a": hz(y + t / 2), "g": hz(m), "d": hz(y + h - t / 2),
+            "f": vt(x + t / 2, y + t / 2, m), "b": vt(x + w - t / 2, y + t / 2, m),
+            "e": vt(x + t / 2, m, y + h - t / 2), "c": vt(x + w - t / 2, m, y + h - t / 2)}
+lit = Image.new("L", (N, N), 0); unl = Image.new("L", (N, N), 0)
+ld, ud = ImageDraw.Draw(lit), ImageDraw.Draw(unl)
+dw, dh, gap = dp(5.0), dp(8.0), dp(1.6)
+text = "125"
+x = C - (len(text) * dw + (len(text) - 1) * gap) / 2
+ytop = GY + gh / 2 + dp(3.2)
+for ch in text:
+    polys = seg_polys(x, ytop, dw, dh, dp(1.05), 0.12)
+    for k, poly in polys.items():
+        (ld if k in SEG[ch] else ud).polygon(poly, fill=255)
+    x += dw + gap
+L = np.asarray(lit.filter(ImageFilter.GaussianBlur(DP * 0.12)), np.float32) / 255
+U = np.asarray(unl.filter(ImageFilter.GaussianBlur(DP * 0.12)), np.float32) / 255
+LG = np.asarray(lit.filter(ImageFilter.GaussianBlur(dp(1.5))), np.float32) / 255
+out = out * (1 - U[..., None] * 0.6) + np.array([0.16, 0.025, 0.02]) * (U[..., None] * 0.6)
+out = out * (1 - L[..., None]) + np.array([1.0, 0.20, 0.10]) * L[..., None]
+out += LG[..., None] * np.array([0.9, 0.12, 0.05]) * 0.55          # the LEDs' red glow
 
 out = np.clip(out, 0, 1)
 icon = Image.fromarray((out * 255).astype(np.uint8))
