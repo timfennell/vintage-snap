@@ -426,16 +426,16 @@ private fun MeterCard(setPos: Float, meterPos: Float, modifier: Modifier) {
     // not on the focusing screen, so a little soft: the whole meter is gently out of focus.
     val ca = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(EYEPIECE_CA) else null }
     Canvas(modifier.fillMaxSize().graphicsLayer {
-        val blurPx = 1.1f * density
         when {
-            // soft, and the eyepiece's lateral colour: a faint red fringe one side of each mark, blue the other
+            // the eyepiece: sharp in the middle of the finder, softening toward its corners, with a
+            // little lateral colour growing the same way
             android.os.Build.VERSION.SDK_INT >= 33 && ca != null -> {
-                ca.setFloatUniform("shift", 0.45f * density)
-                renderEffect = android.graphics.RenderEffect.createChainEffect(
-                    android.graphics.RenderEffect.createRuntimeShaderEffect(ca, "image"),
-                    android.graphics.RenderEffect.createBlurEffect(blurPx, blurPx, android.graphics.Shader.TileMode.DECAL)).asComposeRenderEffect()
+                ca.setFloatUniform("size", size.width, size.height)
+                ca.setFloatUniform("maxBlur", 1.8f * density)
+                ca.setFloatUniform("maxShift", 0.7f * density)
+                renderEffect = android.graphics.RenderEffect.createRuntimeShaderEffect(ca, "image").asComposeRenderEffect()
             }
-            android.os.Build.VERSION.SDK_INT >= 31 -> renderEffect = androidx.compose.ui.graphics.BlurEffect(blurPx, blurPx)
+            android.os.Build.VERSION.SDK_INT >= 31 -> renderEffect = androidx.compose.ui.graphics.BlurEffect(0.5f * density, 0.5f * density)
         }
     }) {
         val u = 8.dp.toPx()
@@ -909,12 +909,26 @@ private fun Modifier.groundGlassSoftness(): Modifier =
 /** An eyepiece's lateral colour on what it shows near the frame's edge: red pulled outward, blue in. */
 private const val EYEPIECE_CA = """
 uniform shader image;
-uniform float shift;
+uniform float2 size;
+uniform float maxBlur;
+uniform float maxShift;
 half4 main(float2 p) {
-    half4 g = image.eval(p);
-    half4 r = image.eval(p + float2(shift, 0.0));
-    half4 b = image.eval(p - float2(shift, 0.0));
-    half a = max(g.a, max(r.a, b.a));
-    return half4(r.r, g.g, b.b, a);
+    float2 c = size * 0.5;
+    float2 d = (p - c) / c;
+    float r = length(d);                                   // 0 at the centre, ~1.4 in the corners
+    float blur = maxBlur * smoothstep(0.55, 1.35, r);
+    float2 dir = d / max(r, 1e-3);
+    float2 sh = dir * maxShift * smoothstep(0.3, 1.4, r);  // red outward, blue inward
+    half4 acc = half4(0);
+    for (int i = 0; i < 9; i++) {
+        float a = float(i) * 2.39996;
+        float rr = (i == 0) ? 0.0 : blur * sqrt(float(i) / 8.0);
+        float2 o = float2(cos(a), sin(a)) * rr;
+        half4 g = image.eval(p + o);
+        half4 rd = image.eval(p + o - sh);
+        half4 bl = image.eval(p + o + sh);
+        acc += half4(rd.r, g.g, bl.b, max(g.a, max(rd.a, bl.a)));
+    }
+    return acc / 9.0;
 }
 """
