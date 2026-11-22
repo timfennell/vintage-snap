@@ -184,7 +184,7 @@ fun LightTableScreen(body: Body, onBack: () -> Unit, openBench: () -> Unit, init
                     }
                     for ((i, st) in strips.withIndex()) {
                         val r = stripRect(i, st.size)
-                        drawStrip(r, mm, st, i, frameRect = { j -> frameRect(r, j) }, measurer = measurer, nowMs = nowMs)
+                        drawStrip(r, mm, st, i, frameRect = { j -> frameRect(r, j) }, measurer = measurer, nowMs = nowMs, zoom = scale)
                     }
                 }
                 if (strips.isEmpty()) {
@@ -345,7 +345,7 @@ private fun DrawScope.glassDust(view: Rect, px: Float) {
 
 /** One strip of film on the glass: punched base, rebate printing, the frames, dust, keepers. */
 private fun DrawScope.drawStrip(r: Rect, mm: Float, frames: List<DarkroomEntry>, index: Int, frameRect: (Int) -> Rect,
-                                measurer: androidx.compose.ui.text.TextMeasurer, nowMs: Long) {
+                                measurer: androidx.compose.ui.text.TextMeasurer, nowMs: Long, zoom: Float = 1f) {
     val rng = Random(index * 131 + (frames.firstOrNull()?.roll ?: 0) * 17 + 5)
     val first = frames.first()
     // laid down by hand: never quite square
@@ -392,7 +392,7 @@ private fun DrawScope.drawStrip(r: Rect, mm: Float, frames: List<DarkroomEntry>,
                 } else with(DarkroomTimer) {
                     // still in the darkroom: its timer, glowing in the dark, counting the development down
                     drawRect(Color(0xFF020302), fr.topLeft, fr.size)
-                    drawTimer(fr.center, minOf(fr.width, fr.height) * 0.46f, DarkroomTimer.remaining(e.devStart, e.devSet, nowMs), e.devSet, nowMs)
+                    drawTimer(fr.center, minOf(fr.width, fr.height) * 0.46f, DarkroomTimer.remaining(e.devStart, e.devSet, nowMs), e.devSet, nowMs, zoom)
                 }
                 continue
             }
