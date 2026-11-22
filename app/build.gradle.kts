@@ -18,8 +18,8 @@ android {
         applicationId = "app.vintagesnap"
         minSdk = 29          // Android 10: GLES 3.1 compute, Camera2 RAW everywhere
         targetSdk = 36
-        versionCode = 10
-        versionName = "0.1.9"
+        versionCode = 11
+        versionName = "0.1.10"
         ndk { abiFilters += listOf("arm64-v8a") }
         buildConfigField("boolean", "QNN", qnn.toString())
     }

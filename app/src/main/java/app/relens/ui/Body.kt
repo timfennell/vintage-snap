@@ -44,6 +44,9 @@ class DarkroomEntry(val frame: Int, val label: String, var roll: Int = 0, val st
     /** The print in the gallery (Pictures/Vintage Snap), and its DNG there. */
     var uri: android.net.Uri? = null
     var dngUri: android.net.Uri? = null
+    /** When its development began (ms) and how long the darkroom timer was set for (s). */
+    var devStart: Long = System.currentTimeMillis()
+    var devSet: Float = 40f
     /** When the frame was developed (the light table lays its days out by it). */
     var taken: Long = System.currentTimeMillis()
     var preview by mutableStateOf<Bitmap?>(null)
@@ -428,6 +431,9 @@ class Body(app: Application) : AndroidViewModel(app) {
         var stepStarted = System.currentTimeMillis()
     }
     var calib by mutableStateOf<Calib?>(null); private set
+
+    /** How long a development takes lately (s): what the darkroom timer is wound to. */
+    private var devEstimate = prefs.getFloat("devS", 40f)
 
     fun startCalibration(c: CalibCamera) {
         val id = c.camera.id
@@ -850,6 +856,7 @@ class Body(app: Application) : AndroidViewModel(app) {
                 counterShows = framesShot           // the lever's stroke turns the counter (with its sound)
                 onShot()
                 busy = false
+                entry.devStart = System.currentTimeMillis(); entry.devSet = devEstimate
                 darkroom.add(0, entry)
                 if (!developer.modelFile.exists()) {
                     entry.status = "no depth models yet: download them from the camera screen"; return@launch
@@ -866,6 +873,9 @@ class Body(app: Application) : AndroidViewModel(app) {
                     p.metricFocusD != null -> learnFocus(heroCam, lockRaw, p.metricFocusD, 0.33f)
                 }
                 entry.preview = p.preview
+                // the darkroom timer is wound to what developments have been taking lately
+                devEstimate = (0.6f * devEstimate + 0.4f * (System.currentTimeMillis() - entry.devStart) / 1000f).coerceIn(5f, 300f)
+                prefs.edit().putFloat("devS", devEstimate).apply()
                 if (p.uri != null) {
                     entry.uri = p.uri; entry.dngUri = p.dngUri
                     // the camera's own RAW too, if asked for; then the app keeps nothing of this frame

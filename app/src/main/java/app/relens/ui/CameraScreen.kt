@@ -331,6 +331,9 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                     contentAlignment = Alignment.Center) {
                     val bmp = last?.preview
                     if (bmp != null) Image(bmp.asImageBitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                    else if (last != null && !last.status.startsWith("failed"))
+                        // the latest frame in the darkroom: its timer, counting the development down
+                        DarkroomTimerView(last.devStart, last.devSet, Modifier.fillMaxSize().background(Color(0xFF020302)).padding(2.dp))
                     else Text(if (last != null) "…" else "LIGHT\nTABLE", color = Palette.dim, fontSize = 9.sp, lineHeight = 10.sp)
                 }
             }

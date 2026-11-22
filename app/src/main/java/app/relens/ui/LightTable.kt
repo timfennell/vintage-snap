@@ -88,6 +88,8 @@ fun LightTableScreen(body: Body, onBack: () -> Unit, openBench: () -> Unit, init
     var centred by remember { mutableStateOf(false) }
     var viewing by remember { mutableStateOf<DarkroomEntry?>(null) }
     val measurer = rememberTextMeasurer()
+    // the darkroom timers run while any frame is still developing
+    val nowMs = frameClock(body.darkroom.any { !it.done && it.preview == null && !it.status.startsWith("failed") })
     // The frames by day, oldest first; within a day by roll and frame, cut into strips of six.
     val dayKey = { e: DarkroomEntry -> java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).format(java.util.Date(e.taken)) }
     val byDay = body.darkroom.groupBy(dayKey).toSortedMap()
@@ -182,7 +184,7 @@ fun LightTableScreen(body: Body, onBack: () -> Unit, openBench: () -> Unit, init
                     }
                     for ((i, st) in strips.withIndex()) {
                         val r = stripRect(i, st.size)
-                        drawStrip(r, mm, st, i, frameRect = { j -> frameRect(r, j) }, measurer = measurer)
+                        drawStrip(r, mm, st, i, frameRect = { j -> frameRect(r, j) }, measurer = measurer, nowMs = nowMs)
                     }
                 }
                 if (strips.isEmpty()) {
@@ -343,7 +345,7 @@ private fun DrawScope.glassDust(view: Rect, px: Float) {
 
 /** One strip of film on the glass: punched base, rebate printing, the frames, dust, keepers. */
 private fun DrawScope.drawStrip(r: Rect, mm: Float, frames: List<DarkroomEntry>, index: Int, frameRect: (Int) -> Rect,
-                                measurer: androidx.compose.ui.text.TextMeasurer) {
+                                measurer: androidx.compose.ui.text.TextMeasurer, nowMs: Long) {
     val rng = Random(index * 131 + (frames.firstOrNull()?.roll ?: 0) * 17 + 5)
     val first = frames.first()
     // laid down by hand: never quite square
@@ -384,9 +386,14 @@ private fun DrawScope.drawStrip(r: Rect, mm: Float, frames: List<DarkroomEntry>,
             val fr = frameRect(j)
             val bmp = e.preview
             if (bmp == null) {
-                val msg = if (e.status.startsWith("failed")) "failed" else "in the darkroom"
-                val t = measurer.measure(msg, TextStyle(color = Color(0x99FFE6C7), fontSize = (2.0f * mm).toSp(), fontFamily = Futuraish))
-                drawText(t, topLeft = Offset(fr.center.x - t.size.width / 2f, fr.center.y - t.size.height / 2f))
+                if (e.status.startsWith("failed")) {
+                    val t = measurer.measure("failed", TextStyle(color = Color(0x99FFE6C7), fontSize = (2.0f * mm).toSp(), fontFamily = Futuraish))
+                    drawText(t, topLeft = Offset(fr.center.x - t.size.width / 2f, fr.center.y - t.size.height / 2f))
+                } else with(DarkroomTimer) {
+                    // still in the darkroom: its timer, glowing in the dark, counting the development down
+                    drawRect(Color(0xFF020302), fr.topLeft, fr.size)
+                    drawTimer(fr.center, minOf(fr.width, fr.height) * 0.46f, DarkroomTimer.remaining(e.devStart, e.devSet, nowMs), e.devSet, nowMs)
+                }
                 continue
             }
             drawFrame(bmp, fr)
