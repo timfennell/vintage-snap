@@ -149,7 +149,8 @@ fun BarrelRing(
         }
         drawPath(tri, Palette.orange)
         if (caption.isNotEmpty()) {
-            val cap = measurer.measure(caption, TextStyle(color = Palette.dim, fontSize = 10.sp, letterSpacing = 1.5.sp))
+            val cap = measurer.measure(caption, TextStyle(color = Palette.dim, fontSize = 10.5.sp, letterSpacing = 1.8.sp,
+                fontFamily = Futuraish, fontWeight = FontWeight.Bold))
             drawText(cap, topLeft = Offset(10f, 4f))
         }
     }
