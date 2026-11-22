@@ -491,7 +491,7 @@ private fun MeterCard(setPos: Float, meterPos: Float, modifier: Modifier) {
         drawLine(Color(0xFFC81810), pivot, tip, maxOf(1.6f, 0.22f * u), cap = androidx.compose.ui.graphics.StrokeCap.Round)
         // the frame's border beyond: the strip vanishes under it, softly (it's out of focus too)
         drawRect(Brush.horizontalGradient(0f to Color.Black.copy(alpha = 0.55f), 1f to Color.Transparent, startX = 0f, endX = 1.1f * u),
-            Offset(0f, strip.top - u), androidx.compose.ui.geometry.Size(1.1f * u, strip.height + 2 * u))
+            Offset(0f, strip.top), androidx.compose.ui.geometry.Size(1.1f * u, strip.height))
     }
 }
 
