@@ -1,12 +1,33 @@
-// The relensed picture before the film: the lens's fall-off and lateral colour
-// (as in develop.comp), scene-linear in linear sRGB primaries, for the DNG.
+// The print in high dynamic range, for the DNG beside it: everything the film does (its
+// colour response, black-and-white mix, saturation, colour infrared, halation, the curve's
+// contrast and its grain) and the lens's fall-off and lateral colour, as develop.comp
+// does them, but without squeezing the picture into a print's range: the curve's mid-tone
+// contrast is kept as a straight line in stops (pushed film still steeper), no toe or
+// shoulder, so highlights stay recoverable. Scene-linear, linear sRGB primaries.
 uniform sampler2D uIn;           // RGBA16F, linear, after the lens, flare and filter
 layout(rgba16f, binding = 0) writeonly uniform image2D uOut;
+uniform vec4 uF[8];              // FilmStock.packed() (as develop.comp)
 uniform float uExposure;
 uniform float uVignette;
 uniform float uLateralCA;
 uniform vec2 uAxis;
 uniform float uHalfDiag;
+uniform uint uSeed;
+uniform vec4 uPat[32];
+
+float hash(uvec2 p, uint s) {
+    uint h = (p.x * 0x8da6b343u) ^ (p.y * 0xd8163841u) ^ (s * 0xcb1ab31fu);
+    h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+    return float(h & 0xffffffu) / 16777215.0;
+}
+float value_noise(vec2 p, uint s) {
+    vec2 i = floor(p), t = fract(p);
+    t = t * t * (3.0 - 2.0 * t);
+    uvec2 a = uvec2(ivec2(i) + 65536);
+    float v00 = hash(a, s), v10 = hash(a + uvec2(1, 0), s);
+    float v01 = hash(a + uvec2(0, 1), s), v11 = hash(a + uvec2(1, 1), s);
+    return mix(mix(v00, v10, t.x), mix(v01, v11, t.x), t.y);
+}
 
 void main() {
     ivec2 p = ivec2(gl_GlobalInvocationID.xy);
@@ -20,5 +41,52 @@ void main() {
     lin.r = textureLod(uIn, (uAxis + (pc - uAxis) * (1.0 - uLateralCA)) * inv, 0.0).r;
     lin.g = texelFetch(uIn, p, 0).g;
     lin.b = textureLod(uIn, (uAxis + (pc - uAxis) * (1.0 + uLateralCA)) * inv, 0.0).b;
-    imageStore(uOut, p, vec4(max(lin * uExposure * vig, 0.0), 1.0));
+    lin *= uExposure * vig;
+    // halation: light past the base bouncing back round bright highlights
+    if (uF[6].x > 0.0) {
+        vec3 halo = vec3(0.0);
+        float rad = float(sz.y) * 0.012;
+        for (int j = 0; j < 32; j++) halo += max(textureLod(uIn, (pc + uPat[j].xy * rad) * inv, 0.0).rgb * uExposure - 0.9, 0.0);
+        lin += uF[6].x * uF[6].yzw * (halo / 32.0);
+    }
+    if (uF[7].w > 0.5) {
+        // colour infrared, as film_look
+        float lum = luma(lin);
+        float leaf = clamp(3.0 * (lin.g - max(lin.r, lin.b)) / max(lin.g, 1e-4), 0.0, 1.0);
+        float sky = clamp((lin.b - max(lin.r, lin.g)) / max(lin.b, 1e-4), 0.0, 1.0);
+        float reds = clamp((lin.r - max(lin.g, lin.b)) / max(lin.r, 1e-4), 0.0, 1.0);
+        float ir = lum * (1.0 + 3.0 * leaf) * (1.0 - 0.75 * sky) + 0.9 * reds * lin.r;
+        vec3 c = lin - lum;
+        float strength = smoothstep(0.06, 0.3, length(c) / max(lum, 1e-4));
+        vec3 swapped = vec3(ir - lum, c.r * strength, c.g * strength - 0.45 * leaf * lin.g + 0.35 * sky * lin.b);
+        lin = max(lum + swapped, 0.0) * (1.0 - 0.3 * sky);
+    }
+    // the stock's colour response
+    vec3 c = vec3(dot(uF[0].xyz, lin), dot(uF[1].xyz, lin), dot(uF[2].xyz, lin)) * uF[3].xyz;
+    bool bw = uF[3].w > 0.5;
+    if (bw) c = vec3(dot(uF[4].xyz, c));
+    float l = luma(c);
+    c = max(l + (c - l) * uF[4].w, 0.0);
+    // the curve's contrast about mid grey, as a straight line in stops: the print's slope at
+    // mid grey relative to a contrast-1 stock, the toe's and shoulder's steepness either side
+    vec3 x = log2(max(c, 1e-6) / 0.18);
+    vec3 xs = mix(x * uF[7].z, x * uF[5].z, step(vec3(0.0), x)) * uF[5].x;
+    vec3 outc = 0.18 * exp2(xs);
+    // the fog's lift, in light
+    outc += pow(vec3(uF[5].y), vec3(2.2)) * 0.5;
+    // grain, in stops: the print's grain amplitude over its curve's slope (2 amp n / k)
+    float size = uF[7].y * float(sz.y) / 1080.0;
+    vec2 g = pc / max(size, 0.5);
+    float amp = uF[5].w * 0.16 * clamp(sqrt(2048.0 / float(sz.y)), 0.55, 1.0);
+    float mono = value_noise(g, uSeed) + value_noise(g * 2.1 + 17.0, uSeed + 1u) * 0.5 - 0.75;
+    vec3 n;
+    if (bw) n = vec3(mono);
+    else {
+        vec3 chroma = vec3(value_noise(g + 31.0, uSeed + 2u), value_noise(g + 57.0, uSeed + 3u),
+                           value_noise(g + 83.0, uSeed + 4u)) - 0.5;
+        n = mono + 0.15 * chroma;
+    }
+    float k = max(uF[5].x * 0.34, 0.05);
+    outc *= exp2(2.0 * amp * n / k);
+    imageStore(uOut, p, vec4(max(outc, 0.0), 1.0));
 }

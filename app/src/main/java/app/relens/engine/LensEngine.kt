@@ -343,6 +343,10 @@ class LensEngine(private val gl: Gl) {
             gl.u1f(p, "uLateralCA", look.lens.lateralCA)
             gl.u2f(p, "uAxis", axisX, axisY)
             gl.u1f(p, "uHalfDiag", halfDiag)
+            // the film too (the DNG is the print in high dynamic range): the same stock, seed and pattern
+            gl.u4fv(p, "uF", look.stock.developed(look.push, look.reciprocity).packed())
+            gl.u1ui(p, "uSeed", 1234)
+            gl.u4fv(p, "uPat", vogel32)
             gl.dispatch(w, h)
             lastLinear = lo
         }

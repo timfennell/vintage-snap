@@ -73,14 +73,30 @@ import kotlin.random.Random
 @Composable
 fun LightTableScreen(body: Body, onBack: () -> Unit, openBench: () -> Unit, initialScale: Float = 1f) {
     BackHandler(onBack = onBack)
+    // the table is the gallery folder: read it again on opening and whenever the app comes back
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    androidx.compose.runtime.DisposableEffect(lifecycle) {
+        body.refreshLightTable()
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, ev ->
+            if (ev == androidx.lifecycle.Lifecycle.Event.ON_START) body.refreshLightTable()
+        }
+        lifecycle.addObserver(obs)
+        onDispose { lifecycle.removeObserver(obs) }
+    }
     var scale by remember { mutableFloatStateOf(initialScale) }
     var pan by remember { mutableStateOf(Offset.Zero) }
     var centred by remember { mutableStateOf(false) }
     var viewing by remember { mutableStateOf<DarkroomEntry?>(null) }
     val measurer = rememberTextMeasurer()
-    // The session's frames by roll, oldest first, cut into strips of six.
-    val byRoll = body.darkroom.groupBy { it.roll }.toSortedMap().mapValues { (_, l) -> l.sortedBy { it.frame } }
-    val strips = byRoll.flatMap { (_, frames) -> frames.chunked(6) }
+    // The frames by day, oldest first; within a day by roll and frame, cut into strips of six.
+    val dayKey = { e: DarkroomEntry -> java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).format(java.util.Date(e.taken)) }
+    val byDay = body.darkroom.groupBy(dayKey).toSortedMap()
+    val strips = ArrayList<List<DarkroomEntry>>(); val stripDay = ArrayList<Int>(); val dayNames = ArrayList<String>()
+    for ((d, list) in byDay) {
+        val day = dayNames.size
+        dayNames += java.text.SimpleDateFormat("EEEE d MMMM yyyy", java.util.Locale.getDefault()).format(java.util.Date(list.first().taken))
+        for ((_, frames) in list.groupBy { it.roll }.toSortedMap()) for (st in frames.sortedBy { it.frame }.chunked(6)) { strips += st; stripDay += day }
+    }
 
     Box(Modifier.fillMaxSize().background(Color(0xFFE9EAEE))) {
         BoxWithConstraints(Modifier.fillMaxSize().loupe(scale)) {
@@ -92,17 +108,27 @@ fun LightTableScreen(body: Body, onBack: () -> Unit, openBench: () -> Unit, init
             val stripLen = { n: Int -> (n * 38f + 4f) }
             // below the status bar and the table's title
             val top = with(androidx.compose.ui.platform.LocalDensity.current) { 110.dp.toPx() }
-            fun stripRect(i: Int, n: Int): Rect {
-                val col = i % cols; val row = i / cols
-                val x = (6f + col * 41f) * mm
-                val y = top + row * (stripLen(6) + 10f) * mm
-                return Rect(Offset(x, y), Size(35f * mm, stripLen(n) * mm))
+            // each day starts a new row of strips under its date, written on the glass
+            val dayLabel = 14f
+            val stripRects = ArrayList<Rect>(); val labelAt = ArrayList<Offset>()
+            run {
+                var y = top; var col = 0; var lastDay = -1
+                for ((i, st) in strips.withIndex()) {
+                    if (stripDay[i] != lastDay) {
+                        if (lastDay >= 0) y += (stripLen(6) + 10f) * mm
+                        labelAt += Offset(6f * mm, y); y += dayLabel * mm; col = 0; lastDay = stripDay[i]
+                    } else if (col == cols) { col = 0; y += (stripLen(6) + 10f) * mm }
+                    stripRects += Rect(Offset((6f + col * 41f) * mm, y), Size(35f * mm, stripLen(st.size) * mm))
+                    col++
+                }
             }
+            fun stripRect(i: Int, @Suppress("UNUSED_PARAMETER") n: Int) = stripRects[i]
             fun frameRect(strip: Rect, j: Int) = Rect(Offset(strip.left + 5.5f * mm, strip.top + (2f + j * 38f + 1f) * mm), Size(24f * mm, 36f * mm))
             fun toSheet(p: Offset) = (p - pan) / scale
             // Opened on the newest frame: the last of the latest roll, in the middle of the table
             // at the zoom it opens at (once, when the frames are there).
             androidx.compose.runtime.LaunchedEffect(strips.size, wPx, hPx) {
+                // (the newest strip: the last of the latest day)
                 if (centred || strips.isEmpty()) return@LaunchedEffect
                 val i = strips.lastIndex; val st = strips[i]
                 val c = frameRect(stripRect(i, st.size), st.lastIndex).center
@@ -148,13 +174,19 @@ fun LightTableScreen(body: Body, onBack: () -> Unit, openBench: () -> Unit, init
                     drawRect(androidx.compose.ui.graphics.ShaderBrush(androidx.compose.ui.graphics.ImageShader(table,
                         androidx.compose.ui.graphics.TileMode.Mirror, androidx.compose.ui.graphics.TileMode.Mirror)), view.topLeft, view.size)
                     glassDust(view, density / 2.625f)
+                    // the day, in grease pencil on the glass above its strips
+                    for ((k, at) in labelAt.withIndex()) {
+                        val t = measurer.measure(dayNames[k].uppercase(), TextStyle(color = Color(0xCC2E2A26), fontSize = (4.2f * mm).toSp(),
+                            fontFamily = Futuraish, fontWeight = FontWeight.Bold, letterSpacing = (0.8f * mm).toSp()))
+                        rotate(-0.6f + (k % 3) * 0.4f, pivot = at) { drawText(t, topLeft = at + Offset(0f, (dayLabel * mm - t.size.height) * 0.55f)) }
+                    }
                     for ((i, st) in strips.withIndex()) {
                         val r = stripRect(i, st.size)
                         drawStrip(r, mm, st, i, frameRect = { j -> frameRect(r, j) }, measurer = measurer)
                     }
                 }
                 if (strips.isEmpty()) {
-                    val t = measurer.measure("Nothing developed yet this session.", TextStyle(color = Color(0xFF55524C), fontSize = 14.sp, fontFamily = Futuraish))
+                    val t = measurer.measure("Nothing in Pictures/Vintage Snap yet.", TextStyle(color = Color(0xFF55524C), fontSize = 14.sp, fontFamily = Futuraish))
                     drawText(t, topLeft = Offset((size.width - t.size.width) / 2, size.height * 0.4f))
                 }
             }
@@ -170,8 +202,14 @@ fun LightTableScreen(body: Body, onBack: () -> Unit, openBench: () -> Unit, init
                 fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp,
                 modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(Color(0x22000000)).clickable { body.toggleDng() }
                     .padding(horizontal = 10.dp, vertical = 5.dp))
+            Spacer(Modifier.width(6.dp))
+            // the camera's own untouched RAW, into the gallery beside the print
+            Text("RAW " + if (body.rawOut) "ON" else "OFF", color = if (body.rawOut) Color(0xFF1E8A5C) else Color(0xFF7A746C),
+                fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp,
+                modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(Color(0x22000000)).clickable { body.toggleRaw() }
+                    .padding(horizontal = 10.dp, vertical = 5.dp))
         }
-        val rolls = byRoll.keys.joinToString { "roll $it" }
+        val rolls = if (dayNames.isEmpty()) "" else if (dayNames.size == 1) "1 day" else "${dayNames.size} days"
         val developing = body.darkroom.count { !it.done && it.preview == null }
         val foot = listOfNotNull(rolls.ifEmpty { null }, "${body.darkroom.size} frames",
             if (developing > 0) "$developing in the darkroom" else null,
@@ -196,22 +234,24 @@ private fun PrintView(e: DarkroomEntry, onClose: () -> Unit) {
     BackHandler(onBack = onClose)
     var big by remember(e) { mutableStateOf<Bitmap?>(null) }
     var showOriginal by remember { mutableStateOf(false) }
+    val ctx = androidx.compose.ui.platform.LocalContext.current
     androidx.compose.runtime.LaunchedEffect(e) {
-        big = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            e.file?.takeIf { it.exists() }?.let { f -> runCatching {
-                val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                android.graphics.BitmapFactory.decodeFile(f.absolutePath, o)
-                var ss = 1; while (maxOf(o.outWidth, o.outHeight) / (ss * 2) >= 2400) ss *= 2
-                android.graphics.BitmapFactory.decodeFile(f.absolutePath, android.graphics.BitmapFactory.Options().apply { inSampleSize = ss })
-            }.getOrNull() }
-        }
+        big = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching {
+            // the gallery's copy, or the app's own while it still holds the print
+            val open: () -> java.io.InputStream? = e.uri?.let { u -> { ctx.contentResolver.openInputStream(u) } }
+                ?: e.file?.takeIf { it.exists() }?.let { f -> { f.inputStream() } } ?: return@runCatching null
+            val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            open()?.use { android.graphics.BitmapFactory.decodeStream(it, null, o) }
+            var ss = 1; while (maxOf(o.outWidth, o.outHeight) / (ss * 2) >= 2400) ss *= 2
+            open()?.use { android.graphics.BitmapFactory.decodeStream(it, null, android.graphics.BitmapFactory.Options().apply { inSampleSize = ss }) }
+        }.getOrNull() }
     }
     // after a restart the phone's picture isn't in memory: the negative it was shot as (uncropped)
     var negative by remember(e) { mutableStateOf<Bitmap?>(null) }
     androidx.compose.runtime.LaunchedEffect(e) {
         if (e.original != null) return@LaunchedEffect
         negative = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching {
-            val dir = e.file?.parentFile?.parentFile?.let { java.io.File(it, "negatives") } ?: return@runCatching null
+            val dir = ctx.getExternalFilesDir("negatives") ?: return@runCatching null
             val f = dir.listFiles { x -> x.name.startsWith("R%03d_F%02d_".format(e.roll, e.frame)) && x.name.count { it == '.' } == 1 && x.name.endsWith(".jpg") }
                 ?.maxByOrNull { it.lastModified() } ?: return@runCatching null
             val b = android.graphics.BitmapFactory.decodeFile(f.absolutePath, android.graphics.BitmapFactory.Options().apply { inSampleSize = 2 })
@@ -225,7 +265,6 @@ private fun PrintView(e: DarkroomEntry, onClose: () -> Unit) {
     }
     val source = e.original ?: negative
     val shown = (if (showOriginal) source else null) ?: big ?: e.preview
-    val ctx = androidx.compose.ui.platform.LocalContext.current
     var sharing by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxSize().background(Color(0xF2050505))
         .pointerInput(e) { detectTapGestures(onTap = { if (sharing) sharing = false else onClose() }, onLongPress = { sharing = true }) },
@@ -241,7 +280,7 @@ private fun PrintView(e: DarkroomEntry, onClose: () -> Unit) {
             modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp))
         if (sharing) ShareSheet(e, Modifier.align(Alignment.BottomCenter)) { action ->
             sharing = false
-            action?.let { (file, mime, open) -> handOff(ctx, file, mime, open) }
+            action?.let { (uri, mime, open) -> handOff(ctx, uri, mime, open) }
         }
     }
 }
@@ -251,12 +290,15 @@ private fun PrintView(e: DarkroomEntry, onClose: () -> Unit) {
  * sheet) or open in another app (an editor: Snapseed takes the DNG), the print or its DNG.
  */
 @Composable
-private fun ShareSheet(e: DarkroomEntry, modifier: Modifier, onPick: (Triple<java.io.File, String, Boolean>?) -> Unit) {
-    val jpg = e.file?.takeIf { it.exists() }
-    val dng = jpg?.let { java.io.File(it.parentFile, it.nameWithoutExtension + ".dng") }?.takeIf { it.exists() }
+private fun ShareSheet(e: DarkroomEntry, modifier: Modifier, onPick: (Triple<android.net.Uri, String, Boolean>?) -> Unit) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    // the gallery's copies; a print the app still holds goes out through its file provider
+    fun provided(f: java.io.File?) = f?.takeIf { it.exists() }?.let { androidx.core.content.FileProvider.getUriForFile(ctx, ctx.packageName + ".files", it) }
+    val jpg = e.uri ?: provided(e.file)
+    val dng = e.dngUri ?: provided(e.file?.let { java.io.File(it.parentFile, it.nameWithoutExtension + ".dng") })
     androidx.compose.foundation.layout.Column(modifier.fillMaxWidth().navigationBarsPadding().padding(12.dp)
         .clip(RoundedCornerShape(10.dp)).background(Color(0xF0141312)).padding(vertical = 6.dp)) {
-        @Composable fun item(label: String, sub: String, pick: Triple<java.io.File, String, Boolean>?) {
+        @Composable fun item(label: String, sub: String, pick: Triple<android.net.Uri, String, Boolean>?) {
             androidx.compose.foundation.layout.Column(Modifier.fillMaxWidth()
                 .then(if (pick != null) Modifier.clickable { onPick(pick) } else Modifier).padding(horizontal = 16.dp, vertical = 10.dp)) {
                 Text(label, color = if (pick != null) Palette.cream else Palette.dim, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
@@ -265,21 +307,20 @@ private fun ShareSheet(e: DarkroomEntry, modifier: Modifier, onPick: (Triple<jav
         }
         item("Share the print", "Instagram, Photos, a message…", jpg?.let { Triple(it, "image/jpeg", false) })
         item("Open the print in…", "an editor or viewer", jpg?.let { Triple(it, "image/jpeg", true) })
-        item("Share the DNG", if (dng != null) "the relensed raw, no film look · %d MB".format(dng.length() / 1_000_000) else "no DNG for this frame (the light table's DNG switch was off)",
+        item("Share the DNG", if (dng != null) "the print in high dynamic range, for a raw editor" else "no DNG for this frame (the light table's DNG switch was off)",
             dng?.let { Triple(it, "image/x-adobe-dng", false) })
         item("Open the DNG in…", "Snapseed, Lightroom…", dng?.let { Triple(it, "image/x-adobe-dng", true) })
         item("Cancel", "", null)
     }
 }
 
-/** Hands [file] to another app: the share sheet, or (open) an app that views or edits it. */
-private fun handOff(ctx: android.content.Context, file: java.io.File, mime: String, open: Boolean) {
+/** Hands [uri] to another app: the share sheet, or (open) an app that views or edits it. */
+private fun handOff(ctx: android.content.Context, uri: android.net.Uri, mime: String, open: Boolean) {
     runCatching {
-        val uri = androidx.core.content.FileProvider.getUriForFile(ctx, ctx.packageName + ".files", file)
         val intent = if (open) android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(uri, mime)
             else android.content.Intent(android.content.Intent.ACTION_SEND).setType(mime).putExtra(android.content.Intent.EXTRA_STREAM, uri)
         intent.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        if (!open) intent.clipData = android.content.ClipData.newRawUri(file.name, uri)
+        if (!open) intent.clipData = android.content.ClipData.newRawUri(uri.lastPathSegment ?: "print", uri)
         ctx.startActivity(android.content.Intent.createChooser(intent, if (open) "Open with" else "Share").addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
     }.onFailure { app.relens.Trace.w("hand-off failed", it) }
 }

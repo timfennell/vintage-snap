@@ -39,8 +39,13 @@ val shutterSpeeds: List<Pair<String, Float>> = listOf(
 class DarkroomEntry(val frame: Int, val label: String, val roll: Int = 0, val stock: String = "", val bw: Boolean = false) {
     /** Ringed on the light table as a keeper (in red china marker). */
     var marked by mutableStateOf(false)
-    /** The print's file (for the full view). */
+    /** The print's file, while the app still holds it (not yet in the gallery). */
     var file: File? = null
+    /** The print in the gallery (Pictures/Vintage Snap), and its DNG there. */
+    var uri: android.net.Uri? = null
+    var dngUri: android.net.Uri? = null
+    /** When the frame was developed (the light table lays its days out by it). */
+    var taken: Long = System.currentTimeMillis()
     var preview by mutableStateOf<Bitmap?>(null)
     var original by mutableStateOf<Bitmap?>(null)
     var status by mutableStateOf("developing…")
@@ -212,6 +217,9 @@ class Body(app: Application) : AndroidViewModel(app) {
     /** Save a linear DNG of each relensed picture (no film) beside the print. */
     var dngOut by mutableStateOf(prefs.getBoolean("dng", true)); private set
     fun toggleDng() { dngOut = !dngOut; prefs.edit().putBoolean("dng", dngOut).apply() }
+    /** Also put the camera's own untouched RAW (its DNG) in the gallery beside the print. */
+    var rawOut by mutableStateOf(prefs.getBoolean("rawOut", false)); private set
+    fun toggleRaw() { rawOut = !rawOut; prefs.edit().putBoolean("rawOut", rawOut).apply() }
 
     /** Parallax capture: after each shot, ARCore guides two side frames for measured depth. */
     val parallaxAvailable: Boolean = runCatching {
@@ -381,48 +389,100 @@ class Body(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * The light table after a restart: the recent prints (the last 48) with their roll and
-     * frame from the sidecar each print gets, or for older prints from the negative shot just
-     * before it with that frame number. Small previews, decoded off the main thread.
+     * The light table is the gallery's Pictures/Vintage Snap: the recent prints (the last 48),
+     * read back from there, since the app keeps nothing once a print is in it. Read again each
+     * time the table is opened or the app comes back, so a print deleted from the folder leaves
+     * the table too. Roll and frame come from the note in each print's EXIF; older prints fall
+     * back on the sidecar or negative the app kept for them then. Small previews, off the main thread.
      */
+    fun refreshLightTable() { if (!refreshing) { refreshing = true; loadLightTable().invokeOnCompletion { refreshing = false } } }
+    @Volatile private var refreshing = false
     private fun loadLightTable() = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
         val app = getApplication<Application>()
-        val prints = app.getExternalFilesDir("prints")?.listFiles { f -> f.name.startsWith("VINTAGESNAP_") && f.name.endsWith(".jpg") }
-            ?.sortedBy { it.lastModified() }?.takeLast(48) ?: return@launch
-        val negs = app.getExternalFilesDir("negatives")?.listFiles { f -> f.name.matches(Regex("R\\d+_F\\d+_\\d+\\.jpg")) }?.toList() ?: emptyList()
-        val loaded = ArrayList<DarkroomEntry>()
-        for (f in prints) runCatching {
-            val side = File(f.parentFile, f.nameWithoutExtension + ".json")
-            val e: DarkroomEntry = if (side.exists()) {
-                val j = org.json.JSONObject(side.readText())
-                DarkroomEntry(j.getInt("frame"), j.optString("label"), j.getInt("roll"), j.optString("stock"), j.optBoolean("bw"))
-            } else {
-                val frame = f.nameWithoutExtension.substringAfterLast("_").toIntOrNull() ?: return@runCatching
-                if (frame == 0) return@runCatching                         // a test development
-                val neg = negs.filter { it.name.contains("_F%02d_".format(frame)) && it.lastModified() <= f.lastModified() + 1000 }
-                    .maxByOrNull { it.lastModified() }?.takeIf { f.lastModified() - it.lastModified() < 10 * 60_000 } ?: return@runCatching
-                val roll = neg.name.substring(1, neg.name.indexOf('_')).toInt()
-                val desc = runCatching { androidx.exifinterface.media.ExifInterface(f).getAttribute(androidx.exifinterface.media.ExifInterface.TAG_IMAGE_DESCRIPTION) }.getOrNull() ?: ""
-                val stockName = desc.substringAfterLast(" on ", "").trim()
-                val stock = filmStocks.firstOrNull { it.name == stockName }
-                DarkroomEntry(frame, "Roll $roll · frame $frame · $desc", roll, stockName, stock?.blackAndWhite ?: false)
+        val cr = app.contentResolver
+        val ms = android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        class G(val uri: android.net.Uri, val name: String, val added: Long)
+        val gallery = ArrayList<G>()
+        runCatching {
+            cr.query(ms, arrayOf(android.provider.MediaStore.Images.Media._ID, android.provider.MediaStore.Images.Media.DISPLAY_NAME,
+                    android.provider.MediaStore.Images.Media.DATE_ADDED),
+                "${android.provider.MediaStore.Images.Media.RELATIVE_PATH} LIKE ? AND ${android.provider.MediaStore.Images.Media.DISPLAY_NAME} LIKE ?",
+                arrayOf("Pictures/Vintage Snap%", "VINTAGESNAP_%"), null)?.use { c ->
+                while (c.moveToNext()) gallery += G(android.content.ContentUris.withAppendedId(ms, c.getLong(0)), c.getString(1), c.getLong(2))
             }
-            val o = android.graphics.BitmapFactory.Options().apply { inSampleSize = 2 }
-            e.preview = android.graphics.BitmapFactory.decodeFile(f.absolutePath, o)
-            e.status = "saved"; e.done = true; e.file = f
+        }.onFailure { Trace.w("gallery query failed", it) }
+        val dngs = gallery.filter { it.name.endsWith(".dng") && !it.name.endsWith("_RAW.dng") }.associateBy { it.name.removeSuffix(".dng") }
+        val inGallery = gallery.filter { it.name.endsWith(".jpg") }
+        val galleryUris = inGallery.map { it.uri }.toSet()
+        val printsDir = app.getExternalFilesDir("prints")
+        val negs = app.getExternalFilesDir("negatives")?.listFiles { f -> f.name.matches(Regex("R\\d+_F\\d+_\\d+\\.jpg")) }?.toList() ?: emptyList()
+
+        class Src(val name: String, val time: Long, val uri: android.net.Uri?, val file: File?)
+        val shown = darkroom.toList().mapNotNull { it.uri }.toSet()
+        val sources = inGallery.map { Src(it.name.removeSuffix(".jpg"), it.added * 1000, it.uri, null) }
+            .sortedBy { it.time }.takeLast(48).filter { it.uri !in shown }      // only what isn't on the table yet
+
+        fun note(j: org.json.JSONObject) = DarkroomEntry(j.getInt("frame"), j.optString("label"), j.getInt("roll"), j.optString("stock"), j.optBoolean("bw"))
+        val loaded = ArrayList<DarkroomEntry>()
+        for (src in sources) runCatching {
+            fun open() = src.uri?.let { cr.openInputStream(it) } ?: src.file!!.inputStream()
+            val exif = open().use { androidx.exifinterface.media.ExifInterface(it) }
+            val comment = exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_USER_COMMENT)
+            val json = comment?.let { c -> val a = c.indexOf('{'); val b = c.lastIndexOf('}'); if (a >= 0 && b > a) c.substring(a, b + 1) else null }
+            val side = printsDir?.let { File(it, src.name + ".json") }
+            val e: DarkroomEntry = when {
+                json != null -> note(org.json.JSONObject(json))
+                side != null && side.exists() -> note(org.json.JSONObject(side.readText()))
+                else -> {
+                    val frame = src.name.substringAfterLast("_").toIntOrNull() ?: return@runCatching
+                    if (frame == 0) return@runCatching                         // a test development
+                    val desc = exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_IMAGE_DESCRIPTION) ?: ""
+                    val neg = negs.filter { it.name.contains("_F%02d_".format(frame)) && it.lastModified() <= src.time + 1000 }
+                        .maxByOrNull { it.lastModified() }?.takeIf { src.time - it.lastModified() < 10 * 60_000 }
+                    val roll = neg?.let { it.name.substring(1, it.name.indexOf('_')).toInt() } ?: 0
+                    val stockName = desc.substringAfterLast(" on ", "").substringBefore(" (").trim()
+                    val stock = filmStocks.firstOrNull { it.name == stockName }
+                    DarkroomEntry(frame, (if (roll > 0) "Roll $roll · " else "") + "frame $frame · $desc", roll, stockName, stock?.blackAndWhite ?: false)
+                }
+            }
+            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            open().use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
+            var ss = 1; while (maxOf(bounds.outWidth, bounds.outHeight) / (ss * 2) >= 1440) ss *= 2
+            e.preview = open().use { android.graphics.BitmapFactory.decodeStream(it, null, android.graphics.BitmapFactory.Options().apply { inSampleSize = ss }) }
+            e.status = "saved"; e.done = true
+            e.uri = src.uri; e.file = src.file; e.dngUri = dngs[src.name]?.uri; e.taken = src.time
             e.marked = isMarked(e.roll, e.frame)
             loaded += e
-        }
+        }.onFailure { Trace.w("light table: ${src.name} not loaded", it) }
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-            // newest first, as the session adds them; keep any already developed this session
-            val have = darkroom.map { it.roll to it.frame }.toSet()
-            darkroom.addAll(loaded.filter { (it.roll to it.frame) !in have }.reversed())
+            // gone from the folder: off the table (frames still developing, or kept in the app, stay)
+            val gone = darkroom.filter { it.uri != null && it.uri !in galleryUris }
+            darkroom.removeAll(gone)
+            // newest first, as the session adds them
+            val have = darkroom.mapNotNull { it.uri }.toSet()
+            for (e in loaded.filter { it.uri !in have }.sortedByDescending { it.uri?.lastPathSegment?.toLongOrNull() ?: 0L }) {
+                val at = darkroom.indexOfFirst { d -> (d.uri?.lastPathSegment?.toLongOrNull() ?: Long.MAX_VALUE) < (e.uri?.lastPathSegment?.toLongOrNull() ?: 0L) }
+                if (at < 0) darkroom.add(e) else darkroom.add(at, e)
+            }
         }
-        Trace.i("light table: ${loaded.size} prints from before")
+        Trace.i("light table: ${loaded.size} added, ${inGallery.size} prints in the gallery")
+    }
+
+    /** Everything the app kept of a frame to develop it (the negative, its RAW, the light map, the parallax views). */
+    private fun clearNegative(name: String) {
+        val dir = getApplication<Application>().getExternalFilesDir("negatives") ?: return
+        var freed = 0L
+        for (ext in listOf("jpg", "dng", "raw16", "rawmeta.json", "uw.jpg", "uw.json", "par")) {
+            val f = File(dir, "$name.$ext")
+            if (!f.exists()) continue
+            freed += if (f.isDirectory) f.walkBottomUp().sumOf { it.length() } else f.length()
+            if (f.isDirectory) f.deleteRecursively() else f.delete()
+        }
+        Trace.i("negative $name cleared: ${freed / 1_000_000} MB")
     }
 
     init {
-        loadLightTable()
+        refreshLightTable()
         // The first focus learning (2026-11-20) paired a stale lock reading with each shot:
         // forget its pairs and put camera 0 back where Tim's collimation left it.
         if (!prefs.getBoolean("aflearn_v2", false)) {
@@ -623,18 +683,31 @@ class Body(app: Application) : AndroidViewModel(app) {
                 val p = developer.develop(DevelopJob(exp.jpeg, exp.dng, fx, fy, exp.cameraFocusD, lens, n, fm, stock, push, frame, tilt, shift,
                     filter = filter, crop = framing.crop, focalOverLong = framing.camera.focalMM / framing.camera.sensorLongMM,
                     // the sweep's distances, measured on this very frame
-                    afSamples = swept, exposureStops = stops, saveDng = dngOut, reciprocity = recip))
+                    afSamples = swept, exposureStops = stops, saveDng = dngOut, reciprocity = recip,
+                    note = org.json.JSONObject().put("roll", entry.roll).put("frame", entry.frame).put("stock", entry.stock)
+                        .put("bw", entry.bw).put("label", entry.label).toString()))
                 // every autofocus frame teaches the focus calibration: ARCore's measure fully, Metric3D's a third
                 if (lockRaw != null) when {
                     p.arFocusD != null -> learnFocus(heroCam, lockRaw, p.arFocusD, 1f)
                     p.metricFocusD != null -> learnFocus(heroCam, lockRaw, p.metricFocusD, 0.33f)
                 }
-                entry.preview = p.preview; entry.original = p.original; entry.file = p.file
-                // the light table finds it again after a restart
-                runCatching {
-                    File(p.file.parentFile, p.file.nameWithoutExtension + ".json").writeText(org.json.JSONObject()
-                        .put("roll", entry.roll).put("frame", entry.frame).put("stock", entry.stock).put("bw", entry.bw)
-                        .put("label", entry.label).toString())
+                entry.preview = p.preview; entry.original = p.original
+                if (p.uri != null) {
+                    entry.uri = p.uri; entry.dngUri = p.dngUri
+                    // the camera's own RAW too, if asked for; then the app keeps nothing of this frame
+                    if (rawOut) exp.dng?.takeIf { it.exists() }?.let { raw ->
+                        runCatching { developer.publish(raw, p.file.nameWithoutExtension + "_RAW.dng", "image/x-adobe-dng") }
+                            .onFailure { Trace.w("raw not saved to the gallery", it) }
+                    }
+                    clearNegative(name)
+                } else {
+                    // not in the gallery: the app keeps the print, and a sidecar to find it after a restart
+                    entry.file = p.file
+                    runCatching {
+                        File(p.file.parentFile, p.file.nameWithoutExtension + ".json").writeText(org.json.JSONObject()
+                            .put("roll", entry.roll).put("frame", entry.frame).put("stock", entry.stock).put("bw", entry.bw)
+                            .put("label", entry.label).toString())
+                    }
                 }
                 entry.status = if (p.uri != null) "in Pictures/Vintage Snap · ${p.timings}" else "saved in the app · ${p.timings}"
                 entry.done = true

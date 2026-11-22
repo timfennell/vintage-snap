@@ -62,6 +62,8 @@ data class DevelopJob(
     val reciprocity: Float = 0f,
     /** Use the parallax side frames for what lies behind the foreground (off: compare). */
     val plate: Boolean = true,
+    /** Written into the print's EXIF user comment: the light table reads the frame back from it. */
+    val note: String = "",
 )
 
 /** The smallest long side a cropped print is developed at (it's enlarged up to 2x to get there). */
@@ -78,6 +80,8 @@ class Print(
     val arFocusD: Float? = null,
     /** Metric3D's estimate at the focus point (dioptres), on frames without parallax: a rougher measure. */
     val metricFocusD: Float? = null,
+    /** The DNG's copy in the gallery, when one was written. */
+    val dngUri: Uri? = null,
 )
 
 /**
@@ -498,15 +502,17 @@ class Developer(private val context: Context) {
         lap("readback")
 
         val name = "VINTAGESNAP_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + "_%02d".format(job.frame)
-        // The relensed picture as a linear DNG (no film): streamed off the GPU in strips.
+        // The print in high dynamic range as a linear DNG: streamed off the GPU in strips.
+        // Once it's in the gallery the app keeps no copy of its own.
+        var dngUri: Uri? = null
         if (linTex != 0) {
             runCatching {
                 val dng = File(context.getExternalFilesDir("prints"), "$name.dng")
-                DngWriter.write(dng, w, h, "Vintage Snap", job.lens.name, "Vintage Snap (${job.stock.name} not applied)") { y0, n, into ->
+                DngWriter.write(dng, w, h, "Vintage Snap", job.lens.name, "Vintage Snap (${job.stock.name})") { y0, n, into ->
                     g.readFloatRows(linTex, w, y0, n, into)
                 }
-                if (job.publish) publish(dng, name, "dng", "image/x-adobe-dng")
                 Trace.i("DNG: ${dng.length() / 1_000_000} MB")
+                if (job.publish) { dngUri = publish(dng, "$name.dng", "image/x-adobe-dng"); if (dngUri != null) dng.delete() }
             }.onFailure { Trace.w("DNG not saved", it) }
             g.deleteTextures(linTex)
             lap("dng")
@@ -514,7 +520,8 @@ class Developer(private val context: Context) {
         val file = File(context.getExternalFilesDir("prints"), "$name.jpg")
         file.outputStream().use { print.compress(Bitmap.CompressFormat.JPEG, 95, it) }
         writeExif(file, job, look)
-        val uri = if (!job.publish) null else runCatching { publish(file, name) }.onFailure { app.relens.Trace.w("gallery save failed", it) }.getOrNull()
+        val uri = if (!job.publish) null else runCatching { publish(file, "$name.jpg") }.onFailure { app.relens.Trace.w("gallery save failed", it) }.getOrNull()
+        if (uri != null) file.delete()                    // the gallery has it: the app keeps nothing
         lap("save")
         val ps = 1440f / maxOf(w, h)
         val preview = Bitmap.createScaledBitmap(print, (w * ps).toInt(), (h * ps).toInt(), true)
@@ -522,7 +529,7 @@ class Developer(private val context: Context) {
         print.recycle(); photo.bmp.recycle(); if (full.bmp !== photo.bmp) full.bmp.recycle()
         val timings = t.entries.joinToString("  ") { "${it.key} ${it.value} ms" }
         app.relens.Trace.i("developed $name: $timings (subject %.2f m, focus %.2f m)".format(1 / subjectD, look.focusM))
-        Print(uri, file, preview, original, timings, arFocusD, metricFocusD)
+        Print(uri, file, preview, original, timings, arFocusD, metricFocusD, dngUri)
     }
 
     private class Upright(val bmp: Bitmap)
@@ -591,14 +598,17 @@ class Developer(private val context: Context) {
             e.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, ascii("${job.lens.name}%s at f/%.1f, focused %.2f m, on %s%s".format(
                 if (job.filter.isNone) "" else " + " + job.filter.name,
                 job.fNumber, look.focusM, job.stock.name, if (job.push != 0) " (push %+d)".format(job.push) else "")))
+            // the frame's roll, number and label, as JSON (non-ASCII escaped: EXIF text is ASCII)
+            if (job.note.isNotEmpty()) e.setAttribute(ExifInterface.TAG_USER_COMMENT,
+                job.note.map { if (it.code in 32..126) it.toString() else "\\u%04x".format(it.code) }.joinToString(""))
             e.saveAttributes()
         }
     }
 
-    /** Copies the print into the gallery (Pictures/Relens). */
-    private fun publish(f: File, name: String, ext: String = "jpg", mime: String = "image/jpeg"): Uri? {
+    /** Copies [f] into the gallery (Pictures/Vintage Snap) as [displayName]. */
+    fun publish(f: File, displayName: String, mime: String = "image/jpeg"): Uri? {
         val values = ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, "$name.$ext")
+            put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
             put(MediaStore.Images.Media.MIME_TYPE, mime)
             put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Vintage Snap")
             put(MediaStore.Images.Media.IS_PENDING, 1)

@@ -35,11 +35,16 @@ GPL-3.0, like Vintage Click.
 - **Lens flare from real lights**: lights are found on the full sensor and on
   an ultra-wide frame taken just after the shot, so lights outside the
   picture still flare in.
-- **A linear DNG of every relensed picture** (lens effects, no film look),
-  beside the print, for your own raw editor.
-- **Light table**: your rolls as contact strips. Pinch in to look through a
-  loupe, mark keepers in china marker, and share a print or its DNG to other
-  apps.
+- **A DNG of every print**: the print itself in high dynamic range (the
+  film's colour, contrast, grain and halation; 16-bit float, highlights kept
+  above white), beside the JPEG, for your own raw editor. Optionally the
+  camera's untouched RAW too.
+- **Nothing kept in the app**: once a print is in `Pictures/Vintage Snap`,
+  the frame's negative and working files are deleted.
+- **Light table**: the `Pictures/Vintage Snap` folder as contact strips, laid
+  out by day. Delete a print from the folder and it leaves the table. Pinch
+  in to look through a loupe, mark keepers in china marker, and share a print
+  or its DNG to other apps.
 
 ## Install
 

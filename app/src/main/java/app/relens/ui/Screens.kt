@@ -195,18 +195,27 @@ private fun ColumnScope.FilmShelf(body: Body, haptics: Haptics, onLoaded: () -> 
 @Composable
 fun DarkroomScreen(body: Body, onBack: () -> Unit, openBench: () -> Unit) {
     Panel("DARKROOM", "prints are saved to Pictures/Vintage Snap · hold a print to see the negative's source", onBack) {
-        // Raw files of the relensed pictures: a linear DNG (lens, flare, filter; no film) beside each print.
+        // The print in high dynamic range as a linear DNG beside it.
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(Palette.panel).clickable { body.toggleDng() }
             .padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("DNG BESIDE EACH PRINT", color = Palette.cream, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                Text("16-bit linear raw of the relensed picture, no film look · about 6 bytes a pixel", color = Palette.dim, fontSize = 10.sp)
+                Text("the print in high dynamic range (film, grain and all), for a raw editor", color = Palette.dim, fontSize = 10.sp)
             }
             Text(if (body.dngOut) "ON" else "OFF", color = if (body.dngOut) Color(0xFF73F2B3) else Palette.dim, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         }
+        Spacer(Modifier.height(6.dp))
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(Palette.panel).clickable { body.toggleRaw() }
+            .padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("KEEP THE CAMERA RAW", color = Palette.cream, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                Text("the phone's own untouched RAW, saved to the gallery beside the print", color = Palette.dim, fontSize = 10.sp)
+            }
+            Text(if (body.rawOut) "ON" else "OFF", color = if (body.rawOut) Color(0xFF73F2B3) else Palette.dim, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        }
         Spacer(Modifier.height(10.dp))
         if (body.darkroom.isEmpty()) {
-            Text("Nothing developed yet this session.", color = Palette.dim, modifier = Modifier.padding(12.dp))
+            Text("Nothing developed yet.", color = Palette.dim, modifier = Modifier.padding(12.dp))
         }
         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             itemsIndexed(body.darkroom) { _, e ->

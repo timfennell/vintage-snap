@@ -11,20 +11,20 @@ import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
- * A linear DNG of the relensed picture: three 16-bit samples a pixel (LinearRaw, so
- * no demosaic), in linear sRGB primaries with a D65 white, the lens's blur, flare,
- * fall-off and filter in it but not the film. Editable as a raw file (white balance,
- * exposure, tone) in Lightroom, Camera Raw, darktable and the like.
+ * A linear DNG of the print in high dynamic range: three 16-bit float samples a pixel
+ * (LinearRaw, so no demosaic; half floats, as Vintage Click writes), in linear sRGB primaries with a D65 white, with the lens
+ * and the film in it (linear.comp: the stock's colour, contrast, grain, halation) but
+ * not squeezed into a print's range. Editable as a raw file (white balance, exposure,
+ * tone) in Lightroom, Camera Raw, darktable and the like.
  *
- * Highlights are kept: 1.0 (diffuse white) is written at a quarter of full scale, so
- * two stops above it survive, and BaselineExposure (+2) tells the converter to
- * open up by as much. Android's DngCreator only takes a sensor's Bayer data, hence this.
+ * Highlights are kept: 1.0 is diffuse white and brighter values are written as they are
+ * (a half float reaches 65504), so a converter can pull them back. Android's DngCreator
+ * only takes a sensor's Bayer data, hence this.
  *
  * Rows are streamed in strips from [rows] (y0, count -> RGBA floats, top row first),
  * so a 12 MP picture never sits in memory as floats all at once.
  */
 object DngWriter {
-    private const val HEADROOM = 4f            // 1.0 at 65535 / 4
     private const val STRIP = 128
 
     fun write(file: File, w: Int, h: Int, make: String, model: String, software: String,
@@ -60,15 +60,16 @@ object DngWriter {
         entries += Entry(305, ASCII, ascii(software).size, ascii(software))
         val date = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).format(Date())
         entries += Entry(306, ASCII, ascii(date).size, ascii(date))
+        entries += Entry(339, SHORT, 3, shorts(3, 3, 3))               // SampleFormat: IEEE float
         entries += Entry(50706, BYTE, 4, byteArrayOf(1, 4, 0, 0))      // DNGVersion
-        entries += Entry(50707, BYTE, 4, byteArrayOf(1, 1, 0, 0))      // DNGBackwardVersion
+        entries += Entry(50707, BYTE, 4, byteArrayOf(1, 4, 0, 0))      // DNGBackwardVersion: float data needs 1.4
         val ucm = "$make $model"
         entries += Entry(50708, ASCII, ascii(ucm).size, ascii(ucm))    // UniqueCameraModel
-        entries += Entry(50717, LONG, 3, longs(65535, 65535, 65535))   // WhiteLevel
+        entries += Entry(50717, LONG, 3, longs(1, 1, 1))               // WhiteLevel: 1.0 for float data (brighter is kept)
         // ColorMatrix1: XYZ (D65) -> the data's space, linear sRGB.
         entries += Entry(50721, SRATIONAL, 9, srational(3.2406f, -1.5372f, -0.4986f, -0.9689f, 1.8758f, 0.0415f, 0.0557f, -0.2040f, 1.0570f))
         entries += Entry(50728, RATIONAL, 3, rational(1f, 1f, 1f))     // AsShotNeutral: already balanced
-        entries += Entry(50730, SRATIONAL, 1, srational(2f))           // BaselineExposure: the headroom back
+        entries += Entry(50730, SRATIONAL, 1, srational(0f))           // BaselineExposure
         entries += Entry(50778, SHORT, 1, shorts(21))                  // CalibrationIlluminant1: D65
         // ForwardMatrix1: white-balanced data -> XYZ D50 (linear sRGB, Bradford-adapted).
         entries += Entry(50964, SRATIONAL, 9, srational(0.4361f, 0.3851f, 0.1431f, 0.2225f, 0.7169f, 0.0606f, 0.0139f, 0.0971f, 0.7141f))
@@ -104,7 +105,6 @@ object DngWriter {
     private fun writePixels(out: OutputStream, w: Int, h: Int, rows: (Int, Int, ByteBuffer) -> Unit) {
         val fbuf = ByteBuffer.allocateDirect(w * STRIP * 16).order(ByteOrder.nativeOrder())
         val obuf = ByteArray(w * STRIP * 6)
-        val scale = 65535f / HEADROOM
         var y = 0
         while (y < h) {
             val n = minOf(STRIP, h - y)
@@ -113,7 +113,8 @@ object DngWriter {
             var k = 0
             for (i in 0 until w * n) {
                 for (c in 0..2) {
-                    val v = (fb.get(i * 4 + c) * scale).roundToInt().coerceIn(0, 65535)
+                    val f = fb.get(i * 4 + c)
+                    val v = android.util.Half.toHalf(if (f.isNaN()) 0f else f.coerceIn(0f, 65504f)).toInt()
                     obuf[k++] = (v and 0xFF).toByte(); obuf[k++] = (v shr 8).toByte()
                 }
             }
