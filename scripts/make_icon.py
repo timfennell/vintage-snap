@@ -21,8 +21,8 @@ base = np.dstack([np.full((N, N), 0.045), np.full((N, N), 0.040), np.full((N, N)
 base *= (1.0 - 0.45 * np.clip(d - 0.3, 0, 1))[..., None]
 
 # ---- the ground glass: portrait 2:3, rounded corners
-gw, gh = dp(33), dp(49.5)
-GY = C - dp(4.5)                                   # the glass sits a little high: the readout goes under it
+gw, gh = dp(35), dp(52.5)
+GY = C - dp(3.0)                                   # the glass sits a little high: the readout goes under it
 gx0, gy0 = C - gw / 2, GY - gh / 2
 glass_mask = Image.new("L", (N, N), 0)
 ImageDraw.Draw(glass_mask).rounded_rectangle([gx0, gy0, gx0 + gw, gy0 + gh], radius=dp(3.2), fill=255)
@@ -164,18 +164,18 @@ def seg_polys(x, y, w, h, t, slant):
             "e": vt(x + t / 2, m, y + h - t / 2), "c": vt(x + w - t / 2, m, y + h - t / 2)}
 lit = Image.new("L", (N, N), 0); unl = Image.new("L", (N, N), 0)
 ld, ud = ImageDraw.Draw(lit), ImageDraw.Draw(unl)
-dw, dh, gap = dp(5.0), dp(8.0), dp(1.6)
+dw, dh, gap = dp(2.5), dp(4.0), dp(0.85)
 text = "125"
 x = C - (len(text) * dw + (len(text) - 1) * gap) / 2
-ytop = GY + gh / 2 + dp(3.2)
+ytop = GY + gh / 2 + dp(2.4)
 for ch in text:
-    polys = seg_polys(x, ytop, dw, dh, dp(1.05), 0.12)
+    polys = seg_polys(x, ytop, dw, dh, dp(0.55), 0.12)
     for k, poly in polys.items():
         (ld if k in SEG[ch] else ud).polygon(poly, fill=255)
     x += dw + gap
-L = np.asarray(lit.filter(ImageFilter.GaussianBlur(DP * 0.12)), np.float32) / 255
-U = np.asarray(unl.filter(ImageFilter.GaussianBlur(DP * 0.12)), np.float32) / 255
-LG = np.asarray(lit.filter(ImageFilter.GaussianBlur(dp(1.5))), np.float32) / 255
+L = np.asarray(lit.filter(ImageFilter.GaussianBlur(DP * 0.07)), np.float32) / 255
+U = np.asarray(unl.filter(ImageFilter.GaussianBlur(DP * 0.07)), np.float32) / 255
+LG = np.asarray(lit.filter(ImageFilter.GaussianBlur(dp(0.8))), np.float32) / 255
 out = out * (1 - U[..., None] * 0.6) + np.array([0.16, 0.025, 0.02]) * (U[..., None] * 0.6)
 out = out * (1 - L[..., None]) + np.array([1.0, 0.20, 0.10]) * L[..., None]
 out += LG[..., None] * np.array([0.9, 0.12, 0.05]) * 0.55          # the LEDs' red glow
