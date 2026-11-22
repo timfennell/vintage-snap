@@ -238,7 +238,9 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
             body.shutterSeconds.let { t -> Led(if (t >= 0.5f) "%.0f".format(t) else "%.0f".format(1f / t), cells = 4, suffix = if (t >= 0.5f) "\"" else "") }
             Led(when { shownM == null -> "---"; shownM.isInfinite() -> "∞"; shownM < 10f -> "%.2f".format(shownM); shownM < 100f -> "%.1f".format(shownM); else -> "%.0f".format(shownM) }, cells = 3, suffix = "m",
                 // long-press the distance: collimate this camera's focus readings
-                modifier = Modifier.pointerInput(Unit) { detectTapGestures(onLongPress = { body.startCollimating(); haptics.clunk() }) })
+                modifier = Modifier.pointerInput(Unit) { detectTapGestures(onLongPress = {
+                    body.calibCameras().firstOrNull { it.camera.id == body.rig.currentCameraId }?.let { body.startCalibration(it) }
+                    haptics.clunk() }) })
             when (lens.movement) {
                 is Movement.Tilt -> Led("%.0f".format(kotlin.math.hypot(body.tiltX, body.tiltY)), cells = 2, prefix = "T", suffix = "°",
                     modifier = Modifier.clickable { body.centreMovements(); haptics.click() })
@@ -249,6 +251,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
             Led("${body.framesLeft}", cells = 2)
         }
 
+        body.calib?.let { cal -> CalibrationBanner(body, cal, haptics) }
         if (body.collimating || body.collimationNote.isNotEmpty() && body.collimation.isNotEmpty()) Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
             Text((if (body.collimating) "COLLIMATE THE ${(body.rig.framing.value?.cameraRole ?: "").uppercase()} CAMERA (${body.rig.currentCameraId ?: ""}) · " else "") + body.collimationNote,
@@ -801,5 +804,37 @@ private fun DofLever(held: Boolean, onHeld: (Boolean) -> Unit) {
             .border(1.dp, Palette.panelHi, CircleShape))
         Spacer(Modifier.height(8.dp))
         Text("DOF", color = if (held) Palette.cream else Palette.dim, fontSize = 7.sp, letterSpacing = 1.sp)
+    }
+}
+
+
+/**
+ * The focus calibration under way, under the finder: the step, what to do, the measured
+ * distance typed in (metres), SET; DONE or ✕ goes back to the lens that was on.
+ */
+@Composable
+private fun CalibrationBanner(body: Body, cal: Body.Calib, haptics: Haptics) {
+    androidx.compose.foundation.layout.Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
+        .clip(RoundedCornerShape(6.dp)).background(Color(0xE6141210)).padding(10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("CALIBRATE THE ${cal.role.uppercase()} CAMERA · " + when (cal.step) { 0 -> "STEP 1 OF 3"; 1 -> "STEP 2 OF 3"; 2 -> "STEP 3 OF 3"; else -> "DONE" },
+                color = Palette.amber, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, modifier = Modifier.weight(1f))
+            Text(if (cal.step == 3) "DONE" else "✕", color = if (cal.step == 3) Palette.leather else Palette.dim, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(if (cal.step == 3) Palette.amber else Color.Transparent)
+                    .clickable { body.endCalibration(); haptics.click() }.padding(horizontal = 10.dp, vertical = 4.dp))
+        }
+        Text(cal.note, color = Palette.cream, fontSize = 12.sp, modifier = Modifier.padding(vertical = 4.dp))
+        if (cal.step in 1..2) Row(verticalAlignment = Alignment.CenterVertically) {
+            androidx.compose.foundation.text.BasicTextField(cal.distance, { cal.distance = it.filter { ch -> ch.isDigit() || ch == '.' || ch == ',' }.take(6) },
+                singleLine = true,
+                textStyle = androidx.compose.ui.text.TextStyle(color = Palette.led, fontSize = 20.sp, fontWeight = FontWeight.Bold),
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(Palette.led),
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
+                modifier = Modifier.width(110.dp).clip(RoundedCornerShape(4.dp)).background(Color(0xFF050505)).padding(horizontal = 10.dp, vertical = 6.dp))
+            Text("  m measured", color = Palette.dim, fontSize = 12.sp, modifier = Modifier.weight(1f))
+            Text("SET", color = Palette.leather, fontWeight = FontWeight.Bold, fontSize = 13.sp,
+                modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(Palette.amber)
+                    .clickable { body.calibSet(); haptics.click() }.padding(horizontal = 14.dp, vertical = 8.dp))
+        }
     }
 }

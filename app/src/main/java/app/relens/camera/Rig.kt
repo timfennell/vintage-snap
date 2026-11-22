@@ -222,6 +222,8 @@ class Rig(private val context: Context) {
 
     /** The raw reading at the last autofocus lock (for collimating). */
     @Volatile var lastLockRaw: Float? = null; private set
+    /** When [lastLockRaw] was taken, ms. */
+    @Volatile var lastLockAt: Long = 0L; private set
     val currentCameraId: String? get() = heroId
 
     /** Recent autofocus locks after taps (calibration samples for the depth map). */
@@ -414,7 +416,7 @@ class Rig(private val context: Context) {
                 if (af == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED && sawScan) sweepWait?.complete(null)
                 if (af == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED && !sawScan) { lastAfState = -1; return }
                 if (af == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED) {
-                    own.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { raw -> lastLockRaw = raw; sweepWait?.complete(corrected(heroId ?: "0", raw)) }
+                    own.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { raw -> lastLockRaw = raw; lastLockAt = System.currentTimeMillis(); sweepWait?.complete(corrected(heroId ?: "0", raw)) }
                     if (sweepWait == null) own.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { raw ->
                         val id = heroId ?: "0"
                         afSamples.add(AfSample(tapX, tapY, corrected(id, raw), id, System.currentTimeMillis()))
@@ -527,6 +529,8 @@ class Rig(private val context: Context) {
     private var probeId: String? = null
     private var probeFrames = 0
     private val probeReads = ArrayList<Float>()
+    /** Measures the open camera's infinity again (a calibration redone). */
+    fun measureInfinity() = handler.post { startInfinityProbe() }
     private fun startInfinityProbe() {
         val cam = _framing.value?.camera ?: return
         val id = heroId ?: return
@@ -544,7 +548,7 @@ class Rig(private val context: Context) {
         val id = probeId
         val inf = probeReads.takeLast(4).average().toFloat()
         handler.post { repeat() }
-        if (id != null && id == heroId && still) {
+        if (id != null && id == heroId && probeReads.isNotEmpty()) {
             app.relens.Trace.i("infinity probe, camera $id: the lens rests at %.3f D at infinity (%d frames)".format(inf, probeFrames))
             onInfinity?.invoke(id, inf)
         } else app.relens.Trace.w("infinity probe, camera $id: no steady reading (%d frames)".format(probeFrames))

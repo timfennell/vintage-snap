@@ -395,6 +395,106 @@ class Body(app: Application) : AndroidViewModel(app) {
         if (v.size == 3) Triple(v[0], v[1], v[2]) else null
     }
 
+    // ---------------- Focus calibration, a camera at a time ----------------
+
+    /** A camera as the calibration page lists it: the camera, a lens that shoots on it, its state. */
+    class CalibCamera(val camera: app.relens.camera.PhoneCamera, val role: String, val lensIndex: Int, val status: String, val done: Boolean)
+
+    fun calibCameras(): List<CalibCamera> {
+        val seen = LinkedHashMap<String, CalibCamera>()
+        for ((i, l) in lensBag.withIndex()) {
+            val fr = rig.framingFor(l) ?: continue
+            val c = fr.camera
+            if (c.id in seen || c.minFocusD <= 0f) continue
+            val role = fr.cameraRole
+            val hand = collimationPairs(c.id).size
+            val (status, done) = when {
+                c.focusCalibration == 2 -> "calibrated by the phone: nothing to do" to true
+                hand >= 2 -> "calibrated by hand (${hand} targets)" + (infinityOf(c.id)?.let { " · infinity at %.2f".format(it) } ?: "") to true
+                infinityOf(c.id) != null -> "infinity measured · learning from your shots (${loadPairs(c.id).size} so far)" to false
+                else -> "not calibrated yet" to false
+            }
+            seen[c.id] = CalibCamera(c, role, i, status, done)
+        }
+        return seen.values.toList()
+    }
+
+    /** The calibration under way: which camera, which step (0 infinity, 1 and 2 targets, 3 done). */
+    class Calib(val cameraId: String, val role: String, val near: Float, val far: Float, val returnLens: Int) {
+        var step by mutableIntStateOf(0)
+        var distance by mutableStateOf("")
+        var note by mutableStateOf("")
+        val pairs = ArrayList<Pair<Float, Float>>()        // (reading, true dioptres)
+        var stepStarted = System.currentTimeMillis()
+    }
+    var calib by mutableStateOf<Calib?>(null); private set
+
+    fun startCalibration(c: CalibCamera) {
+        val id = c.camera.id
+        // suggested distances: close and farther, for what the camera focuses on
+        val (near, far) = when {
+            c.role == "macro" -> 0.15f to 0.40f
+            c.role == "tele" -> 1.5f to 5f
+            else -> 1f to 3f
+        }
+        val cal = Calib(id, c.role, near, far, lensIndex)
+        // start clean: this camera's targets, learnt pairs and infinity measured afresh
+        prefs.edit().remove("afcolli_$id").remove("afsamples_$id").remove("afinf_$id").apply()
+        calib = cal
+        if (lensIndex != c.lensIndex) mount(c.lensIndex)
+        focusPos = Float.NaN; rig.manualFocus(null)                // the lens on autofocus
+        cal.note = "measuring where this lens rests at infinity…"
+        if (rig.currentCameraId == id) rig.measureInfinity()        // else it is measured as the camera opens
+    }
+
+    private fun calibInfinityDone(id: String) {
+        val cal = calib ?: return
+        if (cal.cameraId != id || cal.step != 0) return
+        cal.step = 1; cal.stepStarted = System.currentTimeMillis()
+        cal.note = calibAsk(cal)
+    }
+
+    private fun calibAsk(cal: Calib) = "put something with clear edges about %s away and measure the distance from the phone. Tap it in the finder to focus, type the distance, press SET.".format(
+        fmtM(if (cal.step == 1) cal.near else cal.far))
+
+    private fun fmtM(m: Float) = if (m < 1f) "%.0f cm".format(m * 100) else "%.1f m".format(m)
+
+    fun calibSet() {
+        val cal = calib ?: return
+        if (cal.step !in 1..2) return
+        val m = cal.distance.replace(',', '.').toFloatOrNull()
+        if (m == null || m !in 0.05f..50f) { cal.note = "type the measured distance in metres (e.g. 1.25)"; return }
+        val raw = rig.lastLockRaw
+        if (raw == null || rig.lastLockAt < cal.stepStarted) { cal.note = "tap the target in the finder first, so the lens focuses on it"; return }
+        if (cal.pairs.isNotEmpty() && kotlin.math.abs(1f / m - cal.pairs.last().second) < 0.15f) {
+            cal.note = "the second target needs to be at a clearly different distance (try about ${fmtM(cal.far)})"; return
+        }
+        cal.pairs += raw to 1f / m
+        Trace.i("calibration, camera ${cal.cameraId}: target ${cal.pairs.size} at %.2f m read %.3f".format(m, raw))
+        if (cal.step == 1) { cal.step = 2; cal.distance = ""; cal.stepStarted = System.currentTimeMillis(); cal.note = calibAsk(cal); return }
+        // the line through the measured infinity and the two targets
+        val id = cal.cameraId
+        val inf = infinityOf(id) ?: 0f
+        var num = 0.0; var den = 0.0
+        for ((r, t) in cal.pairs) { num += t * (r - inf); den += t * t }
+        val k = (num / den).toFloat()
+        if (k !in 0.3f..5f) { cal.note = "those readings don't fit together (scale %.2f): try again, tapping each target carefully".format(k); cal.pairs.clear(); cal.step = 1; cal.stepStarted = System.currentTimeMillis(); return }
+        rig.afCalibration[id] = Pair(inf, k)
+        prefs.edit().putString("afcal_$id", "$inf,$k")
+            .putString("afcolli_$id", cal.pairs.joinToString(";") { "${it.first}:${it.second}:5.0" }).apply()
+        val worst = cal.pairs.maxOf { (r, t) -> kotlin.math.abs((r - inf) / k - t) }
+        Trace.i("calibration, camera $id done: reading = %.3f + %.3f x true (worst target off by %.3f D)".format(inf, k, worst))
+        cal.step = 3
+        cal.note = "the ${cal.role} camera is calibrated. Its focus readings, ring and split prism now agree with the tape."
+        focusLearnTick++
+    }
+
+    fun endCalibration() {
+        val cal = calib ?: return
+        calib = null
+        if (lensIndex != cal.returnLens) mount(cal.returnLens)
+    }
+
     fun collimateSet() {
         val raw = rig.lastLockRaw ?: run { collimationNote = "tap a target first"; return }
         val m = focusM ?: run { collimationNote = "turn the ring to the target's distance"; return }
@@ -563,6 +663,7 @@ class Body(app: Application) : AndroidViewModel(app) {
             rig.afCalibration[id] = Pair(inf, k)
             prefs.edit().putString("afcal_$id", "$inf,$k").apply()
             Trace.i("camera $id: infinity at reading %.3f; now reading = %.3f + %.3f x true".format(inf, inf, k))
+            calibInfinityDone(id)
         }
         // Saved collimations: "afcal_<camera>" = "offset,scale".
         for (id in listOf("0", "2", "3")) prefs.getString("afcal_$id", null)?.split(",")?.mapNotNull { it.toFloatOrNull() }
