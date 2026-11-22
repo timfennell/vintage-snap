@@ -13,6 +13,7 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -197,8 +198,12 @@ fun LightTableScreen(body: Body, onBack: () -> Unit, openBench: () -> Unit, init
         Row(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             // dark on the lit glass; light once the loupe's barrel darkens the view
             val ink = if (scale >= 3f) Palette.cream else Color(0xFF3A3530)
-            Text("‹", color = ink, fontSize = 28.sp, modifier = Modifier.clickable(onClick = onBack).padding(end = 10.dp))
-            Text("LIGHT TABLE", color = ink, fontSize = 16.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+            // back: the arrow and the title together, a generous target (at least 56 dp tall)
+            Row(Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onBack).heightIn(min = 56.dp)
+                .padding(start = 4.dp, end = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("‹", color = ink, fontSize = 32.sp, modifier = Modifier.padding(end = 12.dp))
+                Text("LIGHT TABLE", color = ink, fontSize = 16.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+            }
             Spacer(Modifier.weight(1f))
             Text("DNG " + if (body.dngOut) "ON" else "OFF", color = if (body.dngOut) Color(0xFF1E8A5C) else Color(0xFF7A746C),
                 fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp,

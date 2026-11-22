@@ -1,5 +1,7 @@
 package app.relens.ui
 
+import kotlinx.coroutines.launch
+
 import androidx.compose.ui.layout.layout
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.ui.layout.boundsInRoot
@@ -113,8 +115,24 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
             mirrorUp = false
         }
     }
-    val blackout by animateFloatAsState(if (mirrorUp) 1f else 0f,
-        androidx.compose.animation.core.tween(if (mirrorUp) 0 else 110), label = "mirror")
+    // The mirror's swing, as seen through the finder: the dark edge sweeps up over the glass as it
+    // flips up, and back down as it drops, rebounding once off its stop; each slap shakes the
+    // view a little (a damped wobble), as the whole camera does.
+    val mirror = remember { androidx.compose.animation.core.Animatable(0f) }
+    val shake = remember { androidx.compose.animation.core.Animatable(0f) }
+    LaunchedEffect(mirrorUp) {
+        if (mirrorUp) {
+            launch { shake.snapTo(0f); shake.animateTo(0f, androidx.compose.animation.core.keyframes {
+                durationMillis = 160; -1.6f at 25; 1.1f at 60; -0.5f at 100; 0.2f at 130 }) }
+            mirror.animateTo(1f, androidx.compose.animation.core.tween(60, easing = androidx.compose.animation.core.FastOutLinearInEasing))
+        } else if (mirror.value > 0f) {
+            launch { shake.snapTo(0f); shake.animateTo(0f, androidx.compose.animation.core.keyframes {
+                durationMillis = 260; 2.4f at 70; -1.7f at 115; 1.0f at 160; -0.45f at 205; 0.15f at 235 }) }
+            mirror.animateTo(0f, androidx.compose.animation.core.tween(80, easing = androidx.compose.animation.core.FastOutLinearInEasing))
+            mirror.animateTo(0.16f, androidx.compose.animation.core.tween(30, easing = androidx.compose.animation.core.LinearOutSlowInEasing))
+            mirror.animateTo(0f, androidx.compose.animation.core.tween(55, easing = androidx.compose.animation.core.FastOutLinearInEasing))
+        }
+    }
 
     // The ground glass, in screen pixels: the eyepiece effect over the whole body works round it.
     var glass by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
@@ -142,6 +160,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
           // with light from the picture's edge spilling into it (Finder.kt).
           Box {
             Box(Modifier.aspectRatio(2f / 3f).onGloballyPositioned { glass = it.boundsInRoot() }
+                .graphicsLayer { translationY = shake.value * density }
                 .clip(RoundedCornerShape(6.dp)).background(Color.Black)) {
                 val shiftView = Movements.keystone(lens, floatArrayOf(body.shiftX, body.shiftY))
                 Finder(body, framing?.crop ?: 1f, Modifier.fillMaxSize()
@@ -159,7 +178,10 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                         if (lens.movement is Movement.Tilt) Movements.tiltDioptres(lens, floatArrayOf(body.tiltX, body.tiltY)) else floatArrayOf(0f, 0f),
                         body.focusX, body.focusY, body.finderFocusD, lens.focalMM, body.fNumber)
                     // the split-image spot and microprism collar at the centre
-                    .splitPrism(prismShift, lens.focalMM, lens.maxAperture))
+                    .splitPrism(prismShift, lens.focalMM, lens.maxAperture)
+                    // a focusing screen is a little soft: its matte grain scatters the image
+                    .groundGlassSoftness())
+                GroundGlass(Modifier.fillMaxSize())
                 // Taps and drags over the finder (a separate layer, so the view's own transform doesn't move them).
                 Box(Modifier.fillMaxSize()
                     .pointerInput(Unit) {
@@ -217,7 +239,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                 }
                 sceneEV?.let { ev -> MeterCard(body.shutterPos, body.meteredShutterPos(ev), Modifier.fillMaxSize()) }
                 rigError?.let { Text(it, color = Palette.led, fontSize = 11.sp, modifier = Modifier.align(Alignment.Center).padding(16.dp)) }
-                if (blackout > 0f) Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = blackout)))
+                if (mirror.value > 0f) MirrorShade(mirror.value, Modifier.fillMaxSize())
                 body.parallax?.let { pc -> ParallaxFinder(pc, body, Modifier.fillMaxSize()) }
                 if (mirrorUp && (body.busy || body.sweeping) && body.parallax == null) Text("HOLD STEADY", color = Palette.led, fontSize = 16.sp,
                     fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, modifier = Modifier.align(Alignment.Center))
@@ -841,3 +863,59 @@ private fun CalibrationBanner(body: Body, cal: Body.Calib, haptics: Haptics) {
         }
     }
 }
+
+
+/**
+ * The mirror's edge crossing the focusing screen: dark from the bottom up to [m] of the way,
+ * with a soft leading edge (it moves faster than the eye can follow).
+ */
+@Composable
+private fun MirrorShade(m: Float, modifier: Modifier) {
+    Canvas(modifier) {
+        val edge = size.height * (1f - m)
+        val feather = size.height * 0.10f
+        drawRect(Color.Black, topLeft = Offset(0f, edge), size = androidx.compose.ui.geometry.Size(size.width, size.height - edge))
+        drawRect(Brush.verticalGradient(listOf(Color.Transparent, Color.Black), startY = edge - feather, endY = edge),
+            topLeft = Offset(0f, edge - feather), size = androidx.compose.ui.geometry.Size(size.width, feather))
+    }
+}
+
+/**
+ * The focusing screen itself: a fine, fixed matte grain (the ground surface), the brighter
+ * centre and dimmer edges a screen has, and the faint rings of its Fresnel lens.
+ */
+@Composable
+private fun GroundGlass(modifier: Modifier) {
+    val grain = remember {
+        val n = 256; val rng = kotlin.random.Random(41)
+        val px = IntArray(n * n) {
+            val v = rng.nextFloat()
+            // most of the surface a hair light or dark, now and then a brighter grain catching the light
+            val a = (if (v > 0.985f) 0.16f else kotlin.math.abs(v - 0.5f) * 0.11f)
+            val c = if (v > 0.5f) 0xFFFFFF else 0x000000
+            ((a * 255).toInt() shl 24) or c
+        }
+        android.graphics.Bitmap.createBitmap(px, n, n, android.graphics.Bitmap.Config.ARGB_8888).asImageBitmap()
+    }
+    Canvas(modifier) {
+        // the grain, tiled at the screen's own fine scale
+        drawRect(androidx.compose.ui.graphics.ShaderBrush(androidx.compose.ui.graphics.ImageShader(grain,
+            androidx.compose.ui.graphics.TileMode.Repeated, androidx.compose.ui.graphics.TileMode.Repeated)))
+        // brighter in the middle, falling off to the corners (the screen's hot spot)
+        val r = size.maxDimension * 0.75f
+        drawRect(Brush.radialGradient(listOf(Color.White.copy(alpha = 0.05f), Color.Transparent, Color.Black.copy(alpha = 0.22f)),
+            center = center, radius = r))
+        // the Fresnel's rings, barely there
+        val step = 5.5f * density
+        var rad = step
+        while (rad < r) {
+            drawCircle(Color.White.copy(alpha = 0.018f), radius = rad, center = center, style = androidx.compose.ui.graphics.drawscope.Stroke(0.6f * density))
+            rad += step
+        }
+    }
+}
+
+/** A hair of softness on the finder's image (Android 12+): the ground surface scatters it. */
+private fun Modifier.groundGlassSoftness(): Modifier =
+    if (android.os.Build.VERSION.SDK_INT < 31) this
+    else graphicsLayer { renderEffect = androidx.compose.ui.graphics.BlurEffect(0.9f * density, 0.9f * density) }

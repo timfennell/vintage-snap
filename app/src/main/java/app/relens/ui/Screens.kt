@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -54,8 +55,9 @@ import kotlin.math.pow
 private fun Panel(title: String, subtitle: String, onBack: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
     BackHandler(onBack = onBack)
     Column(Modifier.fillMaxSize().background(Palette.leather).statusBarsPadding().navigationBarsPadding().padding(12.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("‹", color = Palette.amber, fontSize = 28.sp, modifier = Modifier.clickable(onClick = onBack).padding(end = 12.dp))
+        Row(Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onBack).heightIn(min = 56.dp).padding(end = 14.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Text("‹", color = Palette.amber, fontSize = 32.sp, modifier = Modifier.padding(start = 2.dp, end = 12.dp))
             Text(title, color = Palette.amber, fontSize = 18.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
         }
         Text(subtitle, color = Palette.dim, fontSize = 11.sp, modifier = Modifier.padding(start = 26.dp, bottom = 8.dp))
