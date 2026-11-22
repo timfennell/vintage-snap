@@ -47,7 +47,6 @@ class DarkroomEntry(val frame: Int, val label: String, val roll: Int = 0, val st
     /** When the frame was developed (the light table lays its days out by it). */
     var taken: Long = System.currentTimeMillis()
     var preview by mutableStateOf<Bitmap?>(null)
-    var original by mutableStateOf<Bitmap?>(null)
     var status by mutableStateOf("developing…")
     var done by mutableStateOf(false)
 }
@@ -691,7 +690,7 @@ class Body(app: Application) : AndroidViewModel(app) {
                     p.arFocusD != null -> learnFocus(heroCam, lockRaw, p.arFocusD, 1f)
                     p.metricFocusD != null -> learnFocus(heroCam, lockRaw, p.metricFocusD, 0.33f)
                 }
-                entry.preview = p.preview; entry.original = p.original
+                entry.preview = p.preview
                 if (p.uri != null) {
                     entry.uri = p.uri; entry.dngUri = p.dngUri
                     // the camera's own RAW too, if asked for; then the app keeps nothing of this frame

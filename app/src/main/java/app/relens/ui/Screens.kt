@@ -194,7 +194,7 @@ private fun ColumnScope.FilmShelf(body: Body, haptics: Haptics, onLoaded: () -> 
 /** The darkroom: prints as they come out. Hold a print to see the camera's own picture. */
 @Composable
 fun DarkroomScreen(body: Body, onBack: () -> Unit, openBench: () -> Unit) {
-    Panel("DARKROOM", "prints are saved to Pictures/Vintage Snap · hold a print to see the negative's source", onBack) {
+    Panel("DARKROOM", "prints are saved to Pictures/Vintage Snap", onBack) {
         // The print in high dynamic range as a linear DNG beside it.
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(Palette.panel).clickable { body.toggleDng() }
             .padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -219,13 +219,11 @@ fun DarkroomScreen(body: Body, onBack: () -> Unit, openBench: () -> Unit) {
         }
         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             itemsIndexed(body.darkroom) { _, e ->
-                var showOriginal by remember { mutableStateOf(false) }
                 Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(Palette.panel).padding(8.dp)) {
-                    val bmp = if (showOriginal) e.original else e.preview
+                    val bmp = e.preview
                     if (bmp != null) {
                         Image(bmp.asImageBitmap(), null, contentScale = ContentScale.Fit,
-                            modifier = Modifier.fillMaxWidth().aspectRatio(bmp.width / bmp.height.toFloat())
-                                .pointerInput(e) { detectTapGestures(onPress = { showOriginal = true; tryAwaitRelease(); showOriginal = false }) })
+                            modifier = Modifier.fillMaxWidth().aspectRatio(bmp.width / bmp.height.toFloat()))
                     } else {
                         Box(Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
                             Text(e.status, color = Palette.dim, fontSize = 12.sp)

@@ -226,14 +226,13 @@ fun LightTableScreen(body: Body, onBack: () -> Unit, openBench: () -> Unit, init
 }
 
 /**
- * A frame held up on its own: the print, full screen; hold it to see the phone's own
- * picture (what the lens and film made of it); tap to put it back.
+ * A frame held up on its own: the print, full screen; hold it to share it, tap to put it
+ * back.
  */
 @Composable
 private fun PrintView(e: DarkroomEntry, onClose: () -> Unit) {
     BackHandler(onBack = onClose)
     var big by remember(e) { mutableStateOf<Bitmap?>(null) }
-    var showOriginal by remember { mutableStateOf(false) }
     val ctx = androidx.compose.ui.platform.LocalContext.current
     androidx.compose.runtime.LaunchedEffect(e) {
         big = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching {
@@ -246,36 +245,14 @@ private fun PrintView(e: DarkroomEntry, onClose: () -> Unit) {
             open()?.use { android.graphics.BitmapFactory.decodeStream(it, null, android.graphics.BitmapFactory.Options().apply { inSampleSize = ss }) }
         }.getOrNull() }
     }
-    // after a restart the phone's picture isn't in memory: the negative it was shot as (uncropped)
-    var negative by remember(e) { mutableStateOf<Bitmap?>(null) }
-    androidx.compose.runtime.LaunchedEffect(e) {
-        if (e.original != null) return@LaunchedEffect
-        negative = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching {
-            val dir = ctx.getExternalFilesDir("negatives") ?: return@runCatching null
-            val f = dir.listFiles { x -> x.name.startsWith("R%03d_F%02d_".format(e.roll, e.frame)) && x.name.count { it == '.' } == 1 && x.name.endsWith(".jpg") }
-                ?.maxByOrNull { it.lastModified() } ?: return@runCatching null
-            val b = android.graphics.BitmapFactory.decodeFile(f.absolutePath, android.graphics.BitmapFactory.Options().apply { inSampleSize = 2 })
-            val deg = when (androidx.exifinterface.media.ExifInterface(f).getAttributeInt(androidx.exifinterface.media.ExifInterface.TAG_ORIENTATION, 1)) {
-                androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_90 -> 90f
-                androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_180 -> 180f
-                androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_270 -> 270f
-                else -> 0f }
-            if (deg == 0f) b else Bitmap.createBitmap(b, 0, 0, b.width, b.height, android.graphics.Matrix().apply { postRotate(deg) }, true)
-        }.getOrNull() }
-    }
-    val source = e.original ?: negative
-    val shown = (if (showOriginal) source else null) ?: big ?: e.preview
+    val shown = big ?: e.preview
     var sharing by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxSize().background(Color(0xF2050505))
         .pointerInput(e) { detectTapGestures(onTap = { if (sharing) sharing = false else onClose() }, onLongPress = { sharing = true }) },
         contentAlignment = Alignment.Center) {
         shown?.let { androidx.compose.foundation.Image(it.asImageBitmap(), null, contentScale = androidx.compose.ui.layout.ContentScale.Fit,
             modifier = Modifier.fillMaxSize().padding(12.dp)) }
-        // before / after: the phone's own picture against the print
-        if (source != null) Text(if (showOriginal) "AFTER" else "BEFORE", color = Palette.cream, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp,
-            modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(12.dp).clip(RoundedCornerShape(4.dp))
-                .background(Color(0x55000000)).clickable { showOriginal = !showOriginal }.padding(horizontal = 12.dp, vertical = 6.dp))
-        Text((if (showOriginal) "the phone's own picture · " else "") + e.label + "  ·  hold to share",
+        Text(e.label + "  ·  hold to share",
             color = Palette.cream, fontSize = 11.sp,
             modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp))
         if (sharing) ShareSheet(e, Modifier.align(Alignment.BottomCenter)) { action ->

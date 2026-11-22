@@ -73,8 +73,6 @@ class Print(
     val uri: Uri?,
     val file: File,
     val preview: Bitmap,
-    /** The camera's picture at the same size, for before / after. */
-    val original: Bitmap,
     val timings: String,
     /** ARCore's measured distance at the focus point (dioptres), when the frame had parallax. */
     val arFocusD: Float? = null,
@@ -525,11 +523,10 @@ class Developer(private val context: Context) {
         lap("save")
         val ps = 1440f / maxOf(w, h)
         val preview = Bitmap.createScaledBitmap(print, (w * ps).toInt(), (h * ps).toInt(), true)
-        val original = Bitmap.createScaledBitmap(photo.bmp, (w * ps).toInt(), (h * ps).toInt(), true)
         print.recycle(); photo.bmp.recycle(); if (full.bmp !== photo.bmp) full.bmp.recycle()
         val timings = t.entries.joinToString("  ") { "${it.key} ${it.value} ms" }
         app.relens.Trace.i("developed $name: $timings (subject %.2f m, focus %.2f m)".format(1 / subjectD, look.focusM))
-        Print(uri, file, preview, original, timings, arFocusD, metricFocusD, dngUri)
+        Print(uri, file, preview, timings, arFocusD, metricFocusD, dngUri)
     }
 
     private class Upright(val bmp: Bitmap)
