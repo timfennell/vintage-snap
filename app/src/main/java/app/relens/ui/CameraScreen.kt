@@ -296,6 +296,8 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
         val marks = lens.focusMarks
         val focusPos = if (!body.focusPos.isNaN()) body.focusPos else positionFor(lens, shownM ?: 3f)
         val dof = dofMarks(lens, body.fNumber, shownM ?: 3f)
+        // how much light the finder casts down on the rings: the scene's brightness through it
+        val finderLight = sceneEV?.let { ((it - 3f) / 9f).coerceIn(0.15f, 1f) } ?: 0.3f
         BarrelRing(
             labels = marks.map(::mLabel),
             position = focusPos,
@@ -307,6 +309,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
             extraMarks = dof,
             labelColor = { if (marks[it].isInfinite()) Palette.orange else Palette.engraving },
             modifier = Modifier.padding(top = 4.dp),
+            finderLight = finderLight,
         )
         val stops = lens.apertureStops
         BarrelRing(
@@ -320,6 +323,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
             height = 52.dp,
             spacing = 58.dp,
             modifier = Modifier.padding(top = 2.dp),
+            finderLight = finderLight * 0.55f,
         )
         BarrelRing(
             labels = shutterSpeeds.map { it.first },
@@ -332,6 +336,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
             height = 48.dp,
             spacing = 54.dp,
             knurled = false,
+            finderLight = finderLight * 0.30f,
         )
 
         // ---- the deck ----
