@@ -31,7 +31,24 @@ gm = np.asarray(glass_mask, np.float32) / 255
 # frosted warm glass: a hot spot in the middle falling off to the corners, grain, Fresnel rings
 gd = np.hypot((xx - C) / (gw / 2), (yy - GY) / (gh / 2))
 lum = 0.93 - 0.20 * np.clip(gd, 0, 1.5) ** 1.6
-col = np.dstack([lum * 0.97, lum * 0.90, lum * 0.79])
+# a landscape on the screen, well out of focus: warm sky to a peach horizon (a hazy sun in it),
+# blue-green hills, a warm green and ochre field in front
+v = (yy - gy0) / gh                                        # 0 at the glass's top, 1 at its bottom
+u = (xx - gx0) / gw
+hz = 0.50 + 0.035 * np.sin(u * 5.1 + 0.7) + 0.02 * np.sin(u * 11.3 + 2.0)   # the hills' line
+fh = 0.66 + 0.02 * np.sin(u * 3.3 + 1.1)                                    # where the field begins
+sky_t = np.clip(v / 0.5, 0, 1)
+sky = np.dstack([0.62 + 0.36 * sky_t, 0.70 + 0.20 * sky_t, 0.80 - 0.10 * sky_t])
+sun = np.exp(-(((u - 0.66) / 0.16) ** 2 + ((v - 0.40) / 0.10) ** 2))
+sky = sky + sun[..., None] * np.array([0.30, 0.22, 0.10])
+hills = np.dstack([np.full((N, N), 0.40), np.full((N, N), 0.50), np.full((N, N), 0.50)])
+field_t = np.clip((v - fh) / 0.34, 0, 1)
+field = np.dstack([0.52 + 0.20 * field_t, 0.56 + 0.06 * field_t, 0.30 - 0.04 * field_t])
+land = np.where((v < hz)[..., None], sky, np.where((v < fh)[..., None], hills, field)).astype(np.float32)
+land8 = Image.fromarray((np.clip(land, 0, 1) * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(dp(2.6)))
+land = np.asarray(land8, np.float32) / 255
+# seen on the warm ground glass: tinted, a little flat, brighter in the middle
+col = (land * 0.80 + 0.14) * np.array([1.0, 0.95, 0.86]) * (lum / 0.93)[..., None]
 grain = rng.normal(0, 0.035, (N, N)).astype(np.float32)
 grain = np.asarray(Image.fromarray(((grain + 0.5) * 255).clip(0, 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(DP * 0.12)), np.float32) / 255 - 0.5
 col += grain[..., None] * 0.5
@@ -114,8 +131,8 @@ out = base * (1 - gm[..., None]) + glass * gm[..., None]
 gimg8 = Image.fromarray((gm * 255).astype(np.uint8))
 tight = np.asarray(gimg8.filter(ImageFilter.GaussianBlur(dp(1.6))), np.float32) / 255 * (1 - gm)
 wide = np.asarray(gimg8.filter(ImageFilter.GaussianBlur(dp(7.0))), np.float32) / 255 * (1 - gm)
-out += tight[..., None] * np.array([0.95, 0.85, 0.68]) * 0.85      # a bright halo hugging the glass
-out += wide[..., None] * np.array([0.60, 0.48, 0.32]) * 0.75       # and a warm spill into the eyepiece
+out += tight[..., None] * np.array([0.95, 0.85, 0.68]) * 0.38      # a bright halo hugging the glass
+out += wide[..., None] * np.array([0.60, 0.48, 0.32]) * 0.30       # and a warm spill into the eyepiece
 
 # the HUD index: green reflected light at the strip's inner edge, glowing, with a ghost
 hud = Image.new("L", (N, N), 0); hd = ImageDraw.Draw(hud)
