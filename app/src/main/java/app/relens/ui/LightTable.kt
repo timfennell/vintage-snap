@@ -316,9 +316,15 @@ private fun DrawScope.glassDust(view: Rect, px: Float) {
         val rng = Random(tx * 73856093 xor ty * 19349663 xor 2024)
         val ox = tx * tile; val oy = ty * tile
         repeat(10) {
-            val r = (0.4f + 1.6f * rng.nextFloat() * rng.nextFloat()) * px
+            // a particle: one of the pre-made irregular specks, turned and sized at random
+            val sprite = DustSprites.all[rng.nextInt(DustSprites.all.size)]
+            val d = (1.6f + 6.5f * rng.nextFloat() * rng.nextFloat()) * px
             val c = Offset(ox + rng.nextFloat() * tile, oy + rng.nextFloat() * tile)
-            drawOval(Color(0xFF404040).copy(alpha = 0.12f + 0.35f * rng.nextFloat()), c, Size(2 * r * 2, 2 * r * 2 * (0.6f + 0.4f * rng.nextFloat())))
+            val alpha = 0.25f + 0.6f * rng.nextFloat()
+            rotate(rng.nextFloat() * 360f, pivot = c) {
+                drawImage(sprite, dstOffset = IntOffset((c.x - d / 2).toInt(), (c.y - d / 2).toInt()),
+                    dstSize = IntSize(maxOf(1, d.toInt()), maxOf(1, d.toInt())), alpha = alpha)
+            }
         }
         if (rng.nextFloat() < 0.25f) {                          // a hair
             val path = Path()
@@ -388,8 +394,13 @@ private fun DrawScope.drawStrip(r: Rect, mm: Float, frames: List<DarkroomEntry>,
         // dust printed in with the pictures; now and then a hair
         repeat(2 + rng.nextInt(3) + frames.size * 2) {
             val p = Offset(r.left + rng.nextFloat() * r.width, r.top + rng.nextFloat() * r.height)
-            val rad = (0.08f + 0.25f * rng.nextFloat() * rng.nextFloat()) * mm
-            drawOval(Color(0xB3EBEBEB), p - Offset(rad, rad * 0.8f), Size(2 * rad, 1.6f * rad))
+            val d = (0.25f + 0.7f * rng.nextFloat() * rng.nextFloat()) * mm
+            val sprite = DustSprites.all[rng.nextInt(DustSprites.all.size)]
+            rotate(rng.nextFloat() * 360f, pivot = p) {
+                drawImage(sprite, dstOffset = IntOffset((p.x - d / 2).toInt(), (p.y - d / 2).toInt()),
+                    dstSize = IntSize(maxOf(1, d.toInt()), maxOf(1, d.toInt())), alpha = 0.8f,
+                    colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color(0xFFEBEBEB), androidx.compose.ui.graphics.BlendMode.SrcIn))
+            }
         }
         if (rng.nextFloat() < 0.4f) {
             val p0 = Offset(r.left + rng.nextFloat() * r.width, r.top + rng.nextFloat() * r.height)
@@ -477,6 +488,63 @@ private fun tableGlass(w: Int, h: Int): ImageBitmap {
     return big.asImageBitmap()
 }
 
+/**
+ * Dust as it really sits on glass: specks with ragged outlines (a wobbling radius, a bite or
+ * two taken out), mottled inside, some translucent flakes lighter in the middle, a few
+ * fibres; soft at the very edge. Made once, small, and drawn scaled and turned.
+ */
+private object DustSprites {
+    val all: List<androidx.compose.ui.graphics.ImageBitmap> by lazy { List(16) { make(it) } }
+
+    private fun make(seed: Int): androidx.compose.ui.graphics.ImageBitmap {
+        val n = 64
+        val rng = Random(seed * 7919 + 13)
+        val px = IntArray(n * n)
+        val fibre = seed % 6 == 5
+        // the outline: a radius that wobbles with the angle
+        val harm = 7
+        val amp = FloatArray(harm) { k -> if (k < 2) 0f else (0.10f + 0.12f * rng.nextFloat()) / Math.pow(k.toDouble(), 0.8).toFloat() }
+        val ph = FloatArray(harm) { rng.nextFloat() * 6.2832f }
+        val bites = List(rng.nextInt(3)) { Triple(rng.nextFloat() * 6.2832f, 0.25f + 0.2f * rng.nextFloat(), 0.25f + 0.25f * rng.nextFloat()) }
+        val translucent = rng.nextFloat() < 0.35f
+        val stretch = if (fibre) 3.2f else 1f + 0.5f * rng.nextFloat()
+        val tone = 40 + rng.nextInt(30)
+        val warm = rng.nextInt(10)
+        // value noise for the surface
+        val g = 9; val lat = FloatArray(g * g) { rng.nextFloat() }
+        fun noise(x: Float, y: Float): Float {
+            val fx = x * (g - 1); val fy = y * (g - 1)
+            val ix = fx.toInt().coerceIn(0, g - 2); val iy = fy.toInt().coerceIn(0, g - 2)
+            val tx = fx - ix; val ty = fy - iy
+            val a = lat[iy * g + ix]; val b = lat[iy * g + ix + 1]; val c = lat[(iy + 1) * g + ix]; val d = lat[(iy + 1) * g + ix + 1]
+            return (a + (b - a) * tx) + ((c + (d - c) * tx) - (a + (b - a) * tx)) * ty
+        }
+        for (y in 0 until n) for (x in 0 until n) {
+            val u = (x + 0.5f) / n * 2f - 1f; val v = (y + 0.5f) / n * 2f - 1f
+            val uu = u * stretch; val vv = v
+            val rho = kotlin.math.sqrt(uu * uu + vv * vv) / 0.9f * (if (fibre) 1f else 1.15f)
+            val th = kotlin.math.atan2(vv, uu)
+            var edge = if (fibre) 0.28f else 0.62f
+            for (k in 2 until harm) edge += amp[k] * edge * kotlin.math.sin(k * th + ph[k])
+            for ((ba, bw, bd) in bites) {
+                var dth = kotlin.math.abs(th - ba); if (dth > Math.PI) dth = (2 * Math.PI - dth).toFloat()
+                if (dth < bw) edge *= 1f - bd * (1f - dth / bw)
+            }
+            if (fibre) edge *= 3.2f                              // a fibre is thin across, long along
+            val rr = if (fibre) kotlin.math.abs(vv) / 0.9f * 3.2f + kotlin.math.max(0f, kotlin.math.abs(uu) / 0.9f - 2.6f) * 3f else rho
+            val e = if (fibre) 0.9f else edge
+            val inside = ((e - rr) / 0.07f + 0.5f).coerceIn(0f, 1f)
+            if (inside <= 0f) continue
+            val tex = 0.55f + 0.45f * noise(x / n.toFloat(), y / n.toFloat()) + 0.15f * (rng.nextFloat() - 0.5f)
+            var a = inside * tex.coerceIn(0f, 1f)
+            if (translucent) a *= 0.45f + 0.55f * (rr / e).coerceIn(0f, 1f)
+            val l = (tone + 30 * (1f - tex)).toInt().coerceIn(0, 255)
+            px[y * n + x] = ((a * 255).toInt().coerceIn(0, 255) shl 24) or ((l + warm).coerceAtMost(255) shl 16) or (l shl 8) or (l - warm / 2).coerceAtLeast(0)
+        }
+        return Bitmap.createBitmap(px, n, n, Bitmap.Config.ARGB_8888).asImageBitmap()
+    }
+}
+
 private const val LOUPE_AGSL = """
 uniform shader image;
 uniform float2 size;
@@ -489,41 +557,54 @@ half4 main(float2 p) {
     float2 d = (p - c) / R;
     float r2 = dot(d, d);
     float r = sqrt(r2);
-    // a magnifier's pincushion, each colour its own amount
+    // A magnifier's pincushion, each colour its own amount, and softer toward the rim (the
+    // glass's field curves). Sixteen samples spread over a small disc and along the spectrum
+    // (red pulled in, blue pushed out), each pixel's pattern turned at random, so the
+    // fringes and the softness melt into a blur instead of stacking up as copies.
     float k = 0.10 * t;
-    float ca = 0.010 * t;
-    float2 sg = c + (p - c) * (1.0 - k * r2);
-    float2 sr = c + (p - c) * (1.0 - k * r2 - ca * r2);
-    float2 sb = c + (p - c) * (1.0 - k * r2 + ca * r2);
-    // softer toward the rim (the glass's field curves)
-    float blur = t * 4.0 * r2 * r2;
+    float ca = 0.012 * t;
+    float blur = t * (0.8 + 5.0 * r2 * r2);
+    float jit = fract(52.9829189 * fract(dot(p, float2(0.06711056, 0.00583715))));
     half3 col = half3(0);
-    for (int i = 0; i < 4; i++) {
-        float a = float(i) * 1.5708 + 0.785;
-        float2 o = float2(cos(a), sin(a)) * blur;
-        col += half3(image.eval(sr + o).r, image.eval(sg + o).g, image.eval(sb + o).b);
+    half3 wsum = half3(0);
+    for (int i = 0; i < 16; i++) {
+        float fi = (float(i) + 0.5) / 16.0;
+        float s = fi * 2.0 - 1.0;                       // -1 red .. +1 blue
+        float2 q = c + (p - c) * (1.0 - k * r2 + ca * r2 * s);
+        float a = float(i) * 2.39996 + jit * 6.2832;
+        float rr = blur * sqrt(fract(fi * 7.0 + jit));
+        q += float2(cos(a), sin(a)) * rr;
+        half3 w = half3(clamp(1.0 - (s + 1.0) * 0.75, 0.0, 1.0),
+                        clamp(1.0 - abs(s) * 1.2, 0.0, 1.0),
+                        clamp(1.0 - (1.0 - s) * 0.75, 0.0, 1.0));
+        col += image.eval(q).rgb * w;
+        wsum += w;
     }
-    col *= 0.25;
+    col /= wsum;
     // falling off inside the glass, dark past its edge (the barrel), a faint glint on the rim
     col *= 1.0 - 0.35 * t * r2 * r2;
-    float outside = smoothstep(0.97, 1.04, r);
+    float outside = smoothstep(0.95, 1.07, r);          // a soft edge: the barrel is out of focus
     col = mix(col, half3(0.02, 0.02, 0.025), outside * t);
     // The lit glass blooms past its edge into the dark: the light just inside the rim,
     // gathered along it (soft, not a copy), spreading out a tight halo and a broad glow.
     if (r > 0.9) {
         float2 dir = d / max(r, 1e-4);
         float2 tang = float2(-dir.y, dir.x);
+        float out_ = max(r - 0.985, 0.0);
+        // gathered over an arc that widens the further out the light has travelled, from two
+        // depths inside the rim, each pixel's samples shifted at random: a soft spread, no rays
+        float spread = 0.08 + out_ * 2.2;
         half3 rim = half3(0);
-        for (int i = -3; i <= 3; i++) {
-            float2 q = c + (dir * 0.9 + tang * float(i) * 0.07) * R;
+        for (int i = 0; i < 14; i++) {
+            float fi = (float(i) + jit) / 14.0;
+            float2 q = c + (dir * (0.86 + 0.07 * step(0.5, fract(float(i) * 0.5))) + tang * (fi * 2.0 - 1.0) * spread) * R;
             rim += image.eval(q).rgb;
         }
-        rim /= 7.0;
-        float out_ = max(r - 0.985, 0.0);
+        rim /= 14.0;
         float bloom = 0.55 * exp(-out_ / 0.035) + 0.22 * exp(-out_ / 0.16);
         col += rim * rim * half3(1.0, 0.97, 0.92) * bloom * t * smoothstep(0.9, 0.99, r);
     }
-    col += half3(0.10) * t * exp(-pow((r - 0.985) / 0.012, 2.0)) * (0.6 + 0.4 * d.y * -1.0);
+    col += half3(0.10) * t * exp(-pow((r - 0.985) / 0.025, 2.0)) * (0.6 + 0.4 * d.y * -1.0);
     return half4(col, 1.0);
 }
 """

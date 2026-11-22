@@ -36,7 +36,7 @@ val shutterSpeeds: List<Pair<String, Float>> = listOf(
     "1000" to 1f / 1000, "2000" to 1f / 2000, "4000" to 1f / 4000)
 
 /** A frame in the darkroom: developing, developed or failed. */
-class DarkroomEntry(val frame: Int, val label: String, val roll: Int = 0, val stock: String = "", val bw: Boolean = false) {
+class DarkroomEntry(val frame: Int, val label: String, var roll: Int = 0, val stock: String = "", val bw: Boolean = false) {
     /** Ringed on the light table as a keeper (in red china marker). */
     var marked by mutableStateOf(false)
     /** The print's file, while the app still holds it (not yet in the gallery). */
@@ -453,6 +453,15 @@ class Body(app: Application) : AndroidViewModel(app) {
             e.marked = isMarked(e.roll, e.frame)
             loaded += e
         }.onFailure { Trace.w("light table: ${src.name} not loaded", it) }
+        // Prints from before their roll was noted in them: rolls pieced back together from the
+        // order they were made in (a new roll where the stock changes or the count starts over).
+        run {
+            var pseudo = 0; var lastFrame = Int.MAX_VALUE; var lastStock = ""
+            for (e in loaded.filter { it.roll == 0 }.sortedBy { it.taken }) {
+                if (pseudo == 0 || e.frame <= lastFrame || e.stock != lastStock) pseudo++
+                e.roll = -pseudo; e.marked = isMarked(e.roll, e.frame); lastFrame = e.frame; lastStock = e.stock
+            }
+        }
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
             // gone from the folder: off the table (frames still developing, or kept in the app, stay)
             val gone = darkroom.filter { it.uri != null && it.uri !in galleryUris }
