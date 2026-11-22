@@ -251,7 +251,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
 
         if (body.collimating || body.collimationNote.isNotEmpty() && body.collimation.isNotEmpty()) Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text((if (body.collimating) "COLLIMATE ${body.rig.currentCameraId ?: ""} · " else "") + body.collimationNote,
+            Text((if (body.collimating) "COLLIMATE THE ${(body.rig.framing.value?.cameraRole ?: "").uppercase()} CAMERA (${body.rig.currentCameraId ?: ""}) · " else "") + body.collimationNote,
                 color = Palette.amber, fontSize = 12.sp, modifier = Modifier.weight(1f))
             if (body.collimating) {
                 Text("SET", color = Palette.leather, fontWeight = FontWeight.Bold, fontSize = 13.sp,

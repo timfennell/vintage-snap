@@ -330,8 +330,12 @@ class Body(app: Application) : AndroidViewModel(app) {
      * The last 24 pairs per camera set reading = offset + scale x true dioptres by a weighted
      * line refitted without outliers; until they span 0.25 D only the offset moves.
      */
+    /** A camera's measured infinity reading (the rig's probe), if it has one. */
+    private fun infinityOf(id: String): Float? = prefs.getFloat("afinf_$id", Float.NaN).takeIf { !it.isNaN() }
+
     private fun learnFocus(id: String, raw: Float, trueD: Float, weight: Float) {
         if (trueD !in 0.05f..6f || raw <= 0f) return
+        if (rig.framing.value?.camera?.takeIf { it.id == id }?.focusCalibration == 2) return   // its readings are true already
         val key = "afsamples_$id"
         val pts = loadPairs(id).toMutableList()
         pts += Triple(raw, trueD, weight)
@@ -340,8 +344,10 @@ class Body(app: Application) : AndroidViewModel(app) {
         focusLearnTick++
         // newer pairs count more (each step back in time a little less): a calibration follows
         // the camera as it is now, and old mistakes fade out
-        val wpts = pts.mapIndexed { i, p -> Triple(p.first, p.second, p.third * Math.pow(0.9, (pts.size - 1 - i).toDouble()).toFloat()) }
-        var keep = pts.map { true }.toBooleanArray()
+        val wpts = pts.mapIndexed { i, p -> Triple(p.first, p.second, p.third * Math.pow(0.9, (pts.size - 1 - i).toDouble()).toFloat()) } +
+            collimationPairs(id)                                                  // the hand's targets, full weight, for good
+        val all = pts + collimationPairs(id)
+        var keep = all.map { true }.toBooleanArray()
         var k = rig.afCalibration[id]?.second ?: 1f
         var o = 0f
         repeat(3) {
@@ -350,15 +356,23 @@ class Body(app: Application) : AndroidViewModel(app) {
             val mt = sel.sumOf { (it.second * it.third).toDouble() } / sw
             val mr = sel.sumOf { (it.first * it.third).toDouble() } / sw
             val spread = (sel.maxOfOrNull { it.second } ?: 0f) - (sel.minOfOrNull { it.second } ?: 0f)
-            if (sel.size >= 2 && spread >= 0.25f) {
+            val inf = infinityOf(id)
+            if (inf != null) {
+                // the line goes through the measured infinity (reading inf at 0 D): only its slope is
+                // learnt, and only from pairs far enough from infinity to say anything about it
+                var num = 0.0; var den = 0.0
+                for ((r, t, w) in sel) if (t > 0.15f) { num += w * t * (r - inf); den += w * t * t }
+                if (den > 0) { val fitK = (num / den).toFloat(); if (fitK in 0.5f..3.5f) k = fitK }
+                o = inf
+            } else if (sel.size >= 2 && spread >= 0.25f) {
                 var sxy = 0.0; var sxx = 0.0
                 for ((r, t, w) in sel) { sxy += w * (t - mt) * (r - mr); sxx += w * (t - mt) * (t - mt) }
                 val fitK = (sxy / sxx).toFloat()
                 if (fitK in 0.5f..3.5f) k = fitK
             }
-            o = (mr - k * mt).toFloat()
+            if (inf == null) o = (mr - k * mt).toFloat()
             // drop the pairs the line can't explain (a lock on something else, a bad estimate)
-            val res = pts.map { kotlin.math.abs(it.first - (o + k * it.second)) }
+            val res = all.map { kotlin.math.abs(it.first - (o + k * it.second)) }
             val med = res.sorted()[res.size / 2]
             keep = res.map { it <= 3f * maxOf(med, 0.03f) }.toBooleanArray()
         }
@@ -373,6 +387,12 @@ class Body(app: Application) : AndroidViewModel(app) {
     private fun loadPairs(id: String) = (prefs.getString("afsamples_$id", "") ?: "").split(";").mapNotNull { e ->
         val v = e.split(":").mapNotNull { it.toFloatOrNull() }
         when (v.size) { 2 -> Triple(v[0], v[1], 1f); 3 -> Triple(v[0], v[1], v[2]); else -> null }
+    }
+
+    /** A camera's hand-collimation targets: (reading, true dioptres, weight 5), never aged out. */
+    private fun collimationPairs(id: String) = (prefs.getString("afcolli_$id", "") ?: "").split(";").mapNotNull { e ->
+        val v = e.split(":").mapNotNull { it.toFloatOrNull() }
+        if (v.size == 3) Triple(v[0], v[1], v[2]) else null
     }
 
     fun collimateSet() {
@@ -393,9 +413,12 @@ class Body(app: Application) : AndroidViewModel(app) {
         }
         rig.afCalibration[id] = Pair(o, k)
         prefs.edit().putString("afcal_$id", "$o,$k").apply()
+        // kept for good (the last six targets): the automatic learning fits around them, never over them
+        val colli = (collimationPairs(id) + Triple(raw, trueD, 5f)).takeLast(6)
+        prefs.edit().putString("afcolli_$id", colli.joinToString(";") { "${it.first}:${it.second}:${it.third}" }).apply()
         Trace.i("collimated camera $id: reading = %.3f + %.3f x true (from ${collimation.size} targets)".format(o, k))
         val got = "read %.2f m raw, set %.2f m".format(1 / maxOf(raw, 1e-3f), m)
-        collimationNote = if (collimation.size >= 2) "$got · camera $id collimated (offset %.2f, scale %.2f)".format(o, k)
+        collimationNote = if (collimation.size >= 2) "$got · the ${rig.framing.value?.cameraRole ?: ""} camera ($id) collimated (offset %.2f, scale %.2f)".format(o, k)
             else "$got · now a second target at another distance".format(o)
         if (collimation.size >= 2) { collimating = false; focusPos = Float.NaN }   // back to autofocus, corrected
     }
@@ -520,6 +543,26 @@ class Body(app: Application) : AndroidViewModel(app) {
             if (android.os.Build.MODEL == "A059P") e.putString("afcal_0", "0.45,1.0")
             for (id in listOf("0", "2", "3")) e.remove("afsamples_$id")
             e.putBoolean("aflearn_v3", true).apply()
+        }
+        // Camera 0 on Tim's phone: the probe puts infinity at 0.12, and his 2026-11-22 recording had
+        // a 2 m target sharp at ~0.95, so a scale of ~1.66 to start from (the learning refines it).
+        if (!prefs.getBoolean("aflearn_v4", false)) {
+            val e = prefs.edit()
+            if (android.os.Build.MODEL == "A059P") {
+                val inf = infinityOf("0") ?: 0.12f
+                e.putString("afcal_0", "$inf,1.66"); rig.afCalibration["0"] = Pair(inf, 1.66f)
+            }
+            e.remove("afsamples_0")
+            e.putBoolean("aflearn_v4", true).apply()
+        }
+        // Each camera's infinity, measured once by the rig; the calibration's offset from then on.
+        rig.infinityKnown = { id -> infinityOf(id) != null }
+        rig.onInfinity = { id, inf ->
+            prefs.edit().putFloat("afinf_$id", inf).apply()
+            val k = rig.afCalibration[id]?.second ?: 1f
+            rig.afCalibration[id] = Pair(inf, k)
+            prefs.edit().putString("afcal_$id", "$inf,$k").apply()
+            Trace.i("camera $id: infinity at reading %.3f; now reading = %.3f + %.3f x true".format(inf, inf, k))
         }
         // Saved collimations: "afcal_<camera>" = "offset,scale".
         for (id in listOf("0", "2", "3")) prefs.getString("afcal_$id", null)?.split(",")?.mapNotNull { it.toFloatOrNull() }

@@ -206,12 +206,16 @@ class Rig(private val context: Context) {
      */
     val afCalibration: MutableMap<String, Pair<Float, Float>> =
         if (android.os.Build.MODEL == "A059P") mutableMapOf("3" to Pair(0.45f, 2.0f)) else mutableMapOf()
+    /** Cameras whose readings are true distances ("calibrated"): taken as they are. */
+    private fun trusted(cameraId: String?) = _framing.value?.camera?.takeIf { it.id == cameraId }?.focusCalibration == 2
     fun corrected(cameraId: String, raw: Float): Float {
+        if (trusted(cameraId)) return raw
         val (o, k) = afCalibration[cameraId] ?: return raw
         return maxOf((raw - o) / k, 0f)
     }
     /** The lens command for a true distance (dioptres): the calibration the other way. */
     fun command(cameraId: String?, trueD: Float): Float {
+        if (trusted(cameraId)) return trueD
         val (o, k) = afCalibration[cameraId] ?: return trueD
         return o + k * trueD
     }
@@ -356,6 +360,7 @@ class Rig(private val context: Context) {
                 override fun onConfigured(s: CameraCaptureSession) {
                     if (gen != generation || device != d) { runCatching { s.close() }; return }
                     session = s; repeat()
+                    startInfinityProbe()
                     app.relens.Trace.i("camera ${_framing.value?.camera?.id} open${if (logicalOpen) " (logical 4, ultra-wide map ${uwReader != null})" else ""}, crop %.2f, RAW ${rawReader != null}".format(_framing.value?.crop ?: 0f))
                 }
                 override fun onConfigureFailed(s: CameraCaptureSession) {
@@ -392,6 +397,8 @@ class Rig(private val context: Context) {
                     lastEV = ev
                 }
             }
+            // The infinity probe: where the lens comes to rest when sent to infinity.
+            if (probing) own.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { probeFrame(it) }
             // After the ring moves: where the lens actually went (a few frames later).
             if (manualWatch && result.frameNumber % 15 == 0L) {
                 manualWatch = false
@@ -440,6 +447,10 @@ class Rig(private val context: Context) {
             val md = manualD
             val reg = afRegion
             when {
+                probing -> {
+                    set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
+                    set(CaptureRequest.LENS_FOCUS_DISTANCE, 0f)
+                }
                 md != null -> {
                     set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
                     set(CaptureRequest.LENS_FOCUS_DISTANCE, command(heroId, md).coerceIn(0f, _framing.value?.camera?.minFocusD ?: 10f))
@@ -503,6 +514,41 @@ class Rig(private val context: Context) {
 
     /** Autofocus again (collimating: the ring is an input, not the lens). */
     fun manualFocusOff() = handler.post { manualD = null; repeat() }
+
+    /**
+     * A camera's infinity, measured: an "approximate" camera's readings are shifted (the
+     * Nothing's main camera reads 0.46 D with the lens at its far stop, where a true reading
+     * is 0). Once per camera, the lens is sent to infinity for a moment and where it comes to
+     * rest is that shift. [infinityKnown] says which cameras are done; [onInfinity] gets the result.
+     */
+    var infinityKnown: (String) -> Boolean = { true }
+    var onInfinity: ((String, Float) -> Unit)? = null
+    @Volatile private var probing = false
+    private var probeId: String? = null
+    private var probeFrames = 0
+    private val probeReads = ArrayList<Float>()
+    private fun startInfinityProbe() {
+        val cam = _framing.value?.camera ?: return
+        val id = heroId ?: return
+        if (probing || cam.focusCalibration == 2 || cam.minFocusD <= 0f || infinityKnown(id)) return
+        probing = true; probeId = id; probeFrames = 0; probeReads.clear()
+        app.relens.Trace.i("infinity probe on camera $id")
+        repeat()
+    }
+    private fun probeFrame(raw: Float) {
+        probeFrames++; probeReads += raw
+        val n = probeReads.size
+        val still = n >= 8 && (n - 6 until n).all { kotlin.math.abs(probeReads[it] - probeReads[n - 1]) < 0.005f }
+        if (!still && probeFrames < 60) return
+        probing = false
+        val id = probeId
+        val inf = probeReads.takeLast(4).average().toFloat()
+        handler.post { repeat() }
+        if (id != null && id == heroId && still) {
+            app.relens.Trace.i("infinity probe, camera $id: the lens rests at %.3f D at infinity (%d frames)".format(inf, probeFrames))
+            onInfinity?.invoke(id, inf)
+        } else app.relens.Trace.w("infinity probe, camera $id: no steady reading (%d frames)".format(probeFrames))
+    }
 
     /** The focus ring driving the phone lens (dioptres; 0 = infinity); null: back to autofocus. */
     fun manualFocus(dioptres: Float?) = handler.post {
