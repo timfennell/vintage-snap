@@ -425,6 +425,16 @@ private fun MeterCard(setPos: Float, meterPos: Float, modifier: Modifier) {
     // speeds and the end caps red; the needle swings in from outside. Seen through the eyepiece,
     // not on the focusing screen, so a little soft: the whole meter is gently out of focus.
     val ca = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(EYEPIECE_CA) else null }
+    // frosted glass: fine light and dark specks
+    val frost = remember {
+        val n = 128; val rng = kotlin.random.Random(17)
+        val px = IntArray(n * n) {
+            val v = rng.nextFloat()
+            val a = (kotlin.math.abs(v - 0.5f) * 0.32f)
+            ((a * 255).toInt() shl 24) or (if (v > 0.5f) 0xFFFFFF else 0x5A5248)
+        }
+        android.graphics.Bitmap.createBitmap(px, n, n, android.graphics.Bitmap.Config.ARGB_8888).asImageBitmap()
+    }
     Canvas(modifier.fillMaxSize().graphicsLayer {
         when {
             // the eyepiece: sharp in the middle of the finder, softening toward its corners, with a
@@ -446,8 +456,12 @@ private fun MeterCard(setPos: Float, meterPos: Float, modifier: Modifier) {
         val step = (strip.height - 2 * cap) / n
         fun y(i: Float) = strip.top + cap + (n - 1 - i + 0.5f) * step         // fast at the top
         val corner = androidx.compose.ui.geometry.CornerRadius(0.35f * u)
-        // the strip, a touch translucent (the finder's light through it), its caps red
-        drawRoundRect(paper.copy(alpha = 0.93f), strip.topLeft, strip.size, corner)
+        // the strip: frosted glass, the finder's light coming through it (the scene faintly
+        // behind, a fine frost grain, a little brighter where the light comes from), its caps red
+        drawRoundRect(Brush.verticalGradient(listOf(paper.copy(alpha = 0.62f), paper.copy(alpha = 0.50f)), startY = strip.top, endY = strip.bottom),
+            strip.topLeft, strip.size, corner)
+        drawRoundRect(androidx.compose.ui.graphics.ShaderBrush(androidx.compose.ui.graphics.ImageShader(frost,
+            androidx.compose.ui.graphics.TileMode.Repeated, androidx.compose.ui.graphics.TileMode.Repeated)), strip.topLeft, strip.size, corner)
         val capSize = androidx.compose.ui.geometry.Size(strip.width, cap * 0.8f)
         drawRoundRect(red, strip.topLeft, capSize, corner)
         drawRoundRect(red, Offset(strip.left, strip.bottom - cap * 0.8f), capSize, corner)
