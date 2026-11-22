@@ -167,14 +167,23 @@ class Body(app: Application) : AndroidViewModel(app) {
         if (calibJob?.isActive == true) return
         calibJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.Default) {
             while (true) {
-                kotlinx.coroutines.delay(6000)
+                kotlinx.coroutines.delay(1000)
                 val fr = rig.framing.value ?: continue
                 if (busy || parallax != null || !focusPos.isNaN()) continue
                 val raw = rig.liveRaw ?: continue
-                if (rig.liveAfState != 2 && rig.liveAfState != 4) continue        // passively focused, or locked
+                val state = rig.liveAfState
+                if (state != 2 && state != 4) continue                            // passively focused, or locked
                 val now = System.currentTimeMillis()
+                // Only a reading the lens has just come to for this view: settled a moment, and for a
+                // tap's lock (which holds the lens however the phone is turned after) fresh, within a
+                // few seconds. A lock left standing while the picture is recomposed measures nothing.
+                val settled = now - rig.liveSettledAt
+                if (settled < 1200) continue
+                if (state == 4 && settled > 4000) continue
                 val last = lastLivePair
+                if (last != null && now - last.second < 6000) continue
                 if (last != null && kotlin.math.abs(raw - last.first) < 0.04f && now - last.second < 45_000) continue   // the same view, held
+                val t0 = rig.liveSettledAt
                 val shot = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                     finderView?.takeIf { it.isAvailable }?.getBitmap(384, 512)
                 } ?: continue
@@ -182,6 +191,7 @@ class Body(app: Application) : AndroidViewModel(app) {
                     .onFailure { Trace.w("live calibration: metric failed", it) }.getOrNull()
                 shot.recycle()
                 if (md == null || busy) continue
+                if (rig.liveSettledAt != t0) continue                              // the lens moved meanwhile
                 val z = md.medianAround(0.5f + (focusX - 0.5f) / (1.125f * fr.crop), 0.5f + (focusY - 0.5f) / fr.crop, 0.04f)
                 if (z !in 0.15f..30f) continue
                 lastLivePair = Pair(raw, now)
@@ -328,11 +338,14 @@ class Body(app: Application) : AndroidViewModel(app) {
         while (pts.size > 24) pts.removeAt(0)
         prefs.edit().putString(key, pts.joinToString(";") { "${it.first}:${it.second}:${it.third}" }).apply()
         focusLearnTick++
+        // newer pairs count more (each step back in time a little less): a calibration follows
+        // the camera as it is now, and old mistakes fade out
+        val wpts = pts.mapIndexed { i, p -> Triple(p.first, p.second, p.third * Math.pow(0.9, (pts.size - 1 - i).toDouble()).toFloat()) }
         var keep = pts.map { true }.toBooleanArray()
         var k = rig.afCalibration[id]?.second ?: 1f
         var o = 0f
         repeat(3) {
-            val sel = pts.filterIndexed { i, _ -> keep[i] }
+            val sel = wpts.filterIndexed { i, _ -> keep[i] }
             val sw = sel.sumOf { it.third.toDouble() }
             val mt = sel.sumOf { (it.second * it.third).toDouble() } / sw
             val mr = sel.sumOf { (it.first * it.third).toDouble() } / sw
@@ -498,6 +511,15 @@ class Body(app: Application) : AndroidViewModel(app) {
             if (prefs.contains("afsamples_0")) e.putString("afcal_0", "0.902,1.579")
             for (id in listOf("0", "2", "3")) e.remove("afsamples_$id")
             e.putBoolean("aflearn_v2", true).apply()
+        }
+        // Live pairs before 0.1.10 could pair a tap's lock left standing with a recomposed view
+        // (camera 0 drifted to reading 0.9 = 17 m at a 2 m target): forget them, and start camera 0
+        // from what Tim's 2026-11-22 recording showed (reading ~0.95 sharp at 2 m), scale 1.
+        if (!prefs.getBoolean("aflearn_v3", false)) {
+            val e = prefs.edit()
+            if (android.os.Build.MODEL == "A059P") e.putString("afcal_0", "0.45,1.0")
+            for (id in listOf("0", "2", "3")) e.remove("afsamples_$id")
+            e.putBoolean("aflearn_v3", true).apply()
         }
         // Saved collimations: "afcal_<camera>" = "offset,scale".
         for (id in listOf("0", "2", "3")) prefs.getString("afcal_$id", null)?.split(",")?.mapNotNull { it.toFloatOrNull() }

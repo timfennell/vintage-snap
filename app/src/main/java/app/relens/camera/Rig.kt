@@ -192,6 +192,9 @@ class Rig(private val context: Context) {
     /** The lens's raw focus reading and autofocus state in the latest preview frame (the live calibration). */
     @Volatile var liveRaw: Float? = null; private set
     @Volatile var liveAfState: Int = -1; private set
+    /** When the lens last came to rest (autofocus state and reading unchanged since), ms. */
+    @Volatile var liveSettledAt: Long = 0L; private set
+    private var settledRaw = Float.NaN; private var settledState = -1
     private var tapX = 0.5f; private var tapY = 0.5f
 
     /**
@@ -416,6 +419,9 @@ class Rig(private val context: Context) {
             liveAfState = af
             own.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { rawD ->
                 liveRaw = rawD
+                if (af != settledState || settledRaw.isNaN() || kotlin.math.abs(rawD - settledRaw) > 0.03f) {
+                    settledState = af; settledRaw = rawD; liveSettledAt = System.currentTimeMillis()
+                }
                 val d = corrected(heroId ?: "0", rawD)
                 lastFocusD = d
                 val prev = _focusD.value
