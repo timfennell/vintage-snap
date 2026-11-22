@@ -1,5 +1,7 @@
 package app.relens.ui
 
+import androidx.compose.ui.graphics.asComposeRenderEffect
+
 import kotlinx.coroutines.launch
 
 import androidx.compose.ui.layout.layout
@@ -418,81 +420,64 @@ private fun MeterCard(setPos: Float, meterPos: Float, modifier: Modifier) {
     val needle by animateFloatAsState(meterPos.coerceIn(-1.5f, shutterSpeeds.size + 0.5f),
         androidx.compose.animation.core.spring(dampingRatio = 0.71f, stiffness = 60f), label = "needle")
     val measurer = androidx.compose.ui.text.rememberTextMeasurer()
-    val cream = Color(0xFFFFE6C7); val red = Color(0xFFFF6647); val green = Color(0xE673F2B3)
-    val needleRed = Color(0xFFE6140D)
-    // A dark backing under the scale and a solid needle, drawn normally: light alone can't
-    // show against a bright scene (a white wall), so the scale gets a faint smoked strip
-    // to sit on, as the game's finder is dark round it.
-    Canvas(modifier.fillMaxSize()) {
-        val u = 8.dp.toPx()
-        val cardW = 3.6f * u; val cardH = size.height * 0.66f
-        val card = androidx.compose.ui.geometry.Rect(Offset(1.0f * u, (size.height - cardH) / 2), androidx.compose.ui.geometry.Size(cardW, cardH))
-        drawRoundRect(Color.Black.copy(alpha = 0.42f), Offset(card.left - 0.3f * u, card.top - 0.3f * u),
-            androidx.compose.ui.geometry.Size(card.width + 2.2f * u, card.height + 0.6f * u), androidx.compose.ui.geometry.CornerRadius(0.7f * u))
-        val cap = 2.0f * u; val n = shutterSpeeds.size
-        val step = (card.height - 2 * cap) / n
-        fun y(i: Float) = card.top + cap + (n - 1 - i + 0.5f) * step
-        val pivot = Offset(card.left - 9f * u, card.center.y)
-        val aim = Offset(card.left + 0.1f * u, y(needle))
-        val reach = (card.left + 1.15f * u - pivot.x) / (aim.x - pivot.x)
-        val tip = pivot + (aim - pivot) * reach
-        val fade = Brush.horizontalGradient(0f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.6f), startX = 0f, endX = 3.5f * u)
-        drawLine(fade, pivot, tip, 0.42f * u, cap = androidx.compose.ui.graphics.StrokeCap.Round)
-        val red = Brush.horizontalGradient(0f to Color.Transparent, 1f to Color(0xFFE6140D), startX = 0f, endX = 3.5f * u)
-        drawLine(red, pivot, tip, maxOf(1.5f, 0.2f * u), cap = androidx.compose.ui.graphics.StrokeCap.Round)
-    }
+    // A printed scale strip at the frame's left edge, as in the classic finders: it comes in from
+    // under the frame's border (the part beyond is in the dark), cream with dark figures, the slow
+    // speeds and the end caps red; the needle swings in from outside. Seen through the eyepiece,
+    // not on the focusing screen, so a little soft: the whole meter is gently out of focus.
+    val ca = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(EYEPIECE_CA) else null }
     Canvas(modifier.fillMaxSize().graphicsLayer {
-        // projected light: it adds to the image under it
-        compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen
-        blendMode = androidx.compose.ui.graphics.BlendMode.Plus
+        val blurPx = 1.1f * density
+        when {
+            // soft, and the eyepiece's lateral colour: a faint red fringe one side of each mark, blue the other
+            android.os.Build.VERSION.SDK_INT >= 33 && ca != null -> {
+                ca.setFloatUniform("shift", 0.45f * density)
+                renderEffect = android.graphics.RenderEffect.createChainEffect(
+                    android.graphics.RenderEffect.createRuntimeShaderEffect(ca, "image"),
+                    android.graphics.RenderEffect.createBlurEffect(blurPx, blurPx, android.graphics.Shader.TileMode.DECAL)).asComposeRenderEffect()
+            }
+            android.os.Build.VERSION.SDK_INT >= 31 -> renderEffect = androidx.compose.ui.graphics.BlurEffect(blurPx, blurPx)
+        }
     }) {
         val u = 8.dp.toPx()
-        val cardW = 3.6f * u; val cardH = size.height * 0.66f
-        val card = androidx.compose.ui.geometry.Rect(Offset(1.0f * u, (size.height - cardH) / 2), androidx.compose.ui.geometry.Size(cardW, cardH))
-        val cap = 2.0f * u
-        val n = shutterSpeeds.size
-        val step = (card.height - 2 * cap) / n
-        fun y(i: Float) = card.top + cap + (n - 1 - i + 0.5f) * step         // fast at the top
-        val pivot = Offset(card.left - 9f * u, card.center.y)
-        val corner = androidx.compose.ui.geometry.CornerRadius(0.5f * u)
-        drawRoundRect(cream.copy(alpha = 0.16f), card.topLeft, card.size, corner)
-        val capSize = androidx.compose.ui.geometry.Size(cardW, cap * 0.8f)
-        drawRoundRect(red.copy(alpha = 0.75f), card.topLeft, capSize, androidx.compose.ui.geometry.CornerRadius(0.4f * u))
-        drawRoundRect(red.copy(alpha = 0.75f), Offset(card.left, card.bottom - cap * 0.8f), capSize, androidx.compose.ui.geometry.CornerRadius(0.4f * u))
-        val m = measurer.measure("M", androidx.compose.ui.text.TextStyle(color = Color.Black.copy(alpha = 0.55f), fontSize = (1.0f * u).toSp(),
+        val ink = Color(0xFF2E2A26); val red = Color(0xFFD83A22); val paper = Color(0xFFEFE6D4)
+        val stripH = size.height * 0.62f
+        val strip = androidx.compose.ui.geometry.Rect(Offset(-1.2f * u, (size.height - stripH) / 2), androidx.compose.ui.geometry.Size(5.0f * u, stripH))
+        val cap = 2.0f * u; val n = shutterSpeeds.size
+        val step = (strip.height - 2 * cap) / n
+        fun y(i: Float) = strip.top + cap + (n - 1 - i + 0.5f) * step         // fast at the top
+        val corner = androidx.compose.ui.geometry.CornerRadius(0.35f * u)
+        // the strip, a touch translucent (the finder's light through it), its caps red
+        drawRoundRect(paper.copy(alpha = 0.93f), strip.topLeft, strip.size, corner)
+        val capSize = androidx.compose.ui.geometry.Size(strip.width, cap * 0.8f)
+        drawRoundRect(red, strip.topLeft, capSize, corner)
+        drawRoundRect(red, Offset(strip.left, strip.bottom - cap * 0.8f), capSize, corner)
+        drawRect(red, Offset(strip.left, strip.top + cap * 0.4f), androidx.compose.ui.geometry.Size(strip.width, cap * 0.4f))
+        drawRect(red, Offset(strip.left, strip.bottom - cap * 0.8f), androidx.compose.ui.geometry.Size(strip.width, cap * 0.4f))
+        val m = measurer.measure("M", androidx.compose.ui.text.TextStyle(color = paper, fontSize = (1.0f * u).toSp(),
             fontFamily = Futuraish, fontWeight = FontWeight.SemiBold))
-        drawText(m, topLeft = Offset(card.center.x - m.size.width / 2f, card.bottom - cap * 0.4f - m.size.height / 2f))
-        val fontPx = minOf(step * 0.58f, cardW * 0.27f)
+        drawText(m, topLeft = Offset(strip.right - m.size.width - 0.5f * u, strip.bottom - cap * 0.4f - m.size.height / 2f))
+        val fontPx = minOf(step * 0.62f, strip.width * 0.24f)
+        val pivot = Offset(strip.left - 9f * u, strip.center.y)
         for ((i, sp) in shutterSpeeds.withIndex()) {
-            val slow = sp.second >= 1f / 30
-            val c = if (slow) red else cream
+            val c = if (sp.second >= 1f / 30) red else ink
             val yy = y(i.toFloat())
             val t = measurer.measure(sp.first, androidx.compose.ui.text.TextStyle(color = c, fontSize = fontPx.toSp(),
-                fontFamily = Futuraish, fontWeight = FontWeight.Medium,
-                shadow = androidx.compose.ui.graphics.Shadow(c.copy(alpha = 0.5f), Offset.Zero, 0.5f * u)))
-            drawText(t, topLeft = Offset(card.right - t.size.width - 0.35f * u, yy - t.size.height / 2f))
-            // a tick at each mark, along the needle's line when it points there
-            val p0 = Offset(card.left + 0.1f * u, yy)
-            val d = p0 - pivot
-            val dir = d / d.getDistance()
-            drawLine(c.copy(alpha = 0.85f), p0, p0 + dir * (0.9f * u), 0.13f * u)
+                fontFamily = Futuraish, fontWeight = FontWeight.Medium))
+            drawText(t, topLeft = Offset(strip.right - t.size.width - 0.45f * u, yy - t.size.height / 2f))
         }
-        // the green tab at the set speed, pointing out of the scale
+        // the set speed: a dark index notch at the strip's inner edge, pointing into the frame
         val ty = y(setPos)
-        val tab = androidx.compose.ui.graphics.Path().apply {
-            moveTo(card.right - 0.2f * u, ty - 0.45f * step); lineTo(card.right + 1.4f * u, ty - 0.25f * step)
-            lineTo(card.right + 1.4f * u, ty + 0.25f * step); lineTo(card.right - 0.2f * u, ty + 0.45f * step); close()
-        }
-        drawPath(tab, green)
-        // the needle: aimed through the reading's tick, ending just past the ticks
-        val aim = Offset(card.left + 0.1f * u, y(needle))
-        val reach = (card.left + 1.15f * u - pivot.x) / (aim.x - pivot.x)
+        drawPath(androidx.compose.ui.graphics.Path().apply {
+            moveTo(strip.right, ty - 0.42f * step); lineTo(strip.right + 1.1f * u, ty); lineTo(strip.right, ty + 0.42f * step); close()
+        }, Color(0xFF1E8A5C))
+        // the needle: in from the dark beyond the frame, aimed through the reading's tick
+        val aim = Offset(1.0f * u, y(needle))
+        val reach = (1.15f * u - pivot.x) / (aim.x - pivot.x)
         val tip = pivot + (aim - pivot) * reach
-        // lit only inside the frame: it fades in from the edge, swinging out of the dark
-        val lit = Brush.horizontalGradient(0f to Color.Transparent, 1f to needleRed, startX = 0f, endX = 3.5f * u)
-        val litGlow = Brush.horizontalGradient(0f to Color.Transparent, 1f to needleRed.copy(alpha = 0.25f), startX = 0f, endX = 3.5f * u)
-        drawLine(litGlow, pivot, tip, 0.9f * u, cap = androidx.compose.ui.graphics.StrokeCap.Round)
-        drawLine(lit, pivot, tip, maxOf(1.5f, 0.2f * u), cap = androidx.compose.ui.graphics.StrokeCap.Round)
+        drawLine(Color(0xFFC81810), pivot, tip, maxOf(1.6f, 0.22f * u), cap = androidx.compose.ui.graphics.StrokeCap.Round)
+        // the frame's border beyond: the strip vanishes under it, softly (it's out of focus too)
+        drawRect(Brush.horizontalGradient(0f to Color.Black.copy(alpha = 0.55f), 1f to Color.Transparent, startX = 0f, endX = 1.1f * u),
+            Offset(0f, strip.top - u), androidx.compose.ui.geometry.Size(1.1f * u, strip.height + 2 * u))
     }
 }
 
@@ -919,3 +904,17 @@ private fun GroundGlass(modifier: Modifier) {
 private fun Modifier.groundGlassSoftness(): Modifier =
     if (android.os.Build.VERSION.SDK_INT < 31) this
     else graphicsLayer { renderEffect = androidx.compose.ui.graphics.BlurEffect(0.9f * density, 0.9f * density) }
+
+
+/** An eyepiece's lateral colour on what it shows near the frame's edge: red pulled outward, blue in. */
+private const val EYEPIECE_CA = """
+uniform shader image;
+uniform float shift;
+half4 main(float2 p) {
+    half4 g = image.eval(p);
+    half4 r = image.eval(p + float2(shift, 0.0));
+    half4 b = image.eval(p - float2(shift, 0.0));
+    half a = max(g.a, max(r.a, b.a));
+    return half4(r.r, g.g, b.b, a);
+}
+"""
