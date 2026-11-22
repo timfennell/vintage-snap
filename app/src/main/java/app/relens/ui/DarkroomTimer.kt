@@ -29,10 +29,11 @@ object DarkroomTimer {
     private val sharp = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = LUME; typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD); textAlign = Paint.Align.CENTER }
     private val halo = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = LUME; typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD); textAlign = Paint.Align.CENTER }
     private val dial = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF040605.toInt() }
+    private val metal = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF1C221E.toInt(); style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
 
     /**
      * Draws the timer in a circle at [c], radius [r]: [remainingS] seconds left on the sweep hand,
-     * [setS] where the set hand stands, [nowMs] for the glow's faint breathing.
+     * [setS] what it was wound to (unused on the dial now: the hands show what is left), [nowMs] for the glow.
      */
     fun DrawScope.drawTimer(c: Offset, r: Float, remainingS: Float, setS: Float, nowMs: Long) {
         val cv = drawContext.canvas.nativeCanvas
@@ -63,13 +64,19 @@ object DarkroomTimer {
             val p0 = at(s.toFloat(), r * 0.70f)
             both(1f) { p -> cv.drawText("$s", p0.x, p0.y + r * 0.068f, p) }
         }
-        // the set hand: thin, dimmer (painted less), where it was wound to
-        val sh = at(setS.coerceIn(0f, 59.9f), r * 0.86f)
-        both(0.45f) { p -> p.strokeWidth = r * 0.025f; p.style = Paint.Style.STROKE; p.strokeCap = Paint.Cap.ROUND; cv.drawLine(c.x, c.y, sh.x, sh.y, p); p.style = Paint.Style.FILL }
-        // the sweep hand: broad, luminous, counting down (with a short tail past the centre)
-        val s = remainingS.coerceAtLeast(0f) % 60f
-        val tip = at(s, r * 0.82f); val tail = at(s + 30f, r * 0.14f)
-        both(1f) { p -> p.strokeWidth = r * 0.05f; p.style = Paint.Style.STROKE; p.strokeCap = Paint.Cap.ROUND; cv.drawLine(tail.x, tail.y, tip.x, tip.y, p); p.style = Paint.Style.FILL }
+        // The hands: dark metal, barely seen, with luminous paint only toward their tips (as on
+        // the classic timers). The short one counts the minutes left (under a minute: straight
+        // up at 0); the long sweep hand the seconds, down to 0 as the frame develops.
+        fun hand(s: Float, len: Float, width: Float, tail: Float) {
+            val tip = at(s, len); val back = at(s + 30f, tail)
+            val lume0 = at(s, len * 0.52f); val lume1 = at(s, len * 0.96f)
+            metal.strokeWidth = width
+            cv.drawLine(back.x, back.y, tip.x, tip.y, metal)
+            both(1f) { p -> p.strokeWidth = width * 0.62f; p.style = Paint.Style.STROKE; p.strokeCap = Paint.Cap.ROUND; cv.drawLine(lume0.x, lume0.y, lume1.x, lume1.y, p); p.style = Paint.Style.FILL }
+        }
+        val left = remainingS.coerceAtLeast(0f)
+        hand(left / 60f % 60f, r * 0.58f, r * 0.075f, r * 0.10f)          // minutes
+        hand(left % 60f, r * 0.84f, r * 0.05f, r * 0.16f)                 // seconds
         // the hub, dark, and the knob's rim catching a little of the glow
         cv.drawCircle(c.x, c.y, r * 0.09f, dial)
         both(0.35f) { p -> p.style = Paint.Style.STROKE; p.strokeWidth = r * 0.012f; cv.drawCircle(c.x, c.y, r * 0.09f, p); p.style = Paint.Style.FILL }
