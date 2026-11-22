@@ -123,7 +123,7 @@ object DarkroomTimer {
 
     /** Lume (and optionally the face beneath it) to pixels: soft core, halo, colour, grain. */
     private fun compose(n: Int, lume: FloatArray, face: FloatArray?, metal: FloatArray?, seed: Int): Bitmap {
-        val soft = blur(lume, n, maxOf(1, n / 260))                 // a little out of focus
+        val soft = blur(lume, n, maxOf(1, n / 420))                 // a little out of focus
         val halo = blur(lume, n, maxOf(2, n / 30))                  // glowing into the dark
         val wide = blur(lume, n, maxOf(3, n / 9))                   // and lighting the face
         val rng = Random(seed)
