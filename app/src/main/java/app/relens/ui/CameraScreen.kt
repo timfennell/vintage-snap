@@ -83,6 +83,7 @@ import kotlin.math.sin
 fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: () -> Unit, openDarkroom: () -> Unit) {
     val liveD by body.rig.liveFocusD.collectAsState()
     val sceneEV by body.rig.sceneEV.collectAsState()
+    BrassLightSensor()
     val framing by body.rig.framing.collectAsState()
     val rigError by body.rig.error.collectAsState()
     val raw = framing?.camera?.raw == true
@@ -636,8 +637,10 @@ private fun FrameCounter(shot: Int, total: Int, modifier: Modifier = Modifier) {
         val outer = size.minDimension / 2
         val win = outer * 0.72f
         // the bezel: turned brass (as the shutter release), light from above
+        val bl = BrassLight.dir
+        val bn = maxOf(kotlin.math.hypot(bl.x, bl.y), 0.2f)
         drawCircle(Brush.linearGradient(listOf(Color(0xFFF2D892), Color(0xFF7A5A2A), Color(0xFFD2AC62), Color(0xFF3A2A12)),
-            start = Offset(c.x, 0f), end = Offset(c.x, size.height)), outer, c)
+            start = c + Offset(bl.x / bn * outer, bl.y / bn * outer), end = c - Offset(bl.x / bn * outer, bl.y / bn * outer)), outer, c)
         var rr = outer * 0.87f
         while (rr < outer * 0.99f) { drawCircle(Color.White.copy(alpha = 0.06f), rr, c, style = androidx.compose.ui.graphics.drawscope.Stroke(0.6f)); rr += maxOf(1.1f, outer * 0.03f) }
         drawCircle(Color(0xFF3A2A12).copy(alpha = 0.8f), outer, c, style = androidx.compose.ui.graphics.drawscope.Stroke(outer * 0.035f))
@@ -1017,8 +1020,11 @@ private object Brass {
     fun androidx.compose.ui.graphics.drawscope.DrawScope.disc(c: Offset, r: Float, pressed: Boolean, rings: Boolean) {
         val k = if (pressed) 0.72f else 1f
         fun Color.dim() = Color(red * k, green * k, blue * k, alpha)
-        // the body, lit from the top left
-        drawCircle(Brush.radialGradient(listOf(hi.dim(), mid.dim(), lo.dim()), center = c + Offset(-r * 0.35f, -r * 0.40f), radius = r * 1.55f), r, c)
+        // the light, where the phone's tilt puts it (fixed in the room: it moves over the brass as the phone turns)
+        val l = BrassLight.dir
+        val lang = Math.toDegrees(kotlin.math.atan2(l.y.toDouble(), l.x.toDouble())).toFloat()
+        // the body, lit from the light's side
+        drawCircle(Brush.radialGradient(listOf(hi.dim(), mid.dim(), lo.dim()), center = c + Offset(r * l.x, r * l.y), radius = r * 1.55f), r, c)
         // lathe-turned rings: fine concentric lines, catching the light unevenly
         if (rings) {
             var rr = r * 0.12f
@@ -1030,16 +1036,17 @@ private object Brass {
             }
             // the turned surface's sheen: a soft band across it
             drawCircle(Brush.linearGradient(listOf(Color.Transparent, Color.White.copy(alpha = 0.16f * k), Color.Transparent),
-                start = c + Offset(-r, -r), end = c + Offset(r, r)), r * 0.86f, c)
+                start = c + Offset(r * l.x * 2.4f, r * l.y * 2.4f), end = c - Offset(r * l.x * 2.4f, r * l.y * 2.4f)), r * 0.86f, c)
         }
         // a soft specular highlight up at the top left, as polished brass shows a light
+        val spec = c + Offset(r * l.x * 1.05f, r * l.y * 1.05f)
         drawCircle(Brush.radialGradient(listOf(Color.White.copy(alpha = 0.45f * k), Color.White.copy(alpha = 0f)),
-            center = c + Offset(-r * 0.38f, -r * 0.42f), radius = r * 0.32f), r * 0.32f, c + Offset(-r * 0.38f, -r * 0.42f))
+            center = spec, radius = r * 0.32f), r * 0.32f, spec)
         // the bevel: dark outer edge, a bright lip just inside it at the top left
         drawCircle(deep.copy(alpha = 0.85f), r, c, style = androidx.compose.ui.graphics.drawscope.Stroke(r * 0.07f))
-        drawArc(hi.copy(alpha = 0.55f * k), 180f, 110f, false, topLeft = c - Offset(r * 0.88f, r * 0.88f),
+        drawArc(hi.copy(alpha = 0.55f * k), lang - 55f, 110f, false, topLeft = c - Offset(r * 0.88f, r * 0.88f),
             size = androidx.compose.ui.geometry.Size(r * 1.76f, r * 1.76f), style = androidx.compose.ui.graphics.drawscope.Stroke(r * 0.05f))
-        drawArc(Color.Black.copy(alpha = 0.30f), 10f, 120f, false, topLeft = c - Offset(r * 0.88f, r * 0.88f),
+        drawArc(Color.Black.copy(alpha = 0.30f), lang + 180f - 60f, 120f, false, topLeft = c - Offset(r * 0.88f, r * 0.88f),
             size = androidx.compose.ui.geometry.Size(r * 1.76f, r * 1.76f), style = androidx.compose.ui.graphics.drawscope.Stroke(r * 0.05f))
         // patina: a few darker specks where fingers have been
         val rng = kotlin.random.Random((r * 13).toInt())
@@ -1092,5 +1099,39 @@ private object Leatherette {
         drawRect(Color.White.copy(alpha = 0.05f), topLeft = Offset(0f, 2f), size = androidx.compose.ui.geometry.Size(size.width, 1f))
         // a soft falloff toward the bottom
         drawRect(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.35f))))
+    }
+}
+
+
+/** Where the light falls on the brass, as a direction on the screen (-1..1): the phone's tilt moves it. */
+object BrassLight {
+    var dir by mutableStateOf(Offset(-0.35f, -0.42f))
+}
+
+/**
+ * Follows the phone's tilt (gravity) while the camera screen is up, moving [BrassLight] as a
+ * light fixed in the room would move over the brass: upright, it sits near the top; laid flat,
+ * overhead; tipped to a side, it slides the other way.
+ */
+@Composable
+private fun BrassLightSensor() {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        val sm = ctx.getSystemService(android.content.Context.SENSOR_SERVICE) as android.hardware.SensorManager
+        val sensor = sm.getDefaultSensor(android.hardware.Sensor.TYPE_GRAVITY) ?: sm.getDefaultSensor(android.hardware.Sensor.TYPE_ACCELEROMETER)
+        var sx = -0.35f; var sy = -0.42f
+        val listener = object : android.hardware.SensorEventListener {
+            override fun onSensorChanged(e: android.hardware.SensorEvent) {
+                val gx = e.values[0] / 9.81f; val gy = e.values[1] / 9.81f
+                val tx = (-0.25f + gx * 0.55f).coerceIn(-0.75f, 0.75f)
+                val ty = (-0.55f * gy.coerceIn(-1f, 1f) - 0.05f).coerceIn(-0.75f, 0.75f)
+                sx += (tx - sx) * 0.12f; sy += (ty - sy) * 0.12f
+                val d = BrassLight.dir
+                if (kotlin.math.abs(d.x - sx) + kotlin.math.abs(d.y - sy) > 0.004f) BrassLight.dir = Offset(sx, sy)
+            }
+            override fun onAccuracyChanged(s: android.hardware.Sensor?, a: Int) {}
+        }
+        if (sensor != null) sm.registerListener(listener, sensor, android.hardware.SensorManager.SENSOR_DELAY_GAME)
+        onDispose { sm.unregisterListener(listener) }
     }
 }
