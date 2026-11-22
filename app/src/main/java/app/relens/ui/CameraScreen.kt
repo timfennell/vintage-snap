@@ -708,7 +708,7 @@ private fun ShutterRelease(busy: Boolean, onRelease: () -> Unit) {
         contentAlignment = Alignment.Center) {
         Canvas(Modifier.size(64.dp).scale(s).clip(CircleShape)
             .clickable(interactionSource = src, indication = null, onClick = onRelease)) {
-            with(Brass) { disc(center, size.minDimension / 2, pressed = pressed, rings = true) }
+            with(Brass) { release(center, size.minDimension / 2, pressed = pressed) }
             if (busy) drawCircle(Palette.led.copy(alpha = 0.8f), size.minDimension / 2 - 1.dp.toPx(), style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
         }
     }
@@ -1015,6 +1015,7 @@ half4 main(float2 p) {
 
 /** Brass: warm gold, lit from above left, lathe-turned rings, a bevelled rim, a few specks of patina. */
 private object Brass {
+    fun androidx.compose.ui.graphics.drawscope.DrawScope.release(c: Offset, r: Float, pressed: Boolean) = releaseBody(c, r, pressed)
     private val hi = Color(0xFFF2D892); private val mid = Color(0xFFC49A4E); private val lo = Color(0xFF6E5126); private val deep = Color(0xFF3A2A12)
 
     fun androidx.compose.ui.graphics.drawscope.DrawScope.disc(c: Offset, r: Float, pressed: Boolean, rings: Boolean) {
@@ -1035,8 +1036,7 @@ private object Brass {
                 rr += maxOf(1.1f, r * 0.028f); i++
             }
             // the turned surface's sheen: a soft band across it
-            drawCircle(Brush.linearGradient(listOf(Color.Transparent, Color.White.copy(alpha = 0.16f * k), Color.Transparent),
-                start = c + Offset(r * l.x * 2.4f, r * l.y * 2.4f), end = c - Offset(r * l.x * 2.4f, r * l.y * 2.4f)), r * 0.86f, c)
+            turnedStreak(c, r * 0.86f, lang, 0.30f * k)
         }
         // a soft specular highlight up at the top left, as polished brass shows a light
         val spec = c + Offset(r * l.x * 1.05f, r * l.y * 1.05f)
@@ -1056,6 +1056,73 @@ private object Brass {
                 c + Offset(kotlin.math.cos(a) * d, kotlin.math.sin(a) * d))
         }
     }
+}
+
+/**
+ * The shutter release as a real one is made: a knurled rim, a slightly dished turned face with
+ * the two-lobed streak of light turned metal throws (toward the light and away from it), and the
+ * threaded socket for a cable release at its centre, chamfered. Olive-gold brass; all of it lit
+ * from where the phone's tilt puts the light.
+ */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.releaseBody(c: Offset, r: Float, pressed: Boolean) {
+    val k = if (pressed) 0.72f else 1f
+    fun col(v: Long) = Color(v).let { Color(it.red * k, it.green * k, it.blue * k) }
+    val hi = col(0xFFEAD6A0); val mid = col(0xFFB89452); val lo = col(0xFF5E4624); val deep = col(0xFF2C2010)
+    val l = BrassLight.dir
+    val lang = kotlin.math.atan2(l.y, l.x)
+    val Stroke = androidx.compose.ui.graphics.drawscope.Stroke
+    // the knurled rim: fine ridges, lit on the light's side and falling into shadow round the other
+    drawCircle(mid, r, c)
+    val ridges = 96
+    for (i in 0 until ridges) {
+        val a = i / ridges.toFloat() * 6.2832f
+        val facing = kotlin.math.cos(a - lang)                          // 1 toward the light
+        val ca = kotlin.math.cos(a); val sa = kotlin.math.sin(a)
+        val p0 = c + Offset(ca * r * 0.865f, sa * r * 0.865f); val p1 = c + Offset(ca * r * 0.985f, sa * r * 0.985f)
+        val lit = (0.5f + 0.5f * facing)
+        drawLine(Color(hi.red, hi.green, hi.blue, 0.25f + 0.55f * lit * lit), p0, p1, r * 0.022f)
+        val a2 = a + 3.1416f / ridges
+        val q0 = c + Offset(kotlin.math.cos(a2) * r * 0.865f, kotlin.math.sin(a2) * r * 0.865f)
+        val q1 = c + Offset(kotlin.math.cos(a2) * r * 0.985f, kotlin.math.sin(a2) * r * 0.985f)
+        drawLine(deep.copy(alpha = 0.55f - 0.3f * lit), q0, q1, r * 0.02f)
+    }
+    // the rim's outer edge and the step down to the face
+    drawCircle(deep.copy(alpha = 0.9f), r, c, style = Stroke(r * 0.03f))
+    drawCircle(deep.copy(alpha = 0.8f), r * 0.86f, c, style = Stroke(r * 0.025f))
+    // the face: dished (a concave face is brighter on the side away from the light)
+    val face = r * 0.85f
+    drawCircle(Brush.radialGradient(listOf(hi, mid, lo), center = c - Offset(l.x * face * 0.55f, l.y * face * 0.55f), radius = face * 1.7f), face, c)
+    // the turned streak: two lobes along the line through the light, the mark of lathe-turned metal
+    val deg = Math.toDegrees(lang.toDouble()).toFloat()
+    turnedStreak(c, face * 0.98f, deg, 0.42f * k)
+    // fine turning lines over the face
+    var rr = r * 0.2f; var i = 0
+    while (rr < face) {
+        drawCircle((if (i % 2 == 0) Color.White else Color.Black).copy(alpha = 0.045f), rr, c, style = Stroke(0.6f))
+        rr += maxOf(1.0f, r * 0.022f); i++
+    }
+    // the cable-release socket: a chamfered lip (lit on the far side: it's a hole), threads, the dark bore
+    val sock = r * 0.17f
+    drawCircle(Brush.radialGradient(listOf(lo, hi), center = c - Offset(l.x * sock, l.y * sock), radius = sock * 1.6f), sock, c)
+    drawCircle(Color(0xFF0B0805), sock * 0.68f, c)
+    for (t in 1..3) drawCircle(mid.copy(alpha = 0.22f), sock * (0.30f + 0.12f * t), c, style = Stroke(0.7f))
+    drawCircle(Color.Black, sock * 0.28f, c)
+    // a polished glint on the rim nearest the light, where fingers have worn it bright
+    drawArc(Color(0xFFFFF0C8).copy(alpha = 0.55f * k), deg - 28f, 56f, false, topLeft = c - Offset(r * 0.93f, r * 0.93f),
+        size = androidx.compose.ui.geometry.Size(r * 1.86f, r * 1.86f), style = Stroke(r * 0.035f))
+}
+
+/** The two-lobed streak of light on lathe-turned metal, along the line through the light at [deg]. */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.turnedStreak(c: Offset, r: Float, deg: Float, alpha: Float) {
+    // sampled round the circle: bright toward the light and directly away, falling off over ~22 degrees
+    val n = 72
+    val stops = Array(n + 1) { i ->
+        val a = i * 360f / n
+        var d = kotlin.math.abs(((a - deg) % 180f + 180f) % 180f); if (d > 90f) d = 180f - d
+        val v = kotlin.math.exp(-(d / 14f) * (d / 14f))
+        (i / n.toFloat()) to Color.White.copy(alpha = alpha * v)
+    }
+    drawCircle(Brush.sweepGradient(*stops, center = c), r, c)
 }
 
 /** Black leatherette: a pebbled grain whose little bumps catch the light from above, tiled. */
