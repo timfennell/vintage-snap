@@ -41,7 +41,7 @@ import kotlin.random.Random
  */
 object DarkroomTimer {
     // lume: the paint's green; its brightest cores go paler
-    private const val LR = 0.36f; private const val LG = 0.94f; private const val LB = 0.52f
+    private const val LR = 0.23f; private const val LG = 0.56f; private const val LB = 0.19f
     private const val GLOW_N = 256
 
     private class Layers(val core: Bitmap, val glow: Bitmap)
@@ -87,14 +87,17 @@ object DarkroomTimer {
         add.alpha = (255 * breathe).toInt()
         cv.save()
         // seen a little from one side, as a timer on a shelf is: a slight tilt in depth
-        tilt.save(); tilt.setLocation(0f, 0f, -r * 7f / 72f); tilt.rotateX(9f); tilt.rotateY(-6f); tilt.getMatrix(m); tilt.restore()
+        tilt.save(); tilt.setLocation(0f, 0f, -r * 7f / 72f); tilt.rotateX(6f); tilt.rotateY(-4f); tilt.getMatrix(m); tilt.restore()
         m.preTranslate(-c.x, -c.y); m.postTranslate(c.x, c.y); cv.concat(m)
-        // the case's bezel: dark metal round the face, its inner edge catching the paint's light
-        bezel.shader = android.graphics.RadialGradient(c.x, c.y, r * 1.07f, intArrayOf(0xFF0E1511.toInt(), 0xFF0A0D0B.toInt(), 0xFF050605.toInt()),
-            floatArrayOf(0.90f, 0.95f, 1f), android.graphics.Shader.TileMode.CLAMP)
-        cv.drawCircle(c.x, c.y, r * 1.07f, bezel)
         cv.drawBitmap(p.dial.core, null, dst, bmp)
         cv.drawBitmap(p.dial.glow, null, dst, add)
+        // three painted marks on the case by the switch, at the lower right: a crooked little row
+        switchMark.maskFilter = android.graphics.BlurMaskFilter(maxOf(r * 0.006f * zoom, 0.6f) / zoom, android.graphics.BlurMaskFilter.Blur.NORMAL)
+        switchMark.alpha = (235 * breathe).toInt()
+        for ((dx, dy, a) in listOf(Triple(0.70f, 0.905f, 18f), Triple(0.825f, 0.85f, 24f), Triple(0.95f, 0.91f, 14f))) {
+            val x = c.x + dx * r; val y = c.y + dy * r; val h = r * 0.026f
+            cv.save(); cv.rotate(a, x, y); cv.drawRect(x - h, y - h, x + h, y + h, switchMark); cv.restore()
+        }
         val left = remainingS.coerceAtLeast(0f)
         for ((l, s) in listOf(p.minute to (left / 60f % 60f), p.second to (left % 60f))) {
             cv.save(); cv.rotate(s / 60f * 360f, c.x, c.y)
@@ -104,22 +107,13 @@ object DarkroomTimer {
         }
         // the knob at the centre: unpainted, so as dark as the face
         cv.drawCircle(c.x, c.y, r * 0.075f, hub)
-        // the glass over it all: a faint second reflection of the glow, and a soft sheen at the top left
-        ghost.alpha = (22 * breathe).toInt()
-        cv.save(); cv.translate(r * 0.018f, r * 0.026f); cv.scale(1.015f, 1.015f, c.x, c.y)
-        cv.drawBitmap(p.dial.glow, null, dst, ghost); cv.restore()
-        sheen.shader = android.graphics.RadialGradient(c.x - r * 0.45f, c.y - r * 0.55f, r * 0.9f,
-            intArrayOf(0x16FFFFFF, 0x06FFFFFF, 0x00FFFFFF), floatArrayOf(0f, 0.5f, 1f), android.graphics.Shader.TileMode.CLAMP)
-        cv.drawCircle(c.x, c.y, r * 0.99f, sheen)
         cv.restore()
     }
 
     private val tilt = android.graphics.Camera()
     private val m = android.graphics.Matrix()
-    private val bezel = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val hub = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF020403.toInt() }
-    private val ghost = Paint(Paint.FILTER_BITMAP_FLAG).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.ADD) }
-    private val sheen = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val switchMark = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.rgb((LR * 255 * 0.9f).toInt(), (LG * 255 * 0.9f).toInt(), (LB * 255 * 0.9f).toInt()) }
+    private val hub = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF010201.toInt() }
 
     /** Seconds left on the timer for a development started at [startMs], expected to take [setS]. */
     fun remaining(startMs: Long, setS: Float, nowMs: Long) = maxOf(setS - (nowMs - startMs) / 1000f, 0f)
@@ -146,24 +140,32 @@ object DarkroomTimer {
         p.strokeCap = Paint.Cap.BUTT
         for (s in 0 until 60) {
             if (s % 5 == 0) {
-                val (ax, ay) = at(s.toFloat(), r * 0.97f); val (bx, by) = at(s.toFloat(), r * 0.86f)
-                p.style = Paint.Style.STROKE; p.strokeWidth = r * 0.038f; cv.drawLine(ax, ay, bx, by, p)
+                val (ax, ay) = at(s.toFloat(), r * 1.0f); val (bx, by) = at(s.toFloat(), r * 0.89f)
+                p.style = Paint.Style.STROKE; p.strokeWidth = r * 0.044f; cv.drawLine(ax, ay, bx, by, p)
             } else {
-                val (dx, dy) = at(s.toFloat(), r * 0.92f)
+                val (dx, dy) = at(s.toFloat(), r * 0.95f)
                 p.style = Paint.Style.FILL
                 cv.save(); cv.rotate(s * 6f, dx, dy)
                 cv.drawRoundRect(dx - r * 0.017f, dy - r * 0.02f, dx + r * 0.017f, dy + r * 0.02f, r * 0.004f, r * 0.004f, p); cv.restore()
             }
         }
         p.style = Paint.Style.FILL
-        p.typeface = Typeface.create("sans-serif-medium", Typeface.BOLD); p.textAlign = Paint.Align.CENTER
-        p.textSize = r * 0.2f
-        for (s in 0 until 60 step 5) { val (x, y) = at(s.toFloat(), r * 0.70f); cv.drawText("$s", x, y + r * 0.072f, p) }
+        p.typeface = Typeface.create("sans-serif", Typeface.BOLD); p.textAlign = Paint.Align.CENTER
+        p.textSize = r * 0.22f; p.letterSpacing = -0.05f
+        for (s in 0 until 60 step 5) { val (x, y) = at(s.toFloat(), r * 0.745f); cv.drawText("$s", x, y + r * 0.08f, p) }
     }
 
+    /** The paint on a hand: nearly its whole length, tapering toward the tip. */
     private fun handLume(n: Int, h: Hand) = mask(n) { cv, p, c, r ->
-        p.style = Paint.Style.STROKE; p.strokeCap = Paint.Cap.ROUND; p.strokeWidth = r * h.width * 0.62f
-        cv.drawLine(c, c - r * h.len * 0.52f, c, c - r * h.len * 0.95f, p)
+        p.style = Paint.Style.FILL
+        val w0 = r * h.width * 0.78f; val w1 = r * h.width * 0.48f
+        val y0 = c - r * h.len * 0.14f; val y1 = c - r * h.len * 0.965f
+        val path = android.graphics.Path().apply {
+            moveTo(c - w0 / 2, y0); lineTo(c - w1 / 2, y1)
+            quadTo(c, y1 - w1 * 0.6f, c + w1 / 2, y1); lineTo(c + w0 / 2, y0)
+            quadTo(c, y0 + w0 * 0.5f, c - w0 / 2, y0); close()
+        }
+        cv.drawPath(path, p)
     }
 
     private fun handMetal(n: Int, h: Hand) = mask(n) { cv, p, c, r ->
@@ -195,7 +197,7 @@ object DarkroomTimer {
      * fixed to the dial, not the pixels, so it looks the same at every size.
      */
     private fun painted(a: FloatArray, n: Int, seed: Int) {
-        val lo = Noise(seed, 18); val mid = Noise(seed + 1, 90)
+        val lo = Noise(seed, 18); val mid = Noise(seed + 1, 110); val blot = Noise(seed + 5, 170)
         val edgeN = Noise(seed + 2, 520)                            // the stamp's fine edge
         val charge = Noise(seed + 3, 5)                             // the glow, gently uneven across the dial
         val pin = Noise(seed + 4, 900)                              // pinholes
@@ -208,14 +210,16 @@ object DarkroomTimer {
             var e = if (v < 0.999f) ((v - 0.5f) * 1.8f + 0.5f + (edgeN.at(u, w) - 0.5f) * 0.55f).coerceIn(0f, 1f) else v
             // ink density: even, with the rim of each mark a little denser (brighter)
             val rimBoost = 1f + 0.16f * ((1f - near[i]) / 0.45f).coerceIn(0f, 1f) * (if (v > 0.5f) 1f else 0f)
-            val density = 0.90f + 0.10f * lo.at(u, w) + 0.05f * (mid.at(u, w) - 0.5f)
+            // mottled, as the paint really is under a lens: broad unevenness, darker blotches, fine speckle
+            val bl = blot.at(u, w)
+            val density = (0.84f + 0.16f * lo.at(u, w) + 0.22f * (mid.at(u, w) - 0.5f)) * (if (bl < 0.32f) 0.72f + bl * 0.85f else 1f)
             // a pinhole now and then
             val ph = pin.at(u, w); if (ph > 0.88f) e *= (1f - (ph - 0.88f) * 6f).coerceIn(0.25f, 1f)
             // the crystals: each cell its own brightness, rarely a bright one
             val cx = (u * cells).toInt(); val cy = (w * cells).toInt()
             var h = (cx * 73856093) xor (cy * 19349663) xor (seed * 83492791); h = h xor (h ushr 13); h *= 0x5bd1e995; h = h xor (h ushr 15)
             val hv = (h and 0xFFFF) / 65535f
-            val grain = 0.87f + 0.22f * hv + (if (hv > 0.99f) 0.3f else 0f)
+            val grain = 0.80f + 0.34f * hv + (if (hv > 0.99f) 0.25f else 0f)
             a[i] = e * density * rimBoost * grain * (0.88f + 0.20f * charge.at(u, w))
         }
     }
@@ -237,9 +241,9 @@ object DarkroomTimer {
         return a
     }
 
+    /** Paint as a phone photographs it in the dark: a dim, saturated green (not a screen's mint). */
     private fun lumeColour(v: Float, out: FloatArray) {
-        val pale = ((v - 0.6f) * 1.5f).coerceIn(0f, 0.5f) * 0.6f
-        out[0] = v * (LR + (1f - LR) * pale); out[1] = v * (LG + (1f - LG) * pale); out[2] = v * (LB + (1f - LB) * pale)
+        out[0] = v * LR; out[1] = v * LG; out[2] = v * LB
     }
     private fun argb(a: Float, r: Float, g: Float, b: Float) =
         ((a.coerceIn(0f, 1f) * 255).toInt() shl 24) or ((r.coerceIn(0f, 1f) * 255).toInt() shl 16) or
@@ -247,7 +251,7 @@ object DarkroomTimer {
 
     /** The dial's surface: the black face (grain, its rim just seen) and the paint on it, sharp. */
     private fun renderDialCore(n: Int): Bitmap {
-        val lume = dialLume(n); painted(lume, n, 7)
+        val lume = blur(dialLume(n).also { painted(it, n, 7) }, n, n / 420)   // a lens's softness at the paint's edges
         val rng = Random(99); val col = FloatArray(3)
         val c = n / 2f; val rr = n / 2f * 0.985f
         val px = IntArray(n * n)
@@ -258,15 +262,19 @@ object DarkroomTimer {
             if (disc <= 0f) continue
             val grain = (rng.nextFloat() - 0.5f) * 0.03f
             lumeColour(lume[i], col)
-            val f = 0.016f + 0.006f * (1f - d)
-            px[i] = argb(disc, col[0] + f * 0.6f + grain, col[1] + f + grain, col[2] + f * 0.8f + grain)
+            val f = 0.006f
+            px[i] = argb(disc, col[0] + f * 0.6f + grain * 0.6f, col[1] + f + grain * 0.6f, col[2] + f * 0.8f + grain * 0.6f)
         }
         return Bitmap.createBitmap(px, n, n, Bitmap.Config.ARGB_8888)
     }
 
     /** A hand's surface, pointing up (turned when drawn): unseen dark metal, the paint toward its tip. */
     private fun renderHandCore(n: Int, h: Hand): Bitmap {
-        val lume = handLume(n, h); painted(lume, n, h.seed)
+        val lume = blur(handLume(n, h).also { painted(it, n, h.seed) }, n, n / 420)
+        // streaks down the hand's length, where the paint was brushed along it
+        val streak = Noise(h.seed + 9, 420)
+        for (y in 0 until n) for (x in 0 until n) { val i = y * n + x
+            if (lume[i] > 0f) lume[i] *= 0.80f + 0.32f * streak.at((x + 0.5f) / n, (y + 0.5f) / n * 0.06f) }
         val metal = handMetal(n, h)
         val col = FloatArray(3)
         val px = IntArray(n * n)
@@ -275,7 +283,7 @@ object DarkroomTimer {
             lumeColour(lume[i], col)
             val k = 1f - lume[i]
             // unpainted metal is as dark as the face: unseen, except where it covers the paint
-            px[i] = argb(m, col[0] + 0.0096f * k, col[1] + 0.016f * k, col[2] + 0.0128f * k)
+            px[i] = argb(m, col[0] + 0.0036f * k, col[1] + 0.006f * k, col[2] + 0.0048f * k)
         }
         return Bitmap.createBitmap(px, n, n, Bitmap.Config.ARGB_8888)
     }
@@ -287,7 +295,7 @@ object DarkroomTimer {
         val col = FloatArray(3)
         val px = IntArray(n * n)
         for (i in 0 until n * n) {
-            val e = halo[i] * 0.62f + wide[i] * (if (faceLight) 0.30f else 0.18f)
+            val e = halo[i] * 0.07f + wide[i] * (if (faceLight) 0.02f else 0.012f)
             lumeColour(e, col)
             px[i] = argb(1f, col[0], col[1], col[2])
         }
