@@ -1,6 +1,8 @@
 package app.relens.ui
 
 import androidx.compose.ui.graphics.asComposeRenderEffect
+import androidx.compose.ui.graphics.asAndroidPath
+import androidx.compose.ui.graphics.nativeCanvas
 
 import kotlinx.coroutines.launch
 
@@ -443,6 +445,7 @@ private fun MeterCard(setPos: Float, meterPos: Float, modifier: Modifier) {
                 ca.setFloatUniform("size", size.width, size.height)
                 ca.setFloatUniform("maxBlur", 1.8f * density)
                 ca.setFloatUniform("maxShift", 0.7f * density)
+                ca.setFloatUniform("wobble", 0f)
                 renderEffect = android.graphics.RenderEffect.createRuntimeShaderEffect(ca, "image").asComposeRenderEffect()
             }
             android.os.Build.VERSION.SDK_INT >= 31 -> renderEffect = androidx.compose.ui.graphics.BlurEffect(0.5f * density, 0.5f * density)
@@ -479,11 +482,6 @@ private fun MeterCard(setPos: Float, meterPos: Float, modifier: Modifier) {
                 fontFamily = Futuraish, fontWeight = FontWeight.Medium))
             drawText(t, topLeft = Offset(strip.right - t.size.width - 0.45f * u, yy - t.size.height / 2f))
         }
-        // the set speed: a dark index notch at the strip's inner edge, pointing into the frame
-        val ty = y(setPos)
-        drawPath(androidx.compose.ui.graphics.Path().apply {
-            moveTo(strip.right, ty - 0.42f * step); lineTo(strip.right + 1.1f * u, ty); lineTo(strip.right, ty + 0.42f * step); close()
-        }, Color(0xFF1E8A5C))
         // the needle: in from the dark beyond the frame, aimed through the reading's tick
         val aim = Offset(1.0f * u, y(needle))
         val reach = (1.15f * u - pivot.x) / (aim.x - pivot.x)
@@ -492,6 +490,44 @@ private fun MeterCard(setPos: Float, meterPos: Float, modifier: Modifier) {
         // the frame's border beyond: the strip vanishes under it, softly (it's out of focus too)
         drawRect(Brush.horizontalGradient(0f to Color.Black.copy(alpha = 0.55f), 1f to Color.Transparent, startX = 0f, endX = 1.1f * u),
             Offset(0f, strip.top), androidx.compose.ui.geometry.Size(1.1f * u, strip.height))
+    }
+    // The set speed: green light reflected into the finder, like a head-up display. Added light,
+    // soft-edged and glowing, a little see-through, with the faint second image a reflection off
+    // the far side of the glass leaves.
+    val hudBlur = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(EYEPIECE_CA) else null }
+    Canvas(modifier.fillMaxSize().graphicsLayer {
+        compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen
+        blendMode = androidx.compose.ui.graphics.BlendMode.Plus
+        // its focus wanders as it travels along the glass: softer toward the ends, and unevenly so
+        if (android.os.Build.VERSION.SDK_INT >= 33 && hudBlur != null) {
+            hudBlur.setFloatUniform("size", size.width, size.height)
+            hudBlur.setFloatUniform("maxBlur", 2.6f * density)
+            hudBlur.setFloatUniform("maxShift", 0.5f * density)
+            hudBlur.setFloatUniform("wobble", 0.85f)
+            renderEffect = android.graphics.RenderEffect.createRuntimeShaderEffect(hudBlur, "image").asComposeRenderEffect()
+        }
+    }) {
+        val u = 8.dp.toPx()
+        val stripH = size.height * 0.62f
+        val top = (size.height - stripH) / 2
+        val cap = 2.0f * u; val n = shutterSpeeds.size
+        val step = (stripH - 2 * cap) / n
+        val ty = top + cap + (n - 1 - setPos + 0.5f) * step
+        val x0 = -1.2f * u + 5.0f * u + 0.15f * u
+        fun tri(dx: Float, dy: Float, grow: Float) = androidx.compose.ui.graphics.Path().apply {
+            moveTo(x0 + dx - grow, ty + dy - 0.40f * step - grow); lineTo(x0 + dx + 1.15f * u + grow * 1.4f, ty + dy)
+            lineTo(x0 + dx - grow, ty + dy + 0.40f * step + grow); close()
+        }
+        val hud = Color(0xFF14E05A)                       // a pure green: added light keeps its colour over bright scenes
+        val cv = drawContext.canvas.nativeCanvas
+        val glow = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.argb(120, 0x08, 0xD0, 0x40)
+            maskFilter = android.graphics.BlurMaskFilter(0.9f * u, android.graphics.BlurMaskFilter.Blur.NORMAL)
+        }
+        cv.drawPath(tri(0f, 0f, 0.15f * u).asAndroidPath(), glow)                       // the bloom round it
+        drawPath(tri(0.35f * u, -0.22f * u, 0f), hud.copy(alpha = 0.16f))                 // the ghost reflection
+        drawPath(tri(0f, 0f, 0f), hud.copy(alpha = 0.78f))                                // the reflected light
+        drawPath(tri(0.12f * u, 0f, -0.18f * u), Color(0xFF60FF90).copy(alpha = 0.30f))   // its brighter core
     }
 }
 
@@ -926,11 +962,12 @@ uniform shader image;
 uniform float2 size;
 uniform float maxBlur;
 uniform float maxShift;
+uniform float wobble;                                      // focus wandering along the way (0: none)
 half4 main(float2 p) {
     float2 c = size * 0.5;
     float2 d = (p - c) / c;
     float r = length(d);                                   // 0 at the centre, ~1.4 in the corners
-    float blur = maxBlur * smoothstep(0.55, 1.35, r);
+    float blur = maxBlur * smoothstep(0.55, 1.35, r) * (1.0 + wobble * (0.5 + 0.5 * sin(p.y * 0.021 + 1.3) * sin(p.y * 0.0073 + 0.4)));
     float2 dir = d / max(r, 1e-3);
     float2 sh = dir * maxShift * smoothstep(0.3, 1.4, r);  // red outward, blue inward
     half4 acc = half4(0);
