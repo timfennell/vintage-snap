@@ -245,8 +245,22 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                 rigError?.let { Text(it, color = Palette.led, fontSize = 11.sp, modifier = Modifier.align(Alignment.Center).padding(16.dp)) }
                 if (mirror.value > 0f) MirrorShade(mirror.value, Modifier.fillMaxSize())
                 body.parallax?.let { pc -> ParallaxFinder(pc, body, Modifier.fillMaxSize()) }
-                if (mirrorUp && (body.busy || body.sweeping) && body.parallax == null) Text("HOLD STEADY", color = Palette.led, fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, modifier = Modifier.align(Alignment.Center))
+                // HOLD STEADY slaps into place with the mirror: in a touch large, landing with a bounce
+                val holdOn = mirrorUp && (body.busy || body.sweeping) && body.parallax == null
+                val slap = remember { androidx.compose.animation.core.Animatable(0f) }
+                LaunchedEffect(holdOn) {
+                    if (holdOn) { slap.snapTo(0f); slap.animateTo(1f, androidx.compose.animation.core.spring(dampingRatio = 0.42f, stiffness = 900f)) }
+                    else slap.snapTo(0f)
+                }
+                if (holdOn) Text("HOLD STEADY", color = Palette.led, fontSize = 17.sp, letterSpacing = 3.sp,
+                    fontWeight = FontWeight.Bold, fontFamily = Futuraish,
+                    modifier = Modifier.align(Alignment.Center).graphicsLayer {
+                        val k = slap.value
+                        val sc = 1.35f - 0.35f * k
+                        scaleX = sc; scaleY = sc
+                        alpha = (k * 3f).coerceIn(0f, 1f)
+                        translationY = shake.value * density * 1.5f
+                    })
             }
           }
         }
