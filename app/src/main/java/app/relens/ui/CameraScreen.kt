@@ -5,6 +5,7 @@ import androidx.compose.ui.graphics.asAndroidPath
 import androidx.compose.ui.graphics.nativeCanvas
 
 import kotlinx.coroutines.launch
+import androidx.compose.ui.draw.drawBehind
 
 import androidx.compose.ui.layout.layout
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -353,8 +354,10 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
             finderLight = finderLight * 0.30f,
         )
 
-        // ---- the deck ----
-        Row(Modifier.fillMaxWidth().height(104.dp).padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
+        // ---- the deck: black leatherette round the brass controls ----
+        val leather = remember { Leatherette.texture() }
+        Row(Modifier.fillMaxWidth().height(104.dp).drawBehind { with(Leatherette) { draw(leather) } }
+            .padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
                 DeckButton("BAG", Modifier) { openBag() }
                 if (body.parallaxAvailable) {
@@ -632,9 +635,12 @@ private fun FrameCounter(shot: Int, total: Int, modifier: Modifier = Modifier) {
         val c = center
         val outer = size.minDimension / 2
         val win = outer * 0.72f
-        // the bezel: turned chrome, light from above
-        drawCircle(Brush.linearGradient(listOf(Color(0xFFE8E8E4), Color(0xFF6E6E6A), Color(0xFFBDBDB8), Color(0xFF3A3A38)),
+        // the bezel: turned brass (as the shutter release), light from above
+        drawCircle(Brush.linearGradient(listOf(Color(0xFFF2D892), Color(0xFF7A5A2A), Color(0xFFD2AC62), Color(0xFF3A2A12)),
             start = Offset(c.x, 0f), end = Offset(c.x, size.height)), outer, c)
+        var rr = outer * 0.87f
+        while (rr < outer * 0.99f) { drawCircle(Color.White.copy(alpha = 0.06f), rr, c, style = androidx.compose.ui.graphics.drawscope.Stroke(0.6f)); rr += maxOf(1.1f, outer * 0.03f) }
+        drawCircle(Color(0xFF3A2A12).copy(alpha = 0.8f), outer, c, style = androidx.compose.ui.graphics.drawscope.Stroke(outer * 0.035f))
         drawCircle(Color(0xFF151514), outer * 0.86f, c)
         // the dial, seen through the window
         val window = androidx.compose.ui.graphics.Path().apply { addOval(androidx.compose.ui.geometry.Rect(c, win)) }
@@ -689,7 +695,7 @@ private fun DeckButton(label: String, modifier: Modifier, onClick: () -> Unit) {
     }
 }
 
-/** A chrome shutter release with a soft collar: it sinks as it is pressed. */
+/** A brass shutter release, lathe-turned, in a dark collar: it sinks as it is pressed. */
 @Composable
 private fun ShutterRelease(busy: Boolean, onRelease: () -> Unit) {
     val src = remember { MutableInteractionSource() }
@@ -697,10 +703,11 @@ private fun ShutterRelease(busy: Boolean, onRelease: () -> Unit) {
     val s by animateFloatAsState(if (pressed) 0.9f else 1f, label = "shutter")
     Box(Modifier.size(92.dp).clip(CircleShape).background(Brush.radialGradient(listOf(Color(0xFF1A1918), Color(0xFF080808)))),
         contentAlignment = Alignment.Center) {
-        Box(Modifier.size(64.dp).scale(s).clip(CircleShape)
-            .background(Brush.linearGradient(listOf(Palette.chromeHi, Palette.chromeLo, Palette.chromeHi)))
-            .border(2.dp, if (busy) Palette.led else Color(0xFF555552), CircleShape)
-            .clickable(interactionSource = src, indication = null, onClick = onRelease))
+        Canvas(Modifier.size(64.dp).scale(s).clip(CircleShape)
+            .clickable(interactionSource = src, indication = null, onClick = onRelease)) {
+            with(Brass) { disc(center, size.minDimension / 2, pressed = pressed, rings = true) }
+            if (busy) drawCircle(Palette.led.copy(alpha = 0.8f), size.minDimension / 2 - 1.dp.toPx(), style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
+        }
     }
 }
 
@@ -772,8 +779,9 @@ private fun ParallaxSwitch(on: Boolean, focus: Pair<Int, Boolean>, onToggle: () 
         // the lever: up for on
         Box(Modifier.size(width = 22.dp, height = 34.dp).clip(RoundedCornerShape(11.dp)).background(Color(0xFF0A0A09))
             .border(1.dp, Palette.panelHi, RoundedCornerShape(11.dp))) {
-            Box(Modifier.align(if (on) Alignment.TopCenter else Alignment.BottomCenter).padding(3.dp).size(16.dp).clip(CircleShape)
-                .background(Brush.radialGradient(listOf(Palette.chromeHi, Palette.chromeLo))))
+            Canvas(Modifier.align(if (on) Alignment.TopCenter else Alignment.BottomCenter).padding(3.dp).size(16.dp)) {
+                with(Brass) { disc(center, size.minDimension / 2, pressed = false, rings = false) }
+            }
         }
         Spacer(Modifier.height(4.dp))
         Text("PARALLAX", color = if (on) Palette.cream else Palette.dim, fontSize = 7.sp, letterSpacing = 1.sp)
@@ -878,9 +886,7 @@ private fun DofLever(held: Boolean, onHeld: (Boolean) -> Unit) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(4.dp)
         .pointerInput(Unit) { detectTapGestures(onPress = { onHeld(true); tryAwaitRelease(); onHeld(false) }) }) {
         Spacer(Modifier.height(14.dp))
-        Box(Modifier.size(30.dp).clip(CircleShape)
-            .background(Brush.radialGradient(if (held) listOf(Palette.chromeLo, Color(0xFF2A2A28)) else listOf(Palette.chromeHi, Palette.chromeLo)))
-            .border(1.dp, Palette.panelHi, CircleShape))
+        Canvas(Modifier.size(30.dp)) { with(Brass) { disc(center, size.minDimension / 2, pressed = held, rings = true) } }
         Spacer(Modifier.height(8.dp))
         Text("DOF", color = if (held) Palette.cream else Palette.dim, fontSize = 7.sp, letterSpacing = 1.sp)
     }
@@ -1002,3 +1008,89 @@ half4 main(float2 p) {
     return acc / 9.0;
 }
 """
+
+
+/** Brass: warm gold, lit from above left, lathe-turned rings, a bevelled rim, a few specks of patina. */
+private object Brass {
+    private val hi = Color(0xFFF2D892); private val mid = Color(0xFFC49A4E); private val lo = Color(0xFF6E5126); private val deep = Color(0xFF3A2A12)
+
+    fun androidx.compose.ui.graphics.drawscope.DrawScope.disc(c: Offset, r: Float, pressed: Boolean, rings: Boolean) {
+        val k = if (pressed) 0.72f else 1f
+        fun Color.dim() = Color(red * k, green * k, blue * k, alpha)
+        // the body, lit from the top left
+        drawCircle(Brush.radialGradient(listOf(hi.dim(), mid.dim(), lo.dim()), center = c + Offset(-r * 0.35f, -r * 0.40f), radius = r * 1.55f), r, c)
+        // lathe-turned rings: fine concentric lines, catching the light unevenly
+        if (rings) {
+            var rr = r * 0.12f
+            var i = 0
+            while (rr < r * 0.86f) {
+                val a = if (i % 2 == 0) 0.07f else 0.05f
+                drawCircle((if (i % 2 == 0) Color.White else Color.Black).copy(alpha = a), rr, c, style = androidx.compose.ui.graphics.drawscope.Stroke(0.6f))
+                rr += maxOf(1.1f, r * 0.028f); i++
+            }
+            // the turned surface's sheen: a soft band across it
+            drawCircle(Brush.linearGradient(listOf(Color.Transparent, Color.White.copy(alpha = 0.16f * k), Color.Transparent),
+                start = c + Offset(-r, -r), end = c + Offset(r, r)), r * 0.86f, c)
+        }
+        // a soft specular highlight up at the top left, as polished brass shows a light
+        drawCircle(Brush.radialGradient(listOf(Color.White.copy(alpha = 0.45f * k), Color.White.copy(alpha = 0f)),
+            center = c + Offset(-r * 0.38f, -r * 0.42f), radius = r * 0.32f), r * 0.32f, c + Offset(-r * 0.38f, -r * 0.42f))
+        // the bevel: dark outer edge, a bright lip just inside it at the top left
+        drawCircle(deep.copy(alpha = 0.85f), r, c, style = androidx.compose.ui.graphics.drawscope.Stroke(r * 0.07f))
+        drawArc(hi.copy(alpha = 0.55f * k), 180f, 110f, false, topLeft = c - Offset(r * 0.88f, r * 0.88f),
+            size = androidx.compose.ui.geometry.Size(r * 1.76f, r * 1.76f), style = androidx.compose.ui.graphics.drawscope.Stroke(r * 0.05f))
+        drawArc(Color.Black.copy(alpha = 0.30f), 10f, 120f, false, topLeft = c - Offset(r * 0.88f, r * 0.88f),
+            size = androidx.compose.ui.geometry.Size(r * 1.76f, r * 1.76f), style = androidx.compose.ui.graphics.drawscope.Stroke(r * 0.05f))
+        // patina: a few darker specks where fingers have been
+        val rng = kotlin.random.Random((r * 13).toInt())
+        repeat(5) {
+            val a = rng.nextFloat() * 6.2832f; val d = r * 0.8f * kotlin.math.sqrt(rng.nextFloat())
+            drawCircle(deep.copy(alpha = 0.06f + 0.06f * rng.nextFloat()), r * (0.04f + 0.06f * rng.nextFloat()),
+                c + Offset(kotlin.math.cos(a) * d, kotlin.math.sin(a) * d))
+        }
+    }
+}
+
+/** Black leatherette: a pebbled grain whose little bumps catch the light from above, tiled. */
+private object Leatherette {
+    fun texture(): androidx.compose.ui.graphics.ImageBitmap {
+        val n = 192; val rng = kotlin.random.Random(23)
+        // pebbles: a jittered grid of bumps; each pixel takes its nearest bump's height falloff
+        val cell = 6
+        val g = n / cell
+        val px = FloatArray(g * g); val py = FloatArray(g * g)
+        for (i in 0 until g * g) { px[i] = (i % g + rng.nextFloat()) * cell; py[i] = (i / g + rng.nextFloat()) * cell }
+        val h = FloatArray(n * n)
+        for (y in 0 until n) for (x in 0 until n) {
+            val cx = x / cell; val cy = y / cell
+            var best = 1e9f
+            for (dy in -1..1) for (dx in -1..1) {
+                val gx = (cx + dx + g) % g; val gy = (cy + dy + g) % g
+                var ddx = x - px[gy * g + gx]; var ddy = y - py[gy * g + gx]
+                if (ddx > n / 2) ddx -= n; if (ddx < -n / 2) ddx += n
+                if (ddy > n / 2) ddy -= n; if (ddy < -n / 2) ddy += n
+                best = minOf(best, ddx * ddx + ddy * ddy)
+            }
+            h[y * n + x] = 1f - (kotlin.math.sqrt(best) / (cell * 0.75f)).coerceIn(0f, 1f)
+        }
+        val out = IntArray(n * n)
+        for (y in 0 until n) for (x in 0 until n) {
+            val a = h[y * n + x]; val b = h[((y + 1) % n) * n + (x + 1) % n]
+            val light = (a - b) * 0.9f                               // lit from the top left
+            val v = (0.075f + 0.035f * a + light * 0.10f + (rng.nextFloat() - 0.5f) * 0.01f).coerceIn(0f, 1f)
+            val c = (v * 255).toInt()
+            out[y * n + x] = (0xFF shl 24) or ((c * 1.02f).toInt().coerceAtMost(255) shl 16) or (c shl 8) or (c * 0.95f).toInt()
+        }
+        return android.graphics.Bitmap.createBitmap(out, n, n, android.graphics.Bitmap.Config.ARGB_8888).asImageBitmap()
+    }
+
+    fun androidx.compose.ui.graphics.drawscope.DrawScope.draw(tex: androidx.compose.ui.graphics.ImageBitmap) {
+        drawRect(androidx.compose.ui.graphics.ShaderBrush(androidx.compose.ui.graphics.ImageShader(tex,
+            androidx.compose.ui.graphics.TileMode.Repeated, androidx.compose.ui.graphics.TileMode.Repeated)))
+        // the edge where it meets the barrel: a dark seam and a faint lit lip
+        drawRect(Color.Black.copy(alpha = 0.6f), size = androidx.compose.ui.geometry.Size(size.width, 2f))
+        drawRect(Color.White.copy(alpha = 0.05f), topLeft = Offset(0f, 2f), size = androidx.compose.ui.geometry.Size(size.width, 1f))
+        // a soft falloff toward the bottom
+        drawRect(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.35f))))
+    }
+}
