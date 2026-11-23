@@ -84,29 +84,31 @@ half3 evalEnvironment(float3 N, float roughness) {
     R = normalize(R);
     float el = -R.y;                                   // up is up
     float az = atan(R.x, max(R.z, 0.05));
-    float detail = 1.0 - smoothstep(0.02, 0.45, roughness);
+    // the world seen softly even in mirror polish (an impression, not a picture)
+    float detail = (1.0 - smoothstep(0.02, 0.45, roughness)) * 0.35;
+    float soft = 0.06 + roughness * 0.5;
     half3 skyT = half3(uSkyTone); half3 horT = half3(uHorizonTone); half3 gndT = half3(uGroundTone);
     // the sky: deeper blue overhead, paler down to the haze; clouds drifting across
     half3 skyCol = mix(half3(0.72, 0.80, 0.90), half3(0.36, 0.52, 0.78), smoothstep(0.0, 0.8, el));
     skyCol = mix(skyCol, skyT * 1.1, 0.35);
-    float cl = eFbm(float2(az * 2.2, el * 5.0 + 1.7));
-    float cloud = smoothstep(0.48, 0.78, cl) * smoothstep(0.02, 0.18, el);
+    float cl = 0.7 * eNoise(float2(az * 1.3, el * 2.6 + 1.7)) + 0.3 * eNoise(float2(az * 2.6, el * 5.2 + 4.1));
+    float cloud = smoothstep(0.42, 0.85, cl) * smoothstep(0.02, 0.25, el);
     skyCol = mix(skyCol, half3(0.97, 0.96, 0.93), cloud * (0.35 + 0.65 * detail));
     skyCol -= half3(0.08) * smoothstep(0.62, 0.9, cl) * cloud * detail;          // their shaded undersides
     // the tree line: an uneven canopy along the horizon
-    float canopy = 0.035 + 0.11 * eFbm(float2(az * 7.0, 3.1)) + 0.04 * eNoise(float2(az * 23.0, 9.0)) * detail;
-    float tree = smoothstep(canopy + 0.012 + roughness * 0.05, canopy - 0.012 - roughness * 0.05, el) * step(0.0, el + 0.005);
-    half3 treeCol = mix(half3(0.08, 0.13, 0.08), horT * 0.45, 0.35) * (0.75 + 0.5 * eNoise(float2(az * 40.0, el * 60.0)) * detail);
+    float canopy = 0.04 + 0.09 * eNoise(float2(az * 3.5, 3.1));
+    float tree = smoothstep(canopy + soft, canopy - soft, el) * smoothstep(-0.06, 0.0, el + soft * 0.5);
+    half3 treeCol = mix(half3(0.08, 0.13, 0.08), horT * 0.45, 0.35) * (0.85 + 0.3 * eNoise(float2(az * 8.0, el * 10.0)) * detail);
     // water: a band below the horizon mirroring the sky, broken by ripples
-    float wv = smoothstep(0.0, -0.02, el) * smoothstep(-0.32, -0.20, el);
-    float ripple = eNoise(float2(az * 3.0, el * 90.0)) * detail;
+    float wv = smoothstep(0.0, -soft, el) * smoothstep(-0.34, -0.18, el);
+    float ripple = eNoise(float2(az * 2.0, el * 20.0)) * detail;
     float3 Rw = float3(R.x + (ripple - 0.5) * 0.12, -R.y, R.z);
-    half3 waterCol = mix(half3(0.30, 0.42, 0.52), skyCol * 0.85, 0.6) * (0.8 + 0.35 * ripple) + half3(0.05) * step(0.82, ripple);
+    half3 waterCol = mix(half3(0.30, 0.42, 0.52), skyCol * 0.85, 0.6) * (0.85 + 0.25 * ripple);
     // nearer ground: grass and earth
-    float gr = eFbm(float2(az * 5.0, el * 9.0));
-    half3 grass = mix(half3(0.20, 0.27, 0.12), half3(0.36, 0.30, 0.18), gr) * (0.85 + 0.3 * detail * eNoise(float2(az * 30.0, el * 40.0)));
+    float gr = eNoise(float2(az * 2.0, el * 3.5));
+    half3 grass = mix(half3(0.20, 0.27, 0.12), half3(0.36, 0.30, 0.18), gr);
     grass = mix(grass, gndT * 0.8, 0.35);
-    half3 env = (el > 0.0) ? skyCol : mix(grass, waterCol, wv);
+    half3 env = mix(mix(grass, waterCol, wv), skyCol, smoothstep(-soft, soft, el));
     env = mix(env, treeCol, tree);
     // blur for rough metal: everything drifts toward the scene's average
     half3 avg = (skyT + horT + gndT) / 3.0 * 0.8 + half3(0.06);
