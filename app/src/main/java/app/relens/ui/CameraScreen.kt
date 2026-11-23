@@ -409,7 +409,8 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
             at(W * 0.125f + 42.dp, mid + 46.dp, 22.dp, 14.dp) { FilmPlaneMark() }    // toward the back, where the film lies
             at(W * 0.865f, mid - 14.dp, 92.dp, 92.dp) {
                 ShutterRelease(busy = body.busy) {
-                    if (!body.busy && body.framesLeft > 0) { haptics.shutter(body.shutterSeconds); mirrorUp = true }
+                    // (a finished roll is replaced by a fresh one of the same film as it fires)
+                    if (!body.busy) { haptics.shutter(body.shutterSeconds); mirrorUp = true }
                     body.shoot(onShot = { haptics.advance() })
                 }
             }
@@ -714,9 +715,15 @@ private fun FrameCounter(shot: Int, total: Int, modifier: Modifier = Modifier) {
             }
             drawPath(idx, Palette.led)
             // the glass: a domed highlight across the top, a faint glint at the foot
-            drawOval(Brush.verticalGradient(listOf(Color(0x40FFFFFF), Color(0x00FFFFFF)), startY = c.y - win, endY = c.y),
-                topLeft = Offset(c.x - win * 0.72f, c.y - win * 0.92f), size = androidx.compose.ui.geometry.Size(win * 1.44f, win * 0.8f))
-            drawArc(Color(0x33FFFFFF), 40f, 100f, false, topLeft = Offset(c.x - win * 0.82f, c.y - win * 0.82f),
+            // (both follow the light, as the rest of the metal and glass does)
+            val gl = BrassLight.dir
+            val glN = kotlin.math.hypot(gl.x, gl.y).coerceAtLeast(0.2f)
+            val gx = gl.x / glN; val gy = gl.y / glN
+            val hc = Offset(c.x + gx * win * 0.38f, c.y + gy * win * 0.38f)
+            drawOval(Brush.radialGradient(listOf(Color(0x40FFFFFF), Color(0x00FFFFFF)), center = hc, radius = win * 0.55f),
+                topLeft = hc - Offset(win * 0.55f, win * 0.40f), size = androidx.compose.ui.geometry.Size(win * 1.10f, win * 0.80f))
+            val glintAt = Math.toDegrees(kotlin.math.atan2(-gy, -gx).toDouble()).toFloat()          // the far side, opposite the light
+            drawArc(Color(0x33FFFFFF), glintAt - 50f, 100f, false, topLeft = Offset(c.x - win * 0.82f, c.y - win * 0.82f),
                 size = androidx.compose.ui.geometry.Size(win * 1.64f, win * 1.64f), style = Stroke(win * 0.05f))
         }
         // the window's rim
@@ -753,12 +760,11 @@ private fun DeckButton(label: String, modifier: Modifier, onClick: () -> Unit) {
 private fun ShutterRelease(busy: Boolean, onRelease: () -> Unit) {
     val src = remember { MutableInteractionSource() }
     val pressed by src.collectIsPressedAsState()
-    val s by animateFloatAsState(if (pressed) 0.9f else 1f, label = "shutter")
     Box(Modifier.size(92.dp), contentAlignment = Alignment.Center) {
         Canvas(Modifier.size(64.dp)) { deckShadow() }
         val press by animateFloatAsState(if (pressed) 1f else 0f, label = "press")
         val shader = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(SOFT_RELEASE_AGSL) else null }
-        Canvas(Modifier.size(64.dp).scale(s).graphicsLayer { translationY = press * 1.5f * density }.clip(CircleShape)
+        Canvas(Modifier.size(64.dp).clip(CircleShape)
             .clickable(interactionSource = src, indication = null, onClick = onRelease)) {
             if (shader != null) {
                 // mirror-polished brass, lit by the shared studio (GPU)

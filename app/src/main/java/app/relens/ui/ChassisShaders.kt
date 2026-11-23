@@ -234,7 +234,10 @@ half4 main(float2 p) {
     }
     half3 col = toMetal(evalEnvironment(N, rough)) * ao;
     if (uEnamel > 0.5 && r < 0.955) col = enamel(N, 0.10) * ao;          // black, the brass only at the rim
-    col *= 1.0 - 0.15 * uPressed;                    // the thumb shades it
+    // pressed: only the button sinks (the collar stays put): its face darkens under the thumb
+    // and the seating groove round it opens up
+    if (r < 0.845) col *= 1.0 - 0.20 * uPressed;
+    else if (r < 0.885) col *= 1.0 - 0.5 * uPressed;
     float a = smoothstep(1.0 + uPx, 1.0 - uPx, r);
     return half4(col * a, a);
 }

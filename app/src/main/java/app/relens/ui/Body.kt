@@ -830,7 +830,8 @@ class Body(app: Application) : AndroidViewModel(app) {
 
     fun shoot(onShot: () -> Unit = {}) {
         if (busy) { message = "still taking the last frame…"; return }
-        if (framesLeft <= 0) { message = "roll finished: load film"; return }
+        // the roll finished: a fresh roll of the same film (and rating) goes in, and the frame is its first
+        if (framesLeft <= 0) loadRoll(stockIndex, push)
         busy = true
         message = null
         val frame = framesShot + 1
