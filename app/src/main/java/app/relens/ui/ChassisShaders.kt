@@ -274,25 +274,22 @@ half4 main(float2 p) {
     } else {
         // the top face, very slightly domed
         N = normalize(float3(uv * 0.10, 1.0));
-        // the milled slot the crank bar lies in: a channel along the knob's x
-        float slotW = 0.30;
-        if (abs(q.y) < slotW && abs(q.x) < 0.78) {
-            float e = abs(q.y) / slotW;
-            // the bar itself, raised in the slot, its long edges rounded
-            if (abs(q.y) < slotW * 0.72 && q.x > -0.70 && q.x < 0.74) {
-                float b = abs(q.y) / (slotW * 0.72);
-                float2 nrm = float2(0.0, sign(q.y) * b * b * 0.8);
-                float2 nw = float2(ca * nrm.x + sa * nrm.y, -sa * nrm.x + ca * nrm.y);
-                N = normalize(float3(nw, 1.0)); rough = 0.03;
-                // the hinge pin at its end: a small dome
-                float pr = length(q - float2(0.52, 0.0));
-                if (pr < 0.11) { float2 pn = (q - float2(0.52, 0.0)) / 0.11; float2 pw = float2(ca * pn.x + sa * pn.y, -sa * pn.x + ca * pn.y); N = normalize(float3(pw * 0.8, 0.6)); }
-                if (abs(pr - 0.11) < uPx * 2.0) ao = 0.5;
-                // the finger dimple at the free end
-                float dr = length(q - float2(-0.48, 0.0));
-                if (dr < 0.10) { float2 dn = -(q - float2(-0.48, 0.0)) / 0.10; float2 dw = float2(ca * dn.x + sa * dn.y, -sa * dn.x + ca * dn.y); N = normalize(float3(dw * 0.5, 0.9)); }
+        // the crank bar: a flat strip straight across the face, its top flat and polished, with
+        // crisp edges (a hairline of shadow either side) and a small engraved circle at one end
+        float barW = 0.27;
+        float slotW = barW + 0.035;
+        if (abs(q.y) < slotW) {
+            if (abs(q.y) < barW) {
+                N = float3(0.0, 0.0, 1.0); rough = 0.03;
+                if (abs(q.y) > barW - 0.035) {                       // its edge, a narrow bevel
+                    float2 nrm = float2(0.0, sign(q.y) * 0.6);
+                    float2 nw = float2(ca * nrm.x + sa * nrm.y, -sa * nrm.x + ca * nrm.y);
+                    N = normalize(float3(nw, 0.8));
+                }
+                float cr = length(q - float2(-0.50, 0.0));
+                if (abs(cr - 0.075) < 0.016) ink = half3(0.10, 0.08, 0.05);      // the engraved circle
             } else {
-                ao = 0.18 + 0.2 * e;                         // the slot's dark gap round the bar
+                ao = 0.22;                                           // the gap either side of the bar
             }
         }
         // the engraved rewind arrow: an arc round the face with a head, black enamel

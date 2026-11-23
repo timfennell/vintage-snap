@@ -976,13 +976,13 @@ private fun Modifier.portraitBody() = this.then(Modifier.layout { m, c ->
  */
 @Composable
 private fun DofLever(held: Boolean, onHeld: (Boolean) -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(4.dp)
+    // the button centred on the deck's line (with the other round controls); its plate hangs below
+    Box(Modifier.size(width = 42.dp, height = 104.dp)
         .pointerInput(Unit) { detectTapGestures(onPress = { onHeld(true); tryAwaitRelease(); onHeld(false) }) }) {
-        Spacer(Modifier.height(14.dp))
         val shader = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(SOFT_RELEASE_AGSL) else null }
         val dens = androidx.compose.ui.platform.LocalDensity.current.density
         val press by animateFloatAsState(if (held) 1f else 0f, label = "dofpress")
-        Canvas(Modifier.size(34.dp).scale(1f - 0.06f * press)) {
+        Canvas(Modifier.align(Alignment.Center).size(34.dp).scale(1f - 0.06f * press)) {
             if (shader != null) {
                 Chassis.bind(shader)
                 shader.setFloatUniform("iResolution", size.width, size.height)
@@ -992,11 +992,10 @@ private fun DofLever(held: Boolean, onHeld: (Boolean) -> Unit) {
                 drawRect(androidx.compose.ui.graphics.ShaderBrush(shader))
             } else with(Brass) { disc(center, size.minDimension / 2, pressed = held, rings = true) }
         }
-        Spacer(Modifier.height(5.dp))
         // DOF, engraved and enamelled on a small black plate below the button
         val plateSh = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(LABEL_PLATE_AGSL) else null }
         val dofLabel = remember { Engraving.render("DOF", Color(0xFFEDE6D8), dens * 0.62f, 78) }
-        Canvas(Modifier.size(width = 34.dp, height = 14.dp)) {
+        Canvas(Modifier.align(Alignment.Center).offset(y = 27.dp).size(width = 34.dp, height = 14.dp)) {
             if (plateSh != null) {
                 Chassis.bind(plateSh)
                 plateSh.setFloatUniform("iResolution", size.width, size.height)
@@ -1338,7 +1337,7 @@ private fun FilmRewindKnob(frame: Int, onTap: () -> Unit) {
         androidx.compose.animation.core.tween(durationMillis = 600, delayMillis = 500,
             easing = androidx.compose.animation.core.FastOutSlowInEasing), label = "rewind")
     val shader = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(REWIND_KNOB_AGSL) else null }
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable(onClick = onTap).padding(4.dp)) {
+    Box(Modifier.clickable(onClick = onTap), contentAlignment = Alignment.Center) {
         Canvas(Modifier.size(58.dp)) {
             // the drum's shadow on the leather
             drawCircle(Brush.radialGradient(listOf(Color.Black.copy(alpha = 0.55f), Color.Transparent), center + Offset(2f, 4f), size.minDimension * 0.56f),
