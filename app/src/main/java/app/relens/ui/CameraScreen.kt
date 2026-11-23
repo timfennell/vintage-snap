@@ -369,7 +369,9 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
             .drawBehind { with(Leatherette) { draw(leather) } }
             .padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                DeckButton("BAG", Modifier) { openBag() }
+                // the film rewind knob (the lens bag opens from the lens's name up top): turns as the
+                // film winds on; a tap opens the film (rewinding is how a roll comes out)
+                FilmRewindKnob(body.counterShows) { openFilm(); haptics.click() }
                 if (body.parallaxAvailable) {
                     Spacer(Modifier.width(12.dp))
                     @Suppress("UNUSED_VARIABLE") val tick = body.focusLearnTick
@@ -1249,5 +1251,32 @@ private fun BrassLightSensor() {
         }
         if (sensor != null) sm.registerListener(listener, sensor, android.hardware.SensorManager.SENSOR_DELAY_UI)
         onDispose { sm.unregisterListener(listener) }
+    }
+}
+
+
+/** The film rewind knob in polished brass, turning a step with every frame wound on. */
+@Composable
+private fun FilmRewindKnob(frame: Int, onTap: () -> Unit) {
+    val angle by animateFloatAsState(frame * -240f,
+        androidx.compose.animation.core.tween(durationMillis = 600, delayMillis = 500,
+            easing = androidx.compose.animation.core.FastOutSlowInEasing), label = "rewind")
+    val shader = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(REWIND_KNOB_AGSL) else null }
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable(onClick = onTap).padding(4.dp)) {
+        Canvas(Modifier.size(58.dp)) {
+            // the drum's shadow on the leather
+            drawCircle(Brush.radialGradient(listOf(Color.Black.copy(alpha = 0.55f), Color.Transparent), center + Offset(2f, 4f), size.minDimension * 0.56f),
+                size.minDimension * 0.56f, center + Offset(2f, 4f))
+            if (shader != null) {
+                Chassis.bind(shader)
+                shader.setFloatUniform("iResolution", size.width, size.height)
+                shader.setFloatUniform("uPx", 2f / size.minDimension)
+                shader.setFloatUniform("uKnobAngle", Math.toRadians(angle.toDouble()).toFloat())
+                drawRect(androidx.compose.ui.graphics.ShaderBrush(shader))
+            } else {
+                with(Brass) { disc(center, size.minDimension / 2, pressed = false, rings = true) }
+                rotate(angle) { drawRect(Color(0xFF3A2A12), topLeft = Offset(size.width * 0.15f, size.height * 0.42f), size = androidx.compose.ui.geometry.Size(size.width * 0.7f, size.height * 0.16f)) }
+            }
+        }
     }
 }

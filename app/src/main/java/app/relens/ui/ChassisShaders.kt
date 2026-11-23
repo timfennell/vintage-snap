@@ -243,3 +243,76 @@ half4 main(float2 fragCoord) {
     return half4(col, 1.0);
 }
 """
+
+/**
+ * The film rewind knob, seen from above, in mirror-polished brass: a 45-degree chamfered drum,
+ * its top crossed by the fold-out crank bar sitting in a milled slot, a hinge pin at one end of
+ * it and the rewind arrow engraved and enamelled black on the face. It turns (uKnobAngle) as the
+ * film winds on; the light stays where it is.
+ */
+const val REWIND_KNOB_AGSL = ENV_CORE + """
+uniform float2 iResolution;
+uniform float uPx;
+uniform float uKnobAngle;      // radians
+
+half4 main(float2 p) {
+    float2 uv = (p / iResolution) * 2.0 - 1.0;
+    float r = length(uv);
+    if (r > 1.0 + uPx) return half4(0.0);
+    float ca = cos(uKnobAngle), sa = sin(uKnobAngle);
+    float2 q = float2(ca * uv.x - sa * uv.y, sa * uv.x + ca * uv.y);     // the knob's own frame
+    float2 dir = uv / max(r, 1e-4);
+    float3 N = float3(0.0, 0.0, 1.0);
+    float rough = 0.03;
+    float ao = 1.0;
+    half3 ink = half3(-1.0);
+    if (r > 0.80) {                                          // the chamfer, 45 degrees, polished
+        N = normalize(float3(dir * 0.70, 0.71)); rough = 0.04;
+        // fine knurl on the drum's edge glimpsed past the chamfer
+        float k = 0.5 + 0.5 * sin(atan(q.y, q.x) * 90.0);
+        if (r > 0.95) { N = normalize(float3(dir * 0.9 + float2(-dir.y, dir.x) * (k - 0.5) * 0.4, 0.4)); rough = 0.12; }
+    } else {
+        // the top face, very slightly domed
+        N = normalize(float3(uv * 0.10, 1.0));
+        // the milled slot the crank bar lies in: a channel along the knob's x
+        float slotW = 0.30;
+        if (abs(q.y) < slotW && abs(q.x) < 0.78) {
+            float e = abs(q.y) / slotW;
+            // the bar itself, raised in the slot, its long edges rounded
+            if (abs(q.y) < slotW * 0.72 && q.x > -0.70 && q.x < 0.74) {
+                float b = abs(q.y) / (slotW * 0.72);
+                float2 nrm = float2(0.0, sign(q.y) * b * b * 0.8);
+                float2 nw = float2(ca * nrm.x + sa * nrm.y, -sa * nrm.x + ca * nrm.y);
+                N = normalize(float3(nw, 1.0)); rough = 0.03;
+                // the hinge pin at its end: a small dome
+                float pr = length(q - float2(0.52, 0.0));
+                if (pr < 0.11) { float2 pn = (q - float2(0.52, 0.0)) / 0.11; float2 pw = float2(ca * pn.x + sa * pn.y, -sa * pn.x + ca * pn.y); N = normalize(float3(pw * 0.8, 0.6)); }
+                if (abs(pr - 0.11) < uPx * 2.0) ao = 0.5;
+                // the finger dimple at the free end
+                float dr = length(q - float2(-0.48, 0.0));
+                if (dr < 0.10) { float2 dn = -(q - float2(-0.48, 0.0)) / 0.10; float2 dw = float2(ca * dn.x + sa * dn.y, -sa * dn.x + ca * dn.y); N = normalize(float3(dw * 0.5, 0.9)); }
+            } else {
+                ao = 0.18 + 0.2 * e;                         // the slot's dark gap round the bar
+            }
+        }
+        // the engraved rewind arrow: an arc round the face with a head, black enamel
+        float ar = length(q); float an = atan(q.y, q.x);
+        if (abs(q.y) > slotW + 0.03) {
+            float band = abs(ar - 0.58);
+            if (band < 0.035 && an > 0.5 && an < 2.4) ink = half3(0.02);
+            // the head at the arc's end
+            float2 h0 = float2(cos(2.4), sin(2.4)) * 0.58;
+            float2 dh = q - h0;
+            float2 t = float2(-sin(2.4), cos(2.4));          // along the arc
+            float2 nn = float2(cos(2.4), sin(2.4));          // across it
+            float u = dot(dh, t); float w = abs(dot(dh, nn));
+            if (u > 0.0 && u < 0.16 && w < (0.16 - u) * 0.7) ink = half3(0.02);
+        }
+    }
+    half3 col = toBrass(evalEnvironment(N, rough)) * ao;
+    if (ink.r >= 0.0) col = mix(col, ink + half3(0.03) * evalEnvironment(N, 0.1).r, 0.92);     // enamel keeps a faint gloss
+    float a = smoothstep(1.0 + uPx, 1.0 - uPx, r);
+    // the drum's shadow edge outside the knob is left to the deck
+    return half4(col * a, a);
+}
+"""
