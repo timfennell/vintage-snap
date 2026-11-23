@@ -776,7 +776,6 @@ private fun ShutterRelease(busy: Boolean, onRelease: () -> Unit) {
                 shader.setFloatUniform("uEnamel", 0f)
                 drawRect(androidx.compose.ui.graphics.ShaderBrush(shader))
             } else with(Brass) { release(center, size.minDimension / 2, pressed = pressed) }
-            if (busy) drawCircle(Palette.led.copy(alpha = 0.8f), size.minDimension / 2 - 1.dp.toPx(), style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
         }
     }
 }

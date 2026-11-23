@@ -209,6 +209,17 @@ half4 main(float2 p) {
     float3 N = float3(0.0, 0.0, 1.0);
     float rough = 0.03;
     float ao = 1.0;
+    // pressed, the button (inside the collar) sinks: it is seen smaller and a touch lower, the
+    // seating groove widening round it; the collar doesn't move
+    if (r <= 0.845) {
+        float2 ub = (uv - float2(0.0, 0.035 * uPressed)) * (1.0 + 0.10 * uPressed);
+        float rb = length(ub);
+        if (rb > 0.845) {                                // the widened groove: dark
+            half3 g = toMetal(evalEnvironment(normalize(float3(dir * 0.6, 0.8)), 0.3)) * 0.18;
+            return half4(g, 1.0);
+        }
+        uv = ub; r = rb; dir = uv / max(r, 1e-4);
+    }
     if (r > 0.95) {                                  // the outer chamfer, falling away
         N = normalize(float3(dir * 0.75, 0.66)); rough = 0.06;
     } else if (r > 0.885) {                          // the collar's flat top: satin
