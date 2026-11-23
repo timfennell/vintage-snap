@@ -403,7 +403,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
             // the right cluster: counter and DOF stacked, the shutter release beside them
             at(W * 0.69f, mid - 28.dp, 46.dp, 46.dp) { FrameCounter(body.counterShows, body.stock.exposures, Modifier.clickable { openFilm() }) }
             at(W * 0.69f, mid + 18.dp, 34.dp, 34.dp) { DofButton(body.dofPreview) { held -> body.dofPreview = held; if (held) haptics.tick() } }
-            at(W * 0.69f, mid + 42.dp, 44.dp, 16.dp) { DeckLabel("DOF") }
+            at(W * 0.69f, mid + 42.dp, 60.dp, 16.dp) { DeckLabel("DOF") }
             // the film plane mark, engraved by the winder
             at(W * 0.125f + 42.dp, mid + 46.dp, 22.dp, 14.dp) { FilmPlaneMark() }    // toward the back, where the film lies
             at(W * 0.865f, mid - 14.dp, 92.dp, 92.dp) {
@@ -1299,11 +1299,12 @@ private fun DeckLabel(text: String) {
     val dens = androidx.compose.ui.platform.LocalDensity.current.density
     val img = remember(text) { Engraving.render(text, Color(0xFF121212), dens * 0.5f, text.hashCode()) }
     Canvas(Modifier.size(width = 60.dp, height = 16.dp)) {
-        val h = 8.5.dp.toPx(); var w = h * img.width / img.height
-        val maxW = size.width
-        val hh2 = if (w > maxW) h * maxW / w else h; w = minOf(w, maxW)
-        drawImage(img, dstOffset = androidx.compose.ui.unit.IntOffset((center.x - w / 2).toInt(), (center.y - hh2 / 2).toInt()),
-            dstSize = androidx.compose.ui.unit.IntSize(w.toInt(), hh2.toInt()))
+        // one scale for every label (each engraving's own bounds differ, so fitting each to a
+        // height would size the letters differently)
+        val k = 1.16f
+        val w = img.width * k; val h = img.height * k
+        drawImage(img, dstOffset = androidx.compose.ui.unit.IntOffset((center.x - w / 2).toInt(), (center.y - h / 2).toInt()),
+            dstSize = androidx.compose.ui.unit.IntSize(w.toInt(), h.toInt()))
     }
 }
 
@@ -1349,7 +1350,7 @@ private fun WaistLevelViewer(last: DarkroomEntry?, onOpen: () -> Unit) {
     val bezel = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(VIEWER_BEZEL_AGSL) else null }
     Box(Modifier.fillMaxSize().clickable(onClick = onOpen), contentAlignment = Alignment.Center) {
         // the picture, sunk under the frame (its edges darkened, as a ground glass seen from above)
-        Box(Modifier.fillMaxSize(0.80f).clip(RoundedCornerShape(2.dp)).background(Color(0xFF0B0A09)), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxSize(0.75f).clip(RoundedCornerShape(7.dp)).background(Color(0xFF0B0A09)), contentAlignment = Alignment.Center) {
             val bmp = last?.preview
             if (bmp != null) Image(bmp.asImageBitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             else if (last != null && !last.status.startsWith("failed"))
@@ -1364,8 +1365,8 @@ private fun WaistLevelViewer(last: DarkroomEntry?, onOpen: () -> Unit) {
                 bezel.setFloatUniform("iResolution", size.width, size.height)
                 val hh = size.height / 2
                 bezel.setFloatUniform("uPx", 1f / hh)
-                bezel.setFloatUniform("uOpen", size.width * 0.40f / hh, size.height * 0.40f / hh)
-                bezel.setFloatUniform("uFrame", size.height * 0.10f / hh)
+                bezel.setFloatUniform("uOpen", size.width * 0.37f / hh, size.height * 0.37f / hh)
+                bezel.setFloatUniform("uFrame", size.height * 0.10f / hh)   // (outer edge 0.94: its rounded corners stay inside the canvas)
                 drawRect(androidx.compose.ui.graphics.ShaderBrush(bezel))
             } else drawRoundRect(Color(0xFF8E9297), style = androidx.compose.ui.graphics.drawscope.Stroke(size.height * 0.1f),
                 cornerRadius = androidx.compose.ui.geometry.CornerRadius(6.dp.toPx()))

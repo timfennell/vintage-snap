@@ -857,15 +857,15 @@ half4 main(float2 p) {
     float hh = iResolution.y * 0.5;
     float2 uv = (p - iResolution * 0.5) / hh;
     float2 outer = uOpen + uFrame;
-    float o = rrect(uv, outer, 0.10);
+    float o = rrect(uv, outer, 0.22);
     if (o > uPx) return half4(0.0);
-    float io = rrect(uv, uOpen, 0.04);
+    float io = rrect(uv, uOpen, 0.14);
     if (io > 0.0) {
         // the frame: rising from the deck at the outside, chamfered down into the opening
         float t = clamp(io / uFrame, 0.0, 1.0);
         float e = 0.002;
-        float2 g = normalize(float2(rrect(uv + float2(e, 0.0), uOpen, 0.04) - rrect(uv - float2(e, 0.0), uOpen, 0.04),
-                                    rrect(uv + float2(0.0, e), uOpen, 0.04) - rrect(uv - float2(0.0, e), uOpen, 0.04)) + 1e-6);
+        float2 g = normalize(float2(rrect(uv + float2(e, 0.0), uOpen, 0.14) - rrect(uv - float2(e, 0.0), uOpen, 0.14),
+                                    rrect(uv + float2(0.0, e), uOpen, 0.14) - rrect(uv - float2(0.0, e), uOpen, 0.14)) + 1e-6);
         float slope = t < 0.35 ? -(0.35 - t) / 0.35 * 1.1 : (t > 0.75 ? (t - 0.75) / 0.25 * 0.9 : 0.0);
         half3 col = toMetal(evalEnvironment(normalize(float3(g * slope, 0.8)), t > 0.35 && t < 0.75 ? 0.22 : 0.05));
         col *= (t < 0.05) ? 0.35 : 1.0;                       // the dark seam at the opening
@@ -896,7 +896,8 @@ half4 main(float2 p) {
     if (r > 0.82) col = half3(0.02);                                     // the seam in the steel
     else {
         float gr = r / 0.82;
-        half3 body = mix(half3(0.015, 0.05, 0.03), half3(0.12, 0.95, 0.45), uLit * (1.0 - gr * 0.5));
+        // unlit: the lens's own dark green, a little lighter at its middle
+        half3 body = mix(half3(0.05, 0.19, 0.09) * (1.0 - 0.35 * gr), half3(0.12, 0.95, 0.45), uLit * (1.0 - gr * 0.5));
         body += half3(0.6, 1.0, 0.75) * uLit * smoothstep(0.45, 0.0, gr) * 0.5;
         half3 refl = evalEnvironment(float3(0.0, 0.0, 1.0), 0.04);
         col = body + refl * 0.06 * (1.0 - uLit * 0.8);
