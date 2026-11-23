@@ -6,6 +6,7 @@ import androidx.compose.ui.graphics.nativeCanvas
 
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
+import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithCache
 
@@ -386,15 +387,35 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                 DofLever(body.dofPreview) { held -> body.dofPreview = held; if (held) haptics.tick() }
                 Spacer(Modifier.width(12.dp))
                 val last = body.darkroom.firstOrNull()
-                Box(Modifier.size(64.dp).clip(RoundedCornerShape(6.dp)).background(Palette.panel)
-                    .border(1.dp, Palette.panelHi, RoundedCornerShape(6.dp)).clickable { openDarkroom() },
-                    contentAlignment = Alignment.Center) {
-                    val bmp = last?.preview
-                    if (bmp != null) Image(bmp.asImageBitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-                    else if (last != null && !last.status.startsWith("failed"))
-                        // the latest frame in the darkroom: its timer, counting the development down
-                        DarkroomTimerView(last.devStart, last.devSet, Modifier.fillMaxSize().background(Color(0xFF020302)).padding(2.dp))
-                    else Text(if (last != null) "…" else "LIGHT\nTABLE", color = Palette.dim, fontSize = 9.sp, lineHeight = 10.sp)
+                // a loupe set in the body: the latest frame (or its darkroom timer) seen through
+                // a magnifier's glass, in a polished brass bezel with a coated lens's sheen
+                val loupeGlass = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(GLASS_WINDOW_AGSL) else null }
+                val loupeLens = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(LOUPE_LENS_AGSL) else null }
+                Box(Modifier.size(66.dp).clickable { openDarkroom() }, contentAlignment = Alignment.Center) {
+                    Canvas(Modifier.fillMaxSize()) {
+                        drawCircle(Brush.radialGradient(listOf(Color.Black.copy(alpha = 0.55f), Color.Transparent), center + Offset(2f, 4f), size.minDimension * 0.56f),
+                            size.minDimension * 0.56f, center + Offset(2f, 4f))
+                    }
+                    Box(Modifier.fillMaxSize(0.80f).clip(CircleShape).background(Color(0xFF0C0B0A)).graphicsLayer {
+                        if (loupeLens != null) {
+                            loupeLens.setFloatUniform("size", size.width, size.height)
+                            renderEffect = android.graphics.RenderEffect.createRuntimeShaderEffect(loupeLens, "image").asComposeRenderEffect()
+                        }
+                    }, contentAlignment = Alignment.Center) {
+                        val bmp = last?.preview
+                        if (bmp != null) Image(bmp.asImageBitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                        else if (last != null && !last.status.startsWith("failed"))
+                            DarkroomTimerView(last.devStart, last.devSet, Modifier.fillMaxSize().background(Color(0xFF020302)).padding(2.dp))
+                        else Text(if (last != null) "…" else "LIGHT\nTABLE", color = Palette.dim, fontSize = 8.sp, lineHeight = 9.sp)
+                    }
+                    if (loupeGlass != null) Canvas(Modifier.fillMaxSize()) {
+                        Chassis.bind(loupeGlass)
+                        loupeGlass.setFloatUniform("iResolution", size.width, size.height)
+                        loupeGlass.setFloatUniform("uPx", 2f / size.height)
+                        loupeGlass.setFloatUniform("uRound", 1f)
+                        loupeGlass.setFloatUniform("uAr", 1f)
+                        drawRect(androidx.compose.ui.graphics.ShaderBrush(loupeGlass))
+                    }
                 }
             }
         }
@@ -799,76 +820,64 @@ fun dofMarks(lens: Lens, n: Float, s: Float): List<Pair<Float, Color>> {
  */
 @Composable
 private fun ParallaxSwitch(on: Boolean, focus: Pair<Int, Boolean>, onToggle: () -> Unit) {
-    // A pilot jewel, a brass slide switch, PARALLAX engraved in the brass, and the focus
-    // calibration's state on a little drum turning behind a window (it changes: a mechanism).
+    // One satin brass plate: PARALLAX engraved across it, a slot with a polished ball (left off,
+    // right on), and a little round window where a drum shows the focus calibration (?, 1, 2, check).
     val sdk33 = android.os.Build.VERSION.SDK_INT >= 33
-    val jewel = remember { if (sdk33) android.graphics.RuntimeShader(JEWEL_AGSL) else null }
-    val slide = remember { if (sdk33) android.graphics.RuntimeShader(SLIDE_SWITCH_AGSL) else null }
+    val plateSh = remember { if (sdk33) android.graphics.RuntimeShader(PARALLAX_PLATE_AGSL) else null }
     val window = remember { if (sdk33) android.graphics.RuntimeShader(GLASS_WINDOW_AGSL) else null }
-    val lit by animateFloatAsState(if (on) 1f else 0f, androidx.compose.animation.core.tween(220), label = "jewel")
     val knob by animateFloatAsState(if (on) 1f else -1f, androidx.compose.animation.core.spring(dampingRatio = 0.6f, stiffness = 500f), label = "slide")
     val dens = androidx.compose.ui.platform.LocalDensity.current.density
-    val plate = remember { Engraving.render("PARALLAX", Color(0xFF1A1410), dens * 0.62f, 31) }
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable(onClick = onToggle).padding(2.dp)) {
-        Canvas(Modifier.size(13.dp)) {
-            if (jewel != null) {
-                Chassis.bind(jewel)
-                jewel.setFloatUniform("iResolution", size.width, size.height)
-                jewel.setFloatUniform("uPx", 2f / size.minDimension)
-                jewel.setFloatUniform("uLit", lit)
-                // its glow on the leather round it
-                if (lit > 0f) drawCircle(Brush.radialGradient(listOf(Color(0xFF40FF90).copy(alpha = 0.35f * lit), Color.Transparent), radius = size.minDimension * 1.3f), size.minDimension * 1.3f)
-                drawRect(androidx.compose.ui.graphics.ShaderBrush(jewel))
-            } else drawCircle(if (on) Color(0xFF73F2B3) else Color(0xFF1F2A24), size.minDimension / 2.6f)
-        }
-        Spacer(Modifier.height(4.dp))
-        Canvas(Modifier.size(width = 46.dp, height = 22.dp)) {
-            if (slide != null) {
-                Chassis.bind(slide)
-                slide.setFloatUniform("iResolution", size.width, size.height)
-                slide.setFloatUniform("uPx", 2f / size.height)
-                slide.setFloatUniform("uKnob", knob)
-                drawRect(androidx.compose.ui.graphics.ShaderBrush(slide))
-            } else {
-                drawRoundRect(Color(0xFF0A0A09), cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height / 2))
-                drawCircle(Color(0xFFC49A4E), size.height * 0.36f, Offset(size.width / 2 + knob * (size.width / 2 - size.height / 2), size.height / 2))
-            }
-        }
-        Spacer(Modifier.height(3.dp))
-        // PARALLAX, engraved into a small brass plate
-        Canvas(Modifier.size(width = 52.dp, height = 11.dp)) {
-            drawRoundRect(Brush.verticalGradient(listOf(Color(0xFFD9BD7E), Color(0xFF8E6B33))), cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx()))
-            val w = size.width * 0.86f; val h = w * plate.height / plate.width
-            drawImage(plate, dstOffset = androidx.compose.ui.unit.IntOffset((center.x - w / 2).toInt(), (center.y - h / 2).toInt()),
+    val label = remember { Engraving.render("PARALLAX", Color(0xFF1A1410), dens * 0.55f, 31) }
+    val (n, settled) = focus
+    val state = if (settled) 3 else if (on) minOf(n, 2).coerceAtLeast(0) else -1
+    val roll by animateFloatAsState(state.toFloat(), androidx.compose.animation.core.spring(dampingRatio = 0.7f, stiffness = 260f), label = "drum")
+    val pw = 70.dp; val ph = 40.dp
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.size(width = pw, height = ph).clickable(onClick = onToggle)) {
+        val bw = maxWidth; val bh = maxHeight
+        val asp = bw.value / bh.value
+        Canvas(Modifier.fillMaxSize()) {
+            val aspect = size.width / size.height
+            // where things sit, in the shader's units (uv.y -1..1, uv.x -aspect..aspect)
+            val slotY = 0.38f; val slotCx = -0.32f; val slotHalf = 0.42f
+            val win = Offset(aspect - 0.52f, 0.38f)
+            if (plateSh != null) {
+                Chassis.bind(plateSh)
+                plateSh.setFloatUniform("iResolution", size.width, size.height)
+                plateSh.setFloatUniform("uPx", 2f / size.height)
+                plateSh.setFloatUniform("uKnob", knob)
+                plateSh.setFloatUniform("uSlot", slotY, slotHalf)
+                plateSh.setFloatUniform("uSlotCx", slotCx)
+                plateSh.setFloatUniform("uWin", win.x, win.y)
+                drawRect(androidx.compose.ui.graphics.ShaderBrush(plateSh))
+            } else drawRoundRect(Color(0xFFB89452), cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height * 0.14f))
+            // the engraving, across the top
+            val w = size.width * 0.80f; val h = w * label.height / label.width
+            drawImage(label, dstOffset = androidx.compose.ui.unit.IntOffset((center.x - w / 2).toInt(), (size.height * 0.27f - h / 2).toInt()),
                 dstSize = androidx.compose.ui.unit.IntSize(w.toInt(), h.toInt()))
         }
-        Spacer(Modifier.height(3.dp))
-        // the focus calibration's state, on a drum behind a pill window
-        val (n, settled) = focus
-        val state = if (settled) 3 else if (on) minOf(n, 2).coerceAtLeast(0) else -1          // drum stops
-        val roll by animateFloatAsState(state.toFloat(), androidx.compose.animation.core.spring(dampingRatio = 0.7f, stiffness = 260f), label = "drum")
-        Box(Modifier.size(width = 52.dp, height = 15.dp), contentAlignment = Alignment.Center) {
-            val labels = listOf("FOCUS ?" to Palette.amber, "FOCUS 0/3" to Palette.cream, "FOCUS 1/3" to Palette.cream, "FOCUS 2/3" to Palette.cream, "FOCUS ✓" to Color(0xFF73F2B3))
-            Box(Modifier.fillMaxSize().padding(horizontal = 4.dp, vertical = 2.dp).clip(RoundedCornerShape(6.dp)).background(Color(0xFF14110D))) {
-                for ((k, lab) in labels.withIndex()) {
-                    val off = (k - 1) - roll                      // -1.. stops; the drum turns
-                    if (kotlin.math.abs(off) > 1.2f) continue
-                    val ang = off * 60f
-                    Text(lab.first, color = lab.second, fontSize = 6.5.sp, letterSpacing = 0.8.sp, fontWeight = FontWeight.Bold, fontFamily = Futuraish,
-                        modifier = Modifier.align(Alignment.Center).graphicsLayer {
-                            translationY = kotlin.math.sin(Math.toRadians(ang.toDouble())).toFloat() * size.height * 1.1f
-                            rotationX = -ang
-                            alpha = kotlin.math.cos(Math.toRadians(ang.toDouble())).toFloat().coerceIn(0f, 1f)
-                        })
-                }
-                // the drum's curve: darker above and below
-                Canvas(Modifier.fillMaxSize()) { drawRect(Brush.verticalGradient(0f to Color.Black.copy(alpha = 0.75f), 0.35f to Color.Transparent, 0.65f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.75f))) }
+        // the window: a drum turning behind glass
+        // (its centre at uv (aspect - 0.52, 0.38), radius 0.30 of the half-height)
+        val wcx = ((asp - 0.52f) / asp + 1f) / 2f * bw.value; val wcy = (1.38f) / 2f * bh.value; val wr = 0.30f * bh.value / 2f
+        Box(Modifier.align(Alignment.TopStart).offset(x = (wcx - wr).dp, y = (wcy - wr).dp)
+            .size((2 * wr).dp).clip(CircleShape).background(Color(0xFF15110C)), contentAlignment = Alignment.Center) {
+            val glyphs = listOf("?" to Palette.amber, "0" to Palette.cream, "1" to Palette.cream, "2" to Palette.cream, "✓" to Color(0xFF73F2B3))
+            for ((k, g) in glyphs.withIndex()) {
+                val off = (k - 1) - roll
+                if (kotlin.math.abs(off) > 1.2f) continue
+                val ang = off * 60f
+                Text(g.first, color = g.second, fontSize = 7.sp, fontWeight = FontWeight.Bold, fontFamily = Futuraish,
+                    modifier = Modifier.graphicsLayer {
+                        translationY = kotlin.math.sin(Math.toRadians(ang.toDouble())).toFloat() * size.height * 1.2f
+                        rotationX = -ang
+                        alpha = kotlin.math.cos(Math.toRadians(ang.toDouble())).toFloat().coerceIn(0f, 1f)
+                    })
             }
+            Canvas(Modifier.fillMaxSize()) { drawRect(Brush.verticalGradient(0f to Color.Black.copy(alpha = 0.8f), 0.4f to Color.Transparent, 0.6f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.8f))) }
             if (window != null) Canvas(Modifier.fillMaxSize()) {
                 Chassis.bind(window)
                 window.setFloatUniform("iResolution", size.width, size.height)
                 window.setFloatUniform("uPx", 2f / size.height)
-                window.setFloatUniform("uRound", 0f)
+                window.setFloatUniform("uRound", 1f)
                 window.setFloatUniform("uAr", 0f)
                 drawRect(androidx.compose.ui.graphics.ShaderBrush(window))
             }
@@ -1264,6 +1273,14 @@ private object Leatherette {
     fun androidx.compose.ui.graphics.drawscope.DrawScope.draw(tex: androidx.compose.ui.graphics.ImageBitmap) {
         drawRect(androidx.compose.ui.graphics.ShaderBrush(androidx.compose.ui.graphics.ImageShader(tex,
             androidx.compose.ui.graphics.TileMode.Repeated, androidx.compose.ui.graphics.TileMode.Repeated)))
+        // the scene's light on the leather (a faint tint from the finder above), and a soft sheen
+        // that drifts with the tilt across the grain
+        val h = Chassis.horizon
+        drawRect(Color(h[0], h[1], h[2]).copy(alpha = 0.05f), blendMode = androidx.compose.ui.graphics.BlendMode.Plus)
+        val l = BrassLight.dir
+        drawRect(Brush.radialGradient(listOf(Color.White.copy(alpha = 0.045f), Color.Transparent),
+            center = Offset(size.width * (0.5f + l.x * 0.6f), size.height * (0.5f + l.y * 0.8f)), radius = size.width * 0.45f),
+            blendMode = androidx.compose.ui.graphics.BlendMode.Plus)
         // the edge where it meets the barrel: a dark seam and a faint lit lip
         drawRect(Color.Black.copy(alpha = 0.6f), size = androidx.compose.ui.geometry.Size(size.width, 2f))
         drawRect(Color.White.copy(alpha = 0.05f), topLeft = Offset(0f, 2f), size = androidx.compose.ui.geometry.Size(size.width, 1f))

@@ -436,12 +436,79 @@ half4 main(float2 p) {
     float gr = r / 0.80;
     float gz = sqrt(max(1.0 - gr * gr * 0.6, 0.0));
     float3 N = normalize(float3(d / 0.80 * 0.6, gz));
-    float fres = 0.03 + 0.5 * pow(gr, 4.0);
+    float fres = 0.015 + 0.30 * pow(gr, 5.0);
     half3 refl = evalEnvironment(N, 0.02);
-    float sweep = smoothstep(0.10, 0.0, abs(uv.x * 0.7 + uv.y - 0.15 + uLightDir.x * 0.6)) * 0.35;
+    float sweep = smoothstep(0.06, 0.0, abs(uv.x * 0.7 + uv.y - 0.15 + uLightDir.x * 0.6)) * 0.18;
     half3 ar = mix(half3(0.0), mix(half3(0.55, 0.15, 0.55), half3(0.15, 0.55, 0.60), 0.5 + 0.5 * dir.x), smoothstep(0.6, 1.0, gr) * uAr);
-    half3 col = refl * (fres + sweep) + ar * 0.35;
-    float a = clamp(fres + sweep + length(ar) * 0.3, 0.0, 1.0);
+    half3 col = refl * (fres + sweep) + ar * 0.22;
+    float a = clamp((fres + sweep) * 0.8 + length(ar) * 0.15, 0.0, 1.0);
     return half4(col, a);
+}
+"""
+
+/** A loupe's lens on what's under it: magnified toward the middle, pincushioned, colour fringing at the rim, darker at the edge. */
+const val LOUPE_LENS_AGSL = """
+uniform shader image;
+uniform float2 size;
+half4 main(float2 p) {
+    float2 c = size * 0.5;
+    float2 d = (p - c) / c;
+    float r2 = dot(d, d);
+    float k = 0.22;
+    float2 sg = c + (p - c) * (0.82 - k * r2 * 0.4);
+    float2 sr = c + (p - c) * (0.82 - k * r2 * 0.4 - 0.012 * r2);
+    float2 sb = c + (p - c) * (0.82 - k * r2 * 0.4 + 0.012 * r2);
+    half3 col = half3(image.eval(sr).r, image.eval(sg).g, image.eval(sb).b);
+    col *= 1.0 - 0.45 * r2 * r2;
+    return half4(col, 1.0);
+}
+"""
+
+/**
+ * The parallax control as one satin brass plate: a slot cut across it (dark, its walls lit at
+ * the top edge), a polished ball riding in it (uKnob -1 off .. 1 on), and the round seat of the
+ * little window beside it. The label is engraved on top separately.
+ */
+const val PARALLAX_PLATE_AGSL = ENV_CORE + """
+uniform float2 iResolution;
+uniform float uPx;           // a pixel, in plate-height units (uv.y spans -1..1)
+uniform float uKnob;
+uniform float2 uSlot;        // slot: centre y, half length (in uv-x units, measured from slotCx)
+uniform float uSlotCx;
+uniform float2 uWin;         // window centre (uv)
+
+float rrect(float2 p, float2 b, float r) { float2 q = abs(p) - b + r; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r; }
+
+half4 main(float2 p) {
+    float aspect = iResolution.x / iResolution.y;
+    float2 uv = float2((p.x / iResolution.x * 2.0 - 1.0) * aspect, p.y / iResolution.y * 2.0 - 1.0);
+    float plate = rrect(uv, float2(aspect - 0.04, 0.96), 0.28);
+    if (plate > uPx) return half4(0.0);
+    // satin brass, the edges bevelled and polished
+    float3 N = float3(0.0, 0.0, 1.0);
+    float rough = 0.26;
+    if (plate > -0.10) { float2 g = normalize(float2(sign(uv.x) * step(abs(uv.y) * aspect, abs(uv.x)), sign(uv.y) * step(abs(uv.x), abs(uv.y) * aspect)) + 1e-4); N = normalize(float3(g * 0.7, 0.7)); rough = 0.05; }
+    half3 col = toBrass(evalEnvironment(N, rough)) + half3(0.10, 0.075, 0.035);   // satin brass keeps its warmth in the dark
+    // the slot
+    float2 sp = uv - float2(uSlotCx, uSlot.x);
+    float slot = rrect(sp, float2(uSlot.y + 0.30, 0.30), 0.30);
+    if (slot < 0.0) {
+        float depth = smoothstep(0.0, -0.12, slot);
+        col = toBrass(evalEnvironment(float3(0.0, 0.0, 1.0), 0.4)) * 0.10 * (1.0 - depth * 0.5);
+        if (sp.y < 0.0 && slot > -0.08) col += toBrass(evalEnvironment(float3(0.0, 0.7, 0.7), 0.1)) * 0.25;   // the top wall caught by light
+    } else col *= 1.0 - 0.35 * smoothstep(0.08, 0.0, slot);             // the slot's chamfered lip
+    // the ball in the slot
+    float2 kc = float2(uSlotCx + uKnob * uSlot.y, uSlot.x);
+    float2 kd = (uv - kc) / 0.27;
+    float kl = length(kd);
+    if (kl < 1.0) {
+        float3 KN = normalize(float3(kd, sqrt(1.0 - kl * kl)));
+        col = mix(col, toBrass(evalEnvironment(KN, 0.03)), smoothstep(1.0, 1.0 - uPx * 6.0, kl));
+    }
+    // the window's seat: a polished ring sunk into the plate
+    float wr = length(uv - uWin);
+    if (wr < 0.40 && wr > 0.30) { float t = (wr - 0.30) / 0.10; col = toBrass(evalEnvironment(normalize(float3((uv - uWin) / wr * (t - 0.5) * 1.2, 0.8)), 0.04)); }
+    float a = smoothstep(uPx, -uPx, plate);
+    return half4(col * a, a);
 }
 """
