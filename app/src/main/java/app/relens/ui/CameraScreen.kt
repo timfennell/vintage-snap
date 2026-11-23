@@ -394,8 +394,9 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
             at(W * 0.125f, mid, 92.dp, 92.dp) { FilmRewindKnob(body.counterShows) { openFilm(); haptics.click() } }
             // the parallax slide, its label engraved above
             if (body.parallaxAvailable) {
-                // the slide's bottom at the DOF button's (mid + 27): LED 10 + gap 5 + slide 24, centred
-                at(W * 0.335f, mid + 7.5.dp, 60.dp, 48.dp) { ParallaxSlide(body.parallaxOn) { body.toggleParallax(); haptics.click() } }
+                // the slide's ball on the DOF ball's centre line (mid + 18): LED 10 + gap 5 + slide 24
+                // stacked and centred, so the slide's centre is the box's + 7.5
+                at(W * 0.335f, mid + 10.5.dp, 60.dp, 48.dp) { ParallaxSlide(body.parallaxOn) { body.toggleParallax(); haptics.click() } }
                 at(W * 0.335f, mid + 42.dp, 60.dp, 16.dp) { DeckLabel("PRLX") }      // on DOF's line
             }
             // the waist-level viewer onto the light table
