@@ -316,3 +316,132 @@ half4 main(float2 p) {
     return half4(col * a, a);
 }
 """
+
+/** A pilot jewel: a chamfered polished-brass bezel round a domed emerald glass, lit from inside when on. */
+const val JEWEL_AGSL = ENV_CORE + """
+uniform float2 iResolution;
+uniform float uPx;
+uniform float uLit;         // 0..1
+
+half4 main(float2 p) {
+    float2 uv = (p / iResolution) * 2.0 - 1.0;
+    float r = length(uv);
+    if (r > 1.0 + uPx) return half4(0.0);
+    float2 dir = uv / max(r, 1e-4);
+    half3 col;
+    if (r > 0.68) {                                          // the bezel
+        float t = (r - 0.68) / 0.32;
+        float3 N = normalize(float3(dir * (t - 0.35) * 1.3, 0.8));
+        col = toBrass(evalEnvironment(N, 0.04)) * (r < 0.71 ? 0.4 : 1.0);
+    } else {                                                 // the glass dome
+        float gr = r / 0.68;
+        float gz = sqrt(max(1.0 - gr * gr, 0.0));
+        float3 N = normalize(float3(uv / 0.68, gz));
+        half3 glassRefl = evalEnvironment(N, 0.02);
+        float fres = 0.04 + 0.96 * pow(1.0 - gz, 5.0);
+        // inside: dark green unlit; lit, an emerald glow brightest at the centre
+        half3 body = mix(half3(0.02, 0.06, 0.035), half3(0.10, 0.95, 0.45), uLit * (1.0 - gr * 0.65));
+        body += half3(0.6, 1.0, 0.75) * uLit * smoothstep(0.35, 0.0, gr) * 0.6;      // the LED's hot core
+        col = body * (1.0 - fres) + glassRefl * (fres + 0.06);
+        // the sharp glint of the dome
+        float3 L = normalize(float3(uLightDir * 1.1, 0.65));
+        col += half3(1.0) * pow(max(dot(reflect(float3(0.0, 0.0, -1.0), N), L), 0.0), 160.0) * 0.9;
+    }
+    float a = smoothstep(1.0 + uPx, 1.0 - uPx, r);
+    return half4(col * a, a);
+}
+"""
+
+/**
+ * A slide switch: a polished-brass pill bezel round a recessed track of brushed brass (fine
+ * grooves along it), and a polished brass ball that slides along (uKnob -1..1) casting a
+ * contact shadow on the track.
+ */
+const val SLIDE_SWITCH_AGSL = ENV_CORE + """
+uniform float2 iResolution;
+uniform float uPx;          // a pixel, in uv-y units
+uniform float uKnob;        // -1 left .. 1 right
+
+half4 main(float2 p) {
+    float aspect = iResolution.x / iResolution.y;
+    float2 uv = float2((p.x / iResolution.x * 2.0 - 1.0) * aspect, p.y / iResolution.y * 2.0 - 1.0);
+    // distance to the pill (a capsule along x)
+    float hx = aspect - 1.0;
+    float2 c = float2(clamp(uv.x, -hx, hx), 0.0);
+    float2 d = uv - c;
+    float r = length(d);
+    if (r > 1.0 + uPx) return half4(0.0);
+    float2 dir = d / max(r, 1e-4);
+    half3 col;
+    if (r > 0.70) {                                          // the bezel, rounded
+        float t = (r - 0.70) / 0.30;
+        float3 N = normalize(float3(dir * (t - 0.4) * 1.4, 0.75));
+        col = toBrass(evalEnvironment(N, 0.04));
+        col *= (r < 0.73) ? 0.35 : 1.0;                      // the step down into the track
+    } else {                                                 // the brushed track
+        float groove = 0.5 + 0.5 * sin(uv.y * 95.0);
+        float3 N = normalize(float3(0.0, (groove - 0.5) * 0.12, 1.0));
+        col = toBrass(evalEnvironment(N, 0.28)) * 0.62;
+        col *= 0.78 + 0.22 * smoothstep(0.70, 0.40, r);       // shadowed under the bezel's lip
+    }
+    // the ball
+    float2 kc = float2(uKnob * hx, 0.0);
+    float kr = 0.62;
+    float2 kd = (uv - kc) / kr;
+    float kl = length(kd);
+    // its contact shadow, offset away from the light
+    float sh = smoothstep(1.25, 0.7, length(uv - kc - float2(-uLightDir.x, -uLightDir.y) * 0.18) / kr);
+    col *= 1.0 - 0.55 * sh * step(0.70, 0.70 + 0.0) * step(r, 0.70);
+    if (kl < 1.0) {
+        float kz = sqrt(1.0 - kl * kl);
+        float3 N = normalize(float3(kd, kz));
+        half3 ball = toBrass(evalEnvironment(N, 0.03));
+        float ka = smoothstep(1.0, 1.0 - uPx * 2.0 / kr, kl);
+        col = mix(col, ball, ka);
+    }
+    float a = smoothstep(1.0 + uPx, 1.0 - uPx, r);
+    return half4(col * a, a);
+}
+"""
+
+/**
+ * A polished-brass bezel round a little window of curved glass (uRound 1: a circle, 0: a pill),
+ * drawn over what's behind the window: only the bezel and the glass's reflection are painted,
+ * the window's middle left clear. uAr tints the glass's edge with a coated lens's magenta/cyan.
+ */
+const val GLASS_WINDOW_AGSL = ENV_CORE + """
+uniform float2 iResolution;
+uniform float uPx;
+uniform float uRound;
+uniform float uAr;
+
+half4 main(float2 p) {
+    float aspect = iResolution.x / iResolution.y;
+    float2 uv = float2((p.x / iResolution.x * 2.0 - 1.0) * aspect, p.y / iResolution.y * 2.0 - 1.0);
+    float hx = uRound > 0.5 ? 0.0 : aspect - 1.0;
+    float2 c = float2(clamp(uv.x, -hx, hx), 0.0);
+    float2 d = uv - c;
+    float r = length(d);
+    if (r > 1.0 + uPx) return half4(0.0);
+    float2 dir = d / max(r, 1e-4);
+    if (r > 0.80) {                                          // the bezel
+        float t = (r - 0.80) / 0.20;
+        float3 N = normalize(float3(dir * (t - 0.4) * 1.5, 0.7));
+        half3 col = toBrass(evalEnvironment(N, 0.04));
+        col *= (r < 0.83) ? 0.3 : 1.0;
+        float a = smoothstep(1.0 + uPx, 1.0 - uPx, r);
+        return half4(col * a, a);
+    }
+    // the glass: curved, so its reflection grows toward the rim (Fresnel), a sweep across it
+    float gr = r / 0.80;
+    float gz = sqrt(max(1.0 - gr * gr * 0.6, 0.0));
+    float3 N = normalize(float3(d / 0.80 * 0.6, gz));
+    float fres = 0.03 + 0.5 * pow(gr, 4.0);
+    half3 refl = evalEnvironment(N, 0.02);
+    float sweep = smoothstep(0.10, 0.0, abs(uv.x * 0.7 + uv.y - 0.15 + uLightDir.x * 0.6)) * 0.35;
+    half3 ar = mix(half3(0.0), mix(half3(0.55, 0.15, 0.55), half3(0.15, 0.55, 0.60), 0.5 + 0.5 * dir.x), smoothstep(0.6, 1.0, gr) * uAr);
+    half3 col = refl * (fres + sweep) + ar * 0.35;
+    float a = clamp(fres + sweep + length(ar) * 0.3, 0.0, 1.0);
+    return half4(col, a);
+}
+"""

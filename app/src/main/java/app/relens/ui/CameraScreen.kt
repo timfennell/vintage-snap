@@ -799,28 +799,80 @@ fun dofMarks(lens: Lens, n: Float, s: Float): List<Pair<Float, Color>> {
  */
 @Composable
 private fun ParallaxSwitch(on: Boolean, focus: Pair<Int, Boolean>, onToggle: () -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable(onClick = onToggle).padding(4.dp)) {
-        Canvas(Modifier.size(10.dp)) {
-            // a little green lamp, glowing when on (the meter tab's green)
-            val lamp = Color(0xFF73F2B3)
-            if (on) drawCircle(Brush.radialGradient(listOf(lamp.copy(alpha = 0.6f), Color.Transparent), radius = size.minDimension * 1.1f), size.minDimension * 1.1f)
-            drawCircle(if (on) lamp else Color(0xFF1F2A24), size.minDimension / 2.6f)
-            if (on) drawCircle(Color.White.copy(alpha = 0.6f), size.minDimension / 7f, center + Offset(-size.minDimension / 12f, -size.minDimension / 12f))
+    // A pilot jewel, a brass slide switch, PARALLAX engraved in the brass, and the focus
+    // calibration's state on a little drum turning behind a window (it changes: a mechanism).
+    val sdk33 = android.os.Build.VERSION.SDK_INT >= 33
+    val jewel = remember { if (sdk33) android.graphics.RuntimeShader(JEWEL_AGSL) else null }
+    val slide = remember { if (sdk33) android.graphics.RuntimeShader(SLIDE_SWITCH_AGSL) else null }
+    val window = remember { if (sdk33) android.graphics.RuntimeShader(GLASS_WINDOW_AGSL) else null }
+    val lit by animateFloatAsState(if (on) 1f else 0f, androidx.compose.animation.core.tween(220), label = "jewel")
+    val knob by animateFloatAsState(if (on) 1f else -1f, androidx.compose.animation.core.spring(dampingRatio = 0.6f, stiffness = 500f), label = "slide")
+    val dens = androidx.compose.ui.platform.LocalDensity.current.density
+    val plate = remember { Engraving.render("PARALLAX", Color(0xFF1A1410), dens * 0.62f, 31) }
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable(onClick = onToggle).padding(2.dp)) {
+        Canvas(Modifier.size(13.dp)) {
+            if (jewel != null) {
+                Chassis.bind(jewel)
+                jewel.setFloatUniform("iResolution", size.width, size.height)
+                jewel.setFloatUniform("uPx", 2f / size.minDimension)
+                jewel.setFloatUniform("uLit", lit)
+                // its glow on the leather round it
+                if (lit > 0f) drawCircle(Brush.radialGradient(listOf(Color(0xFF40FF90).copy(alpha = 0.35f * lit), Color.Transparent), radius = size.minDimension * 1.3f), size.minDimension * 1.3f)
+                drawRect(androidx.compose.ui.graphics.ShaderBrush(jewel))
+            } else drawCircle(if (on) Color(0xFF73F2B3) else Color(0xFF1F2A24), size.minDimension / 2.6f)
         }
         Spacer(Modifier.height(4.dp))
-        // the lever: up for on
-        Box(Modifier.size(width = 22.dp, height = 34.dp).clip(RoundedCornerShape(11.dp)).background(Color(0xFF0A0A09))
-            .border(1.dp, Palette.panelHi, RoundedCornerShape(11.dp))) {
-            Canvas(Modifier.align(if (on) Alignment.TopCenter else Alignment.BottomCenter).padding(3.dp).size(16.dp)) {
-                with(Brass) { disc(center, size.minDimension / 2, pressed = false, rings = false) }
+        Canvas(Modifier.size(width = 46.dp, height = 22.dp)) {
+            if (slide != null) {
+                Chassis.bind(slide)
+                slide.setFloatUniform("iResolution", size.width, size.height)
+                slide.setFloatUniform("uPx", 2f / size.height)
+                slide.setFloatUniform("uKnob", knob)
+                drawRect(androidx.compose.ui.graphics.ShaderBrush(slide))
+            } else {
+                drawRoundRect(Color(0xFF0A0A09), cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height / 2))
+                drawCircle(Color(0xFFC49A4E), size.height * 0.36f, Offset(size.width / 2 + knob * (size.width / 2 - size.height / 2), size.height / 2))
             }
         }
-        Spacer(Modifier.height(4.dp))
-        Text("PARALLAX", color = if (on) Palette.cream else Palette.dim, fontSize = 7.sp, letterSpacing = 1.sp)
-        // the focus calibration it teaches (on autofocus shots): learning, then settled; a nudge when off and unsettled
+        Spacer(Modifier.height(3.dp))
+        // PARALLAX, engraved into a small brass plate
+        Canvas(Modifier.size(width = 52.dp, height = 11.dp)) {
+            drawRoundRect(Brush.verticalGradient(listOf(Color(0xFFD9BD7E), Color(0xFF8E6B33))), cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx()))
+            val w = size.width * 0.86f; val h = w * plate.height / plate.width
+            drawImage(plate, dstOffset = androidx.compose.ui.unit.IntOffset((center.x - w / 2).toInt(), (center.y - h / 2).toInt()),
+                dstSize = androidx.compose.ui.unit.IntSize(w.toInt(), h.toInt()))
+        }
+        Spacer(Modifier.height(3.dp))
+        // the focus calibration's state, on a drum behind a pill window
         val (n, settled) = focus
-        Text(if (settled) "FOCUS ✓" else if (on) "FOCUS ${minOf(n, 3)}/3" else "FOCUS ?",
-            color = if (settled) Color(0xFF73F2B3) else if (on) Palette.dim else Palette.amber, fontSize = 7.sp, letterSpacing = 1.sp)
+        val state = if (settled) 3 else if (on) minOf(n, 2).coerceAtLeast(0) else -1          // drum stops
+        val roll by animateFloatAsState(state.toFloat(), androidx.compose.animation.core.spring(dampingRatio = 0.7f, stiffness = 260f), label = "drum")
+        Box(Modifier.size(width = 52.dp, height = 15.dp), contentAlignment = Alignment.Center) {
+            val labels = listOf("FOCUS ?" to Palette.amber, "FOCUS 0/3" to Palette.cream, "FOCUS 1/3" to Palette.cream, "FOCUS 2/3" to Palette.cream, "FOCUS ✓" to Color(0xFF73F2B3))
+            Box(Modifier.fillMaxSize().padding(horizontal = 4.dp, vertical = 2.dp).clip(RoundedCornerShape(6.dp)).background(Color(0xFF14110D))) {
+                for ((k, lab) in labels.withIndex()) {
+                    val off = (k - 1) - roll                      // -1.. stops; the drum turns
+                    if (kotlin.math.abs(off) > 1.2f) continue
+                    val ang = off * 60f
+                    Text(lab.first, color = lab.second, fontSize = 6.5.sp, letterSpacing = 0.8.sp, fontWeight = FontWeight.Bold, fontFamily = Futuraish,
+                        modifier = Modifier.align(Alignment.Center).graphicsLayer {
+                            translationY = kotlin.math.sin(Math.toRadians(ang.toDouble())).toFloat() * size.height * 1.1f
+                            rotationX = -ang
+                            alpha = kotlin.math.cos(Math.toRadians(ang.toDouble())).toFloat().coerceIn(0f, 1f)
+                        })
+                }
+                // the drum's curve: darker above and below
+                Canvas(Modifier.fillMaxSize()) { drawRect(Brush.verticalGradient(0f to Color.Black.copy(alpha = 0.75f), 0.35f to Color.Transparent, 0.65f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.75f))) }
+            }
+            if (window != null) Canvas(Modifier.fillMaxSize()) {
+                Chassis.bind(window)
+                window.setFloatUniform("iResolution", size.width, size.height)
+                window.setFloatUniform("uPx", 2f / size.height)
+                window.setFloatUniform("uRound", 0f)
+                window.setFloatUniform("uAr", 0f)
+                drawRect(androidx.compose.ui.graphics.ShaderBrush(window))
+            }
+        }
     }
 }
 
