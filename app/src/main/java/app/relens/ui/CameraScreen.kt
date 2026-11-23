@@ -820,64 +820,64 @@ fun dofMarks(lens: Lens, n: Float, s: Float): List<Pair<Float, Color>> {
  */
 @Composable
 private fun ParallaxSwitch(on: Boolean, focus: Pair<Int, Boolean>, onToggle: () -> Unit) {
-    // One satin brass plate: PARALLAX engraved across it, a slot with a polished ball (left off,
-    // right on), and a little round window where a drum shows the focus calibration (?, 1, 2, check).
+    // A black enamel plate edged in polished brass: a vertical slide switch (up for on), PARALLAX
+    // engraved in the black, and below it a window where a drum behind glass shows the focus
+    // calibration's state.
     val sdk33 = android.os.Build.VERSION.SDK_INT >= 33
-    val plateSh = remember { if (sdk33) android.graphics.RuntimeShader(PARALLAX_PLATE_AGSL) else null }
+    val plateSh = remember { if (sdk33) android.graphics.RuntimeShader(PARALLAX_ENAMEL_AGSL) else null }
     val window = remember { if (sdk33) android.graphics.RuntimeShader(GLASS_WINDOW_AGSL) else null }
     val knob by animateFloatAsState(if (on) 1f else -1f, androidx.compose.animation.core.spring(dampingRatio = 0.6f, stiffness = 500f), label = "slide")
     val dens = androidx.compose.ui.platform.LocalDensity.current.density
-    val label = remember { Engraving.render("PARALLAX", Color(0xFF1A1410), dens * 0.55f, 31) }
+    val label = remember { Engraving.render("PARALLAX", Color(0xFFEDE6D8), dens * 0.5f, 31) }
     val (n, settled) = focus
-    val state = if (settled) 3 else if (on) minOf(n, 2).coerceAtLeast(0) else -1
+    val state = if (settled) 4 else if (on) minOf(n, 2).coerceAtLeast(0) + 1 else 0
     val roll by animateFloatAsState(state.toFloat(), androidx.compose.animation.core.spring(dampingRatio = 0.7f, stiffness = 260f), label = "drum")
-    val pw = 70.dp; val ph = 40.dp
-    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.size(width = pw, height = ph).clickable(onClick = onToggle)) {
-        val bw = maxWidth; val bh = maxHeight
-        val asp = bw.value / bh.value
+    // layout, in units of half the plate's width (the shader's)
+    val slotY = -1.05f; val slotHalf = 0.34f; val slotW = 0.26f
+    val winY = 1.32f; val winHW = 0.80f; val winHH = 0.30f; val seat = 0.10f
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.size(width = 46.dp, height = 98.dp).clickable(onClick = onToggle)) {
+        val u = maxWidth.value / 2f                    // dp per unit
+        val cyDp = maxHeight.value / 2f
         Canvas(Modifier.fillMaxSize()) {
-            val aspect = size.width / size.height
-            // where things sit, in the shader's units (uv.y -1..1, uv.x -aspect..aspect)
-            val slotY = 0.38f; val slotCx = -0.32f; val slotHalf = 0.42f
-            val win = Offset(aspect - 0.52f, 0.38f)
             if (plateSh != null) {
                 Chassis.bind(plateSh)
                 plateSh.setFloatUniform("iResolution", size.width, size.height)
-                plateSh.setFloatUniform("uPx", 2f / size.height)
+                plateSh.setFloatUniform("uPx", 2f / size.width)
                 plateSh.setFloatUniform("uKnob", knob)
-                plateSh.setFloatUniform("uSlot", slotY, slotHalf)
-                plateSh.setFloatUniform("uSlotCx", slotCx)
-                plateSh.setFloatUniform("uWin", win.x, win.y)
+                plateSh.setFloatUniform("uSlot", slotY, slotHalf, slotW)
+                plateSh.setFloatUniform("uWin", winY, winHW, winHH, seat)
                 drawRect(androidx.compose.ui.graphics.ShaderBrush(plateSh))
-            } else drawRoundRect(Color(0xFFB89452), cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height * 0.14f))
-            // the engraving, across the top
-            val w = size.width * 0.80f; val h = w * label.height / label.width
-            drawImage(label, dstOffset = androidx.compose.ui.unit.IntOffset((center.x - w / 2).toInt(), (size.height * 0.27f - h / 2).toInt()),
+            } else {
+                drawRoundRect(Color(0xFF0C0C0C), cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.width * 0.15f))
+                drawCircle(Color(0xFFC49A4E), size.width * 0.12f, Offset(center.x, center.y + (slotY - knob * slotHalf) * size.width / 2))
+            }
+            // PARALLAX, engraved in the black between the switch and the window
+            val w = size.width * 0.84f; val h = w * label.height / label.width
+            drawImage(label, dstOffset = androidx.compose.ui.unit.IntOffset((center.x - w / 2).toInt(), (center.y + 0.32f * size.width / 2 - h / 2).toInt()),
                 dstSize = androidx.compose.ui.unit.IntSize(w.toInt(), h.toInt()))
         }
-        // the window: a drum turning behind glass
-        // (its centre at uv (aspect - 0.52, 0.38), radius 0.30 of the half-height)
-        val wcx = ((asp - 0.52f) / asp + 1f) / 2f * bw.value; val wcy = (1.38f) / 2f * bh.value; val wr = 0.30f * bh.value / 2f
-        Box(Modifier.align(Alignment.TopStart).offset(x = (wcx - wr).dp, y = (wcy - wr).dp)
-            .size((2 * wr).dp).clip(CircleShape).background(Color(0xFF15110C)), contentAlignment = Alignment.Center) {
-            val glyphs = listOf("?" to Palette.amber, "0" to Palette.cream, "1" to Palette.cream, "2" to Palette.cream, "✓" to Color(0xFF73F2B3))
-            for ((k, g) in glyphs.withIndex()) {
-                val off = (k - 1) - roll
+        // the drum behind the window's opening
+        val ow = (2 * winHW * u).dp; val oh = (2 * winHH * u).dp
+        Box(Modifier.align(Alignment.TopStart).offset(x = (maxWidth.value / 2f - winHW * u).dp, y = (cyDp + (winY - winHH) * u).dp)
+            .size(width = ow, height = oh).clip(RoundedCornerShape(50)).background(Color(0xFF16120D)), contentAlignment = Alignment.Center) {
+            val labels = listOf("FOCUS ?" to Palette.amber, "FOCUS 0/3" to Palette.cream, "FOCUS 1/3" to Palette.cream, "FOCUS 2/3" to Palette.cream, "FOCUS ✓" to Color(0xFF73F2B3))
+            for ((k, lab) in labels.withIndex()) {
+                val off = k - roll
                 if (kotlin.math.abs(off) > 1.2f) continue
-                val ang = off * 60f
-                Text(g.first, color = g.second, fontSize = 7.sp, fontWeight = FontWeight.Bold, fontFamily = Futuraish,
+                val ang = off * 62f
+                Text(lab.first, color = lab.second, fontSize = 5.5.sp, letterSpacing = 0.5.sp, fontWeight = FontWeight.Bold, fontFamily = Futuraish, maxLines = 1,
                     modifier = Modifier.graphicsLayer {
                         translationY = kotlin.math.sin(Math.toRadians(ang.toDouble())).toFloat() * size.height * 1.2f
                         rotationX = -ang
                         alpha = kotlin.math.cos(Math.toRadians(ang.toDouble())).toFloat().coerceIn(0f, 1f)
                     })
             }
-            Canvas(Modifier.fillMaxSize()) { drawRect(Brush.verticalGradient(0f to Color.Black.copy(alpha = 0.8f), 0.4f to Color.Transparent, 0.6f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.8f))) }
+            Canvas(Modifier.fillMaxSize()) { drawRect(Brush.verticalGradient(0f to Color.Black.copy(alpha = 0.85f), 0.38f to Color.Transparent, 0.62f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.85f))) }
             if (window != null) Canvas(Modifier.fillMaxSize()) {
                 Chassis.bind(window)
                 window.setFloatUniform("iResolution", size.width, size.height)
                 window.setFloatUniform("uPx", 2f / size.height)
-                window.setFloatUniform("uRound", 1f)
+                window.setFloatUniform("uRound", 0f)
                 window.setFloatUniform("uAr", 0f)
                 drawRect(androidx.compose.ui.graphics.ShaderBrush(window))
             }
@@ -980,9 +980,7 @@ private fun DofLever(held: Boolean, onHeld: (Boolean) -> Unit) {
         .pointerInput(Unit) { detectTapGestures(onPress = { onHeld(true); tryAwaitRelease(); onHeld(false) }) }) {
         Spacer(Modifier.height(14.dp))
         val shader = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(SOFT_RELEASE_AGSL) else null }
-        val label = remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
         val dens = androidx.compose.ui.platform.LocalDensity.current.density
-        if (label.value == null) label.value = Engraving.render("DOF", Color(0xFFEDE6D8), dens, 77)
         val press by animateFloatAsState(if (held) 1f else 0f, label = "dofpress")
         Canvas(Modifier.size(34.dp).scale(1f - 0.06f * press)) {
             if (shader != null) {
@@ -993,12 +991,21 @@ private fun DofLever(held: Boolean, onHeld: (Boolean) -> Unit) {
                 shader.setFloatUniform("uSocket", 0f)
                 drawRect(androidx.compose.ui.graphics.ShaderBrush(shader))
             } else with(Brass) { disc(center, size.minDimension / 2, pressed = held, rings = true) }
-            // DOF, engraved and enamelled in the button's face
-            label.value?.let { img ->
-                val w = size.width * 0.50f; val h = w * img.height / img.width
-                drawImage(img, dstOffset = androidx.compose.ui.unit.IntOffset((center.x - w / 2).toInt(), (center.y - h / 2).toInt()),
-                    dstSize = androidx.compose.ui.unit.IntSize(w.toInt(), h.toInt()), alpha = 0.92f)
-            }
+        }
+        Spacer(Modifier.height(5.dp))
+        // DOF, engraved and enamelled on a small black plate below the button
+        val plateSh = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(LABEL_PLATE_AGSL) else null }
+        val dofLabel = remember { Engraving.render("DOF", Color(0xFFEDE6D8), dens * 0.62f, 78) }
+        Canvas(Modifier.size(width = 34.dp, height = 14.dp)) {
+            if (plateSh != null) {
+                Chassis.bind(plateSh)
+                plateSh.setFloatUniform("iResolution", size.width, size.height)
+                plateSh.setFloatUniform("uPx", 2f / size.height)
+                drawRect(androidx.compose.ui.graphics.ShaderBrush(plateSh))
+            } else drawRoundRect(Color(0xFF0C0C0C), cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height * 0.4f))
+            val h = size.height * 0.62f; val w = h * dofLabel.width / dofLabel.height
+            drawImage(dofLabel, dstOffset = androidx.compose.ui.unit.IntOffset((center.x - w / 2).toInt(), (center.y - h / 2).toInt()),
+                dstSize = androidx.compose.ui.unit.IntSize(w.toInt(), h.toInt()))
         }
     }
 }

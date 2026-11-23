@@ -512,3 +512,96 @@ half4 main(float2 p) {
     return half4(col * a, a);
 }
 """
+
+/**
+ * The parallax control on a black enamel plate (portrait), its edge a polished brass chamfer:
+ * a vertical slot lined in brass with a polished ball riding in it (uKnob -1 down/off .. 1 up/on),
+ * and below, the polished brass seat of a pill window. Units: half the plate's width.
+ */
+const val PARALLAX_ENAMEL_AGSL = ENV_CORE + """
+uniform float2 iResolution;
+uniform float uPx;           // a pixel, in these units
+uniform float uKnob;
+uniform float3 uSlot;        // centre y, half length, half width
+uniform float4 uWin;         // centre y, half width, half height (of the opening), seat width
+
+float rrect(float2 p, float2 b, float r) { float2 q = abs(p) - b + r; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r; }
+
+half4 main(float2 p) {
+    float hw = iResolution.x * 0.5;
+    float2 uv = (p - iResolution * 0.5) / hw;
+    float hh = iResolution.y / iResolution.x;
+    float plate = rrect(uv, float2(0.97, hh - 0.03), 0.30);
+    if (plate > uPx) return half4(0.0);
+    half3 col;
+    if (plate > -0.10) {
+        // the polished brass chamfer round the plate's edge
+        float2 g = normalize(float2(abs(uv.x) > 0.97 - 0.30 ? sign(uv.x) : 0.0, abs(uv.y) > hh - 0.33 ? sign(uv.y) : 0.0) + float2(sign(uv.x) * 1e-3, 0.0));
+        float3 N = normalize(float3(g * 0.75, 0.66));
+        col = toBrass(evalEnvironment(N, 0.04));
+    } else {
+        // glossy black enamel: deep, only the bright parts of the world in it
+        half3 e = evalEnvironment(float3(0.0, 0.0, 1.0), 0.18);
+        col = half3(0.014, 0.015, 0.017) + e * e * 0.18;
+    }
+    // the slot, lined in brass
+    float2 sp = uv - float2(0.0, uSlot.x);
+    float slot = rrect(sp, float2(uSlot.z, uSlot.y + uSlot.z), uSlot.z);
+    if (slot < 0.0) {
+        col = half3(0.012, 0.010, 0.008);                                   // its dark depth
+    } else if (slot < 0.10) {
+        float t = slot / 0.10;
+        float2 g = normalize(sp - float2(0.0, clamp(sp.y, -uSlot.y, uSlot.y)) + 1e-4);
+        col = toBrass(evalEnvironment(normalize(float3(-g * (1.0 - t) * 0.9, 0.6)), 0.05));
+    }
+    // the ball
+    float2 kc = float2(0.0, uSlot.x - uKnob * uSlot.y);
+    float kr = uSlot.z * 0.92;
+    float2 kd = (uv - kc) / kr;
+    float kl = length(kd);
+    // its shadow on the slot's floor
+    if (slot < 0.0) col *= 1.0 - 0.5 * smoothstep(1.4, 0.8, length(uv - kc + uLightDir * 0.12) / kr);
+    if (kl < 1.0) {
+        float3 KN = normalize(float3(kd, sqrt(1.0 - kl * kl)));
+        col = mix(col, toBrass(evalEnvironment(KN, 0.03)), smoothstep(1.0, 1.0 - uPx * 3.0 / kr, kl));
+    }
+    // the window's polished seat (its opening is left to the drum behind)
+    float2 wp = uv - float2(0.0, uWin.x);
+    float wo = rrect(wp, uWin.yz, uWin.z);
+    if (wo > 0.0 && wo < uWin.w) {
+        float t = wo / uWin.w;
+        float2 g = normalize(wp - float2(clamp(wp.x, -uWin.y + uWin.z, uWin.y - uWin.z), 0.0) + 1e-4);
+        col = toBrass(evalEnvironment(normalize(float3(g * (t - 0.45) * 1.4, 0.7)), 0.04));
+    }
+    float a = smoothstep(uPx, -uPx, plate);
+    if (wo < 0.0) a = 0.0;                                                  // the opening: see through to the drum
+    return half4(col * a, a);
+}
+"""
+
+/** A small label plate: glossy black enamel, edged with a polished brass chamfer (the label is engraved on it separately). */
+const val LABEL_PLATE_AGSL = ENV_CORE + """
+uniform float2 iResolution;
+uniform float uPx;           // a pixel, in half-height units
+
+float rrect(float2 p, float2 b, float r) { float2 q = abs(p) - b + r; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r; }
+
+half4 main(float2 p) {
+    float hh = iResolution.y * 0.5;
+    float2 uv = (p - iResolution * 0.5) / hh;
+    float hw = iResolution.x / iResolution.y;
+    float plate = rrect(uv, float2(hw - 0.04, 0.96), 0.40);
+    if (plate > uPx) return half4(0.0);
+    half3 col;
+    if (plate > -0.16) {
+        float t = (plate + 0.16) / 0.16;
+        float2 g = normalize(uv - float2(clamp(uv.x, -hw + 0.44, hw - 0.44), 0.0) + 1e-4);
+        col = toBrass(evalEnvironment(normalize(float3(g * (0.3 + t * 0.6), 0.7)), 0.04));
+    } else {
+        half3 e = evalEnvironment(float3(0.0, 0.0, 1.0), 0.18);
+        col = half3(0.014, 0.015, 0.017) + e * e * 0.18;
+    }
+    float a = smoothstep(uPx, -uPx, plate);
+    return half4(col * a, a);
+}
+"""
