@@ -1,6 +1,7 @@
 package app.relens.ui
 
 import android.graphics.RuntimeShader
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -25,6 +26,45 @@ object Chassis {
      * Samples the finder's picture (a small bitmap the live depth already grabbed) into the three
      * bands, eased; only a clear change updates the state (each update redraws the brass).
      */
+    /** The finder's picture, tiny and blurred: the bloom round the glass is made of it. */
+    var glowImage by mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null)
+
+    /** Ticks when [glowImage]'s pixels change (the bitmap is reused). */
+    var glowTick by mutableStateOf(0)
+    private var glowBmp: android.graphics.Bitmap? = null
+    private val glowAcc = FloatArray(24 * 36 * 3)
+    private var glowPrimed = false
+    private val glowPx = IntArray(24 * 36)
+    private val glowMid = android.graphics.Bitmap.createBitmap(24, 36, android.graphics.Bitmap.Config.ARGB_8888)
+    private val glowCv = android.graphics.Canvas(glowMid)
+    private val glowPaint = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG)
+
+    /**
+     * Folds a fresh preview frame into [glowImage]: the part the finder shows ([crop]), shrunk
+     * to 24 x 36, softened (through 8 x 12) and blended over the last ones so the glow moves
+     * smoothly rather than in steps.
+     */
+    fun sampleGlow(bmp: android.graphics.Bitmap, crop: Float) {
+        val w = bmp.width; val h = bmp.height
+        val cw = (w / (1.125f * crop)).toInt().coerceIn(4, w); val ch = (h / crop).toInt().coerceIn(4, h)
+        glowCv.drawBitmap(bmp, android.graphics.Rect((w - cw) / 2, (h - ch) / 2, (w + cw) / 2, (h + ch) / 2), android.graphics.Rect(0, 0, 24, 36), glowPaint)
+        val small = android.graphics.Bitmap.createScaledBitmap(glowMid, 8, 12, true)
+        val soft = android.graphics.Bitmap.createScaledBitmap(small, 24, 36, true); small.recycle()
+        soft.getPixels(glowPx, 0, 24, 0, 0, 24, 36); soft.recycle()
+        val k = if (glowPrimed) 0.40f else 1f
+        for (i in glowPx.indices) {
+            val c = glowPx[i]
+            glowAcc[i * 3] += (((c shr 16) and 0xFF) - glowAcc[i * 3]) * k
+            glowAcc[i * 3 + 1] += (((c shr 8) and 0xFF) - glowAcc[i * 3 + 1]) * k
+            glowAcc[i * 3 + 2] += ((c and 0xFF) - glowAcc[i * 3 + 2]) * k
+            glowPx[i] = (0xFF shl 24) or (glowAcc[i * 3].toInt() shl 16) or (glowAcc[i * 3 + 1].toInt() shl 8) or glowAcc[i * 3 + 2].toInt()
+        }
+        glowPrimed = true
+        val b = glowBmp ?: android.graphics.Bitmap.createBitmap(24, 36, android.graphics.Bitmap.Config.ARGB_8888).also { glowBmp = it; glowImage = it.asImageBitmap() }
+        b.setPixels(glowPx, 0, 24, 0, 0, 24, 36)
+        glowTick++
+    }
+
     fun sample(bmp: android.graphics.Bitmap) {
         val w = bmp.width; val h = bmp.height
         if (w < 4 || h < 4) return

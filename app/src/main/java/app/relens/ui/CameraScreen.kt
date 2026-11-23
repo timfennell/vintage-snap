@@ -97,7 +97,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
     // the prism's halves glide to where the (smoothed) defocus puts them, rather than snapping
     val prismTarget = body.centreD?.let { c -> body.finderFocusD?.let { it - c } } ?: 0f
     val prismShift by animateFloatAsState(prismTarget, androidx.compose.animation.core.spring(dampingRatio = 0.9f, stiffness = 120f), label = "prism")
-    androidx.compose.runtime.DisposableEffect(Unit) { body.startLiveDepth(); onDispose { body.stopLiveDepth() } }
+    androidx.compose.runtime.DisposableEffect(Unit) { body.startLiveDepth(); body.startGlow(); onDispose { body.stopLiveDepth(); body.stopGlow() } }
     // Leaving the app hands the camera back (Android takes it from background apps anyway);
     // coming back opens it again, with nothing left over from the time away.
     val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
@@ -157,9 +157,8 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
     var eyeTop by remember { mutableStateOf(Offset.Zero) }
     Column(Modifier.portraitBody().fillMaxSize().background(Palette.leather)
         .statusBarsPadding().navigationBarsPadding()) {
-      Column(Modifier.weight(1f).onGloballyPositioned { eyeTop = it.boundsInRoot().topLeft }
-          .finderGlow(glass?.translate(-eyeTop))
-          .eyepiece(glass?.translate(-eyeTop), wall = 12.dp)) {
+      Box(Modifier.weight(1f).onGloballyPositioned { eyeTop = it.boundsInRoot().topLeft }) {
+      Column(Modifier.fillMaxSize().eyepiece(glass?.translate(-eyeTop), wall = 12.dp)) {
         // ---- top plate: what's mounted and loaded, the frame counter ----
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f).clickable { openBag() }) {
@@ -300,6 +299,8 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
             Led("${body.framesLeft}", cells = 2)
         }
 
+      }
+      FinderGlowLayer(glass?.translate(-eyeTop), Modifier.matchParentSize(), light = 1f - mirror.value, shakeY = shake.value * androidx.compose.ui.platform.LocalDensity.current.density)
       }
         body.calib?.let { cal -> CalibrationBanner(body, cal, haptics) }
         if (body.collimating || body.collimationNote.isNotEmpty() && body.collimation.isNotEmpty()) Row(

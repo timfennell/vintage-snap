@@ -164,6 +164,21 @@ class Body(app: Application) : AndroidViewModel(app) {
             } finally { est.close() }
         }
     }
+    /** The finder's glow, fed fast (~20 a second) from a tiny snapshot of the preview, while the camera screen is up. */
+    private var glowJob: kotlinx.coroutines.Job? = null
+    fun startGlow() {
+        if (glowJob?.isActive == true) return
+        glowJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
+            while (true) {
+                if (!busy && parallax == null) finderView?.takeIf { it.isAvailable }?.getBitmap(48, 64)?.let { b ->
+                    Chassis.sampleGlow(b, rig.framing.value?.crop ?: 1f); b.recycle()
+                }
+                kotlinx.coroutines.delay(80)            // ~12 a second (each grab reads the preview back from the GPU), blended smooth
+            }
+        }
+    }
+    fun stopGlow() { glowJob?.cancel(); glowJob = null }
+
     fun stopLiveDepth() { liveJob?.cancel(); liveJob = null; calibJob?.cancel(); calibJob = null }
 
     /**

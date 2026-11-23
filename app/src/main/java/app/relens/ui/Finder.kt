@@ -1,6 +1,10 @@
 package app.relens.ui
 
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.drawscope.clipRect
 
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.asAndroidPath
@@ -413,29 +417,99 @@ fun Modifier.splitPrism(defocusD: Float?, focalMM: Float, maxAperture: Float): M
  * as soft gradients (cheap: no blur pass), coloured by the scene through the finder: the sky's
  * tone off the top edge, the horizon's off the sides, the ground's off the bottom.
  */
-fun Modifier.finderGlow(glass: androidx.compose.ui.geometry.Rect?): Modifier = this.drawWithContent {
-    drawContent()
-    val g = glass ?: return@drawWithContent
-    if (g.isEmpty) return@drawWithContent
-    fun tone(t: FloatArray, k: Float) = Color(t[0], t[1], t[2]).copy(alpha = k)
-    val sky = Chassis.sky; val hor = Chassis.horizon; val gnd = Chassis.ground
-    val reach = 26.dp.toPx(); val near = 8.dp.toPx()
-    val bright = (0.30f + 0.70f * ((sky.sum() + hor.sum() + gnd.sum()) / 9f)).coerceIn(0.3f, 1f)
-    fun band(c: Color, from: Offset, to: Offset, rect: androidx.compose.ui.geometry.Rect) {
-        val brush = androidx.compose.ui.graphics.Brush.linearGradient(listOf(c, c.copy(alpha = c.alpha * 0.35f), Color.Transparent), from, to)
-        drawRect(brush, rect.topLeft, rect.size, blendMode = androidx.compose.ui.graphics.BlendMode.Plus)
+@androidx.compose.runtime.Composable
+fun FinderGlowLayer(glass: androidx.compose.ui.geometry.Rect?, modifier: Modifier, light: Float = 1f, shakeY: Float = 0f) {
+    val img0 = Chassis.glowImage
+    val tick = Chassis.glowTick                 // redraw as the glow image's pixels change
+    if (Build.VERSION.SDK_INT < 33) return
+    val shader = androidx.compose.runtime.remember { RuntimeShader(GLOW_AGSL) }
+    // The original eyepiece glow (the bloom gathered from just inside the glass's nearest edge,
+    // a tight halo and a broad one, bright lights carrying further, and the walls' reflections),
+    // now read from the small blurred copy of the picture in its own cached layer: computed only
+    // when that copy changes (a few times a second), not with every camera frame.
+    // computed at a quarter of the resolution (it is soft: nothing is lost) and scaled up smoothly
+    val q = 4f
+    androidx.compose.foundation.layout.BoxWithConstraints(modifier) {
+    androidx.compose.foundation.Canvas(Modifier.size(maxWidth / q, maxHeight / q).graphicsLayer {
+        compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen
+        blendMode = androidx.compose.ui.graphics.BlendMode.Plus
+        scaleX = q; scaleY = q
+        transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0f)
+        // the mirror: up, the glass goes dark and so does its light; down, it comes back (and
+        // the glow rides the finder's shake with it)
+        alpha = light.coerceIn(0f, 1f)
+        translationY = shakeY
+    }) {
+        val g0 = glass ?: return@Canvas
+        val g = androidx.compose.ui.geometry.Rect(g0.left / q, g0.top / q, g0.right / q, g0.bottom / q)
+        val img = img0 ?: return@Canvas
+        if (g.isEmpty) return@Canvas
+        @Suppress("UNUSED_EXPRESSION") tick
+        val bs = android.graphics.BitmapShader(img.asAndroidBitmap(), android.graphics.Shader.TileMode.CLAMP, android.graphics.Shader.TileMode.CLAMP)
+        shader.setInputShader("pic", bs)
+        shader.setFloatUniform("picSize", img.width.toFloat(), img.height.toFloat())
+        shader.setFloatUniform("inner", g.left, g.top, g.right, g.bottom)
+        shader.setFloatUniform("wall", 12.dp.toPx() / q)
+        drawRect(androidx.compose.ui.graphics.ShaderBrush(shader))
     }
-    val a = 0.55f * bright
-    // top, sides, bottom: a tight bright spill and a long faint one
-    for ((len, k) in listOf(near to 1f, reach to 0.45f)) {
-        band(tone(sky, a * k), Offset(0f, g.top), Offset(0f, g.top - len), androidx.compose.ui.geometry.Rect(g.left, g.top - len, g.right, g.top))
-        band(tone(gnd, a * k), Offset(0f, g.bottom), Offset(0f, g.bottom + len), androidx.compose.ui.geometry.Rect(g.left, g.bottom, g.right, g.bottom + len))
-        band(tone(hor, a * k), Offset(g.left, 0f), Offset(g.left - len, 0f), androidx.compose.ui.geometry.Rect(g.left - len, g.top, g.left, g.bottom))
-        band(tone(hor, a * k), Offset(g.right, 0f), Offset(g.right + len, 0f), androidx.compose.ui.geometry.Rect(g.right, g.top, g.right + len, g.bottom))
-    }
-    // the corners: round spills joining them
-    for ((c, t) in listOf(g.topLeft to sky, g.topRight to sky, g.bottomLeft to gnd, g.bottomRight to gnd)) {
-        drawCircle(androidx.compose.ui.graphics.Brush.radialGradient(listOf(tone(t, a * 0.7f), Color.Transparent), c, reach), reach, c,
-            blendMode = androidx.compose.ui.graphics.BlendMode.Plus)
     }
 }
+
+private const val GLOW_AGSL = """
+uniform shader pic;          // the finder's picture, small and blurred
+uniform float2 picSize;
+uniform float4 inner;        // the glass, px in this layer
+uniform float wall;
+
+half3 lin(half3 c) { return c * c; }
+half3 srgb(half3 c) { return sqrt(max(c, half3(0))); }
+half3 at(float2 t) {         // a point on the glass -> the small picture
+    float2 uv = (t - inner.xy) / (inner.zw - inner.xy);
+    return pic.eval(clamp(uv, 0.0, 1.0) * picSize).rgb;
+}
+
+// The loupe's bloom (LightTable LOUPE_AGSL), round a rectangle: the light just inside the
+// glass's nearest edge, gathered along it over a span that widens the further out the point
+// is, from two depths inside, squared (bright light carries), spreading as a tight bright halo
+// and a broad warm glow.
+half3 bloom(float2 q, float dist) {
+    float h = inner.w - inner.y;
+    float R = h * 0.5;
+    float2 e = clamp(q, inner.xy, inner.zw);                    // the nearest point of the edge
+    float2 c = (inner.xy + inner.zw) * 0.5;
+    float2 n = normalize(q - e + 1e-3);                          // outward
+    float2 tang = float2(-n.y, n.x);
+    float outR = dist / R;
+    float spread = (0.08 + outR * 2.2) * R;
+    half3 rim = half3(0);
+    for (int i = 0; i < 8; i++) {
+        float fi = (float(i) + 0.5) / 8.0;
+        float depth = (i - (i / 2) * 2 == 0) ? 0.03 : 0.08;
+        float2 t = e - n * depth * R + tang * (fi * 2.0 - 1.0) * spread;
+        rim += lin(at(clamp(t, inner.xy + 1.0, inner.zw - 1.0)));
+    }
+    rim /= 8.0;
+    float b = 0.55 * exp(-outR / 0.035) + 0.22 * exp(-outR / 0.16);
+    return rim * b * half3(1.0, 0.97, 0.92);
+}
+
+half3 walls(float2 q, float dist) {
+    float h = inner.w - inner.y;
+    float2 m = q;
+    if (q.x < inner.x) m.x = inner.x + (inner.x - q.x);
+    if (q.x > inner.z) m.x = inner.z - (q.x - inner.z);
+    if (q.y < inner.y) m.y = inner.y + (inner.y - q.y);
+    if (q.y > inner.w) m.y = inner.w - (q.y - inner.w);
+    return lin(at(m)) * (0.20 * exp(-dist / (h * 0.045)));
+}
+
+half4 main(float2 p) {
+    float2 outv = max(max(inner.xy - p, p - inner.zw), float2(0));
+    float dist = length(outv);
+    float h = inner.w - inner.y;
+    if (dist <= 0.0 || dist > h * 0.3) return half4(0);
+    half3 add = bloom(p, dist);
+    if (dist < wall) add += walls(p, dist) * smoothstep(wall, wall * 0.6, dist);
+    return half4(srgb(add) * 0.32, 1.0);        // subtle
+}
+"""
