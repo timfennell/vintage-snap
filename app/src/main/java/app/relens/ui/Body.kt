@@ -173,9 +173,10 @@ class Body(app: Application) : AndroidViewModel(app) {
      */
     private var calibJob: kotlinx.coroutines.Job? = null
     private var lastLivePair: Pair<Float, Long>? = null
+    private var lastCalibTry = 0L
     private fun startLiveCalibration() {
         if (calibJob?.isActive == true) return
-        calibJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.Default) {
+        calibJob = viewModelScope.launch(liveDispatcher) {          // low priority: the finder's drawing comes first
             while (true) {
                 kotlinx.coroutines.delay(1000)
                 val fr = rig.framing.value ?: continue
@@ -191,9 +192,11 @@ class Body(app: Application) : AndroidViewModel(app) {
                 if (settled < 1200) continue
                 if (state == 4 && settled > 4000) continue
                 val last = lastLivePair
+                if (now - lastCalibTry < 10_000) continue                     // at most a try every ten seconds (Metric3D is heavy)
                 if (last != null && now - last.second < 6000) continue
                 if (last != null && kotlin.math.abs(raw - last.first) < 0.04f && now - last.second < 45_000) continue   // the same view, held
                 val t0 = rig.liveSettledAt
+                lastCalibTry = now
                 val shot = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                     finderView?.takeIf { it.isAvailable }?.getBitmap(384, 512)
                 } ?: continue
@@ -543,9 +546,9 @@ class Body(app: Application) : AndroidViewModel(app) {
      * the table too. Roll and frame come from the note in each print's EXIF; older prints fall
      * back on the sidecar or negative the app kept for them then. Small previews, off the main thread.
      */
-    fun refreshLightTable() { if (!refreshing) { refreshing = true; loadLightTable().invokeOnCompletion { refreshing = false } } }
+    fun refreshLightTable(recent: Int = 48) { if (!refreshing) { refreshing = true; loadLightTable(recent).invokeOnCompletion { refreshing = false } } }
     @Volatile private var refreshing = false
-    private fun loadLightTable() = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+    private fun loadLightTable(recent: Int) = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
         val app = getApplication<Application>()
         val cr = app.contentResolver
         val ms = android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
@@ -568,7 +571,7 @@ class Body(app: Application) : AndroidViewModel(app) {
         class Src(val name: String, val time: Long, val uri: android.net.Uri?, val file: File?)
         val shown = darkroom.toList().mapNotNull { it.uri }.toSet()
         val sources = inGallery.map { Src(it.name.removeSuffix(".jpg"), it.added * 1000, it.uri, null) }
-            .sortedBy { it.time }.takeLast(48).filter { it.uri !in shown }      // only what isn't on the table yet
+            .sortedBy { it.time }.takeLast(recent).filter { it.uri !in shown }      // only what isn't on the table yet
 
         fun note(j: org.json.JSONObject) = DarkroomEntry(j.getInt("frame"), j.optString("label"), j.getInt("roll"), j.optString("stock"), j.optBoolean("bw"))
         val loaded = ArrayList<DarkroomEntry>()
@@ -639,7 +642,7 @@ class Body(app: Application) : AndroidViewModel(app) {
     }
 
     init {
-        refreshLightTable()
+        refreshLightTable(recent = 1)   // the camera's corner needs the newest; the table loads the rest when opened
         // The first focus learning (2026-11-20) paired a stale lock reading with each shot:
         // forget its pairs and put camera 0 back where Tim's collimation left it.
         if (!prefs.getBoolean("aflearn_v2", false)) {
