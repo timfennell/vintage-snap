@@ -141,6 +141,7 @@ class Body(app: Application) : AndroidViewModel(app) {
                     } ?: run { kotlinx.coroutines.delay(300); continue }
                     if (++liveFrames == 6) { runCatching {
                         File(getApplication<Application>().getExternalFilesDir("tests"), "live_src.png").outputStream().use { shot.compress(Bitmap.CompressFormat.PNG, 100, it) } } }
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { Chassis.sample(shot) }   // the scene's colours, for the brass to reflect
                     val map = est.estimate(shot).depth; shot.recycle()
                     // scale: the lens focused at the focus point (autofocus) tells its distance there
                     // (the focus point is in the finder's crop; the map covers the whole preview)

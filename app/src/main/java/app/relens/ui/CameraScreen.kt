@@ -720,9 +720,19 @@ private fun ShutterRelease(busy: Boolean, onRelease: () -> Unit) {
     val s by animateFloatAsState(if (pressed) 0.9f else 1f, label = "shutter")
     Box(Modifier.size(92.dp).clip(CircleShape).background(Brush.radialGradient(listOf(Color(0xFF1A1918), Color(0xFF080808)))),
         contentAlignment = Alignment.Center) {
-        Canvas(Modifier.size(64.dp).scale(s).clip(CircleShape)
+        val press by animateFloatAsState(if (pressed) 1f else 0f, label = "press")
+        val shader = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(SOFT_RELEASE_AGSL) else null }
+        Canvas(Modifier.size(64.dp).scale(s).graphicsLayer { translationY = press * 1.5f * density }.clip(CircleShape)
             .clickable(interactionSource = src, indication = null, onClick = onRelease)) {
-            with(Brass) { release(center, size.minDimension / 2, pressed = pressed) }
+            if (shader != null) {
+                // mirror-polished brass, lit by the shared studio (GPU)
+                Chassis.bind(shader)
+                shader.setFloatUniform("iResolution", size.width, size.height)
+                shader.setFloatUniform("uPx", 2f / size.minDimension)
+                shader.setFloatUniform("uPressed", press)
+                shader.setFloatUniform("uSocket", 1f)
+                drawRect(androidx.compose.ui.graphics.ShaderBrush(shader))
+            } else with(Brass) { release(center, size.minDimension / 2, pressed = pressed) }
             if (busy) drawCircle(Palette.led.copy(alpha = 0.8f), size.minDimension / 2 - 1.dp.toPx(), style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
         }
     }
@@ -903,9 +913,27 @@ private fun DofLever(held: Boolean, onHeld: (Boolean) -> Unit) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(4.dp)
         .pointerInput(Unit) { detectTapGestures(onPress = { onHeld(true); tryAwaitRelease(); onHeld(false) }) }) {
         Spacer(Modifier.height(14.dp))
-        Canvas(Modifier.size(30.dp)) { with(Brass) { disc(center, size.minDimension / 2, pressed = held, rings = true) } }
-        Spacer(Modifier.height(8.dp))
-        Text("DOF", color = if (held) Palette.cream else Palette.dim, fontSize = 7.sp, letterSpacing = 1.sp)
+        val shader = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(SOFT_RELEASE_AGSL) else null }
+        val label = remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+        val dens = androidx.compose.ui.platform.LocalDensity.current.density
+        if (label.value == null) label.value = Engraving.render("DOF", Color(0xFFEDE6D8), dens, 77)
+        val press by animateFloatAsState(if (held) 1f else 0f, label = "dofpress")
+        Canvas(Modifier.size(34.dp).scale(1f - 0.06f * press)) {
+            if (shader != null) {
+                Chassis.bind(shader)
+                shader.setFloatUniform("iResolution", size.width, size.height)
+                shader.setFloatUniform("uPx", 2f / size.minDimension)
+                shader.setFloatUniform("uPressed", press)
+                shader.setFloatUniform("uSocket", 0f)
+                drawRect(androidx.compose.ui.graphics.ShaderBrush(shader))
+            } else with(Brass) { disc(center, size.minDimension / 2, pressed = held, rings = true) }
+            // DOF, engraved and enamelled in the button's face
+            label.value?.let { img ->
+                val w = size.width * 0.50f; val h = w * img.height / img.width
+                drawImage(img, dstOffset = androidx.compose.ui.unit.IntOffset((center.x - w / 2).toInt(), (center.y - h / 2).toInt()),
+                    dstSize = androidx.compose.ui.unit.IntSize(w.toInt(), h.toInt()), alpha = 0.92f)
+            }
+        }
     }
 }
 

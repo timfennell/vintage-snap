@@ -180,7 +180,7 @@ private fun DrawScope.drawBarrel(knurled: Boolean) {
  * wall in shadow, a catch-light along its lower lip, the dark groove, and the enamel in it with
  * a faint gloss, chipped here and there (the groove showing through), some figures more worn.
  */
-private object Engraving {
+internal object Engraving {
     fun render(text: String, colour: Color, density: Float, seed: Int): androidx.compose.ui.graphics.ImageBitmap {
         val rng = kotlin.random.Random(seed)
         val tp = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
