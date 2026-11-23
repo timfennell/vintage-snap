@@ -1334,6 +1334,11 @@ private fun ParallaxSlide(on: Boolean, onToggle: () -> Unit) {
             Canvas(Modifier.requiredSize(width = 24.dp, height = 40.dp).graphicsLayer { rotationZ = 90f }) {
                 if (slide != null) {
                     Chassis.bind(slide)
+                    // the shader is drawn turned a quarter clockwise: give it the world's up and the
+                    // light turned back the other way, so the ball reflects the same world as the rest
+                    val u = BrassLight.up; val l = BrassLight.dir
+                    slide.setFloatUniform("uUp", u.y, -u.x)
+                    slide.setFloatUniform("uLightDir", l.y, -l.x)
                     slide.setFloatUniform("iResolution", size.width, size.height)
                     slide.setFloatUniform("uPx", 2f / size.width)
                     slide.setFloatUniform("uKnob", knob)
