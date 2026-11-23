@@ -66,27 +66,59 @@ uniform float3 uSkyTone;
 uniform float3 uHorizonTone;
 uniform float3 uGroundTone;
 
+float eHash(float2 q) { return fract(sin(dot(q, float2(127.1, 311.7))) * 43758.5453); }
+float eNoise(float2 q) {
+    float2 i = floor(q); float2 f = fract(q);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = eHash(i), b = eHash(i + float2(1.0, 0.0)), c = eHash(i + float2(0.0, 1.0)), d = eHash(i + float2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+float eFbm(float2 q) { return 0.55 * eNoise(q) + 0.28 * eNoise(q * 2.03 + 7.1) + 0.17 * eNoise(q * 4.11 + 3.3); }
+
+// An outdoor world for the metal to mirror: sky and clouds and the sun, a tree line on the
+// horizon, water reflecting the sky below it, grass and earth nearer; tinted by the scene the
+// finder sees. Rougher surfaces see it blurred (detail fades, bands soften).
 half3 evalEnvironment(float3 N, float roughness) {
     float3 R = reflect(float3(0.0, 0.0, -1.0), normalize(N));
     R.xy += uLightDir * 0.55;
     R = normalize(R);
-    half3 skyCol = mix(half3(0.80, 0.83, 0.88), half3(uSkyTone), 0.55);
-    half3 horCol = mix(half3(0.12, 0.13, 0.15), half3(uHorizonTone) * 0.45, 0.50);
-    half3 gndCol = mix(half3(0.28, 0.22, 0.16), half3(uGroundTone) * 0.65, 0.55);
-    float upperMask = smoothstep(-0.08 - roughness * 0.35, 0.12 + roughness * 0.35, -R.y);
-    float lowerMask = smoothstep(0.05 - roughness * 0.30, 0.45 + roughness * 0.30, R.y);
-    half3 env = mix(horCol, skyCol, upperMask);
-    env = mix(env, gndCol, lowerMask * 0.85);
-    // softbox bars overhead: the hard-edged reflections polished metal shows
-    float bars = smoothstep(0.06 + roughness, 0.0, abs(fract(R.x * 1.6 + 0.25) - 0.5) - 0.18) * upperMask;
-    env += half3(0.35, 0.34, 0.32) * bars * (1.0 - roughness);
+    float el = -R.y;                                   // up is up
+    float az = atan(R.x, max(R.z, 0.05));
+    float detail = 1.0 - smoothstep(0.02, 0.45, roughness);
+    half3 skyT = half3(uSkyTone); half3 horT = half3(uHorizonTone); half3 gndT = half3(uGroundTone);
+    // the sky: deeper blue overhead, paler down to the haze; clouds drifting across
+    half3 skyCol = mix(half3(0.72, 0.80, 0.90), half3(0.36, 0.52, 0.78), smoothstep(0.0, 0.8, el));
+    skyCol = mix(skyCol, skyT * 1.1, 0.35);
+    float cl = eFbm(float2(az * 2.2, el * 5.0 + 1.7));
+    float cloud = smoothstep(0.48, 0.78, cl) * smoothstep(0.02, 0.18, el);
+    skyCol = mix(skyCol, half3(0.97, 0.96, 0.93), cloud * (0.35 + 0.65 * detail));
+    skyCol -= half3(0.08) * smoothstep(0.62, 0.9, cl) * cloud * detail;          // their shaded undersides
+    // the tree line: an uneven canopy along the horizon
+    float canopy = 0.035 + 0.11 * eFbm(float2(az * 7.0, 3.1)) + 0.04 * eNoise(float2(az * 23.0, 9.0)) * detail;
+    float tree = smoothstep(canopy + 0.012 + roughness * 0.05, canopy - 0.012 - roughness * 0.05, el) * step(0.0, el + 0.005);
+    half3 treeCol = mix(half3(0.08, 0.13, 0.08), horT * 0.45, 0.35) * (0.75 + 0.5 * eNoise(float2(az * 40.0, el * 60.0)) * detail);
+    // water: a band below the horizon mirroring the sky, broken by ripples
+    float wv = smoothstep(0.0, -0.02, el) * smoothstep(-0.32, -0.20, el);
+    float ripple = eNoise(float2(az * 3.0, el * 90.0)) * detail;
+    float3 Rw = float3(R.x + (ripple - 0.5) * 0.12, -R.y, R.z);
+    half3 waterCol = mix(half3(0.30, 0.42, 0.52), skyCol * 0.85, 0.6) * (0.8 + 0.35 * ripple) + half3(0.05) * step(0.82, ripple);
+    // nearer ground: grass and earth
+    float gr = eFbm(float2(az * 5.0, el * 9.0));
+    half3 grass = mix(half3(0.20, 0.27, 0.12), half3(0.36, 0.30, 0.18), gr) * (0.85 + 0.3 * detail * eNoise(float2(az * 30.0, el * 40.0)));
+    grass = mix(grass, gndT * 0.8, 0.35);
+    half3 env = (el > 0.0) ? skyCol : mix(grass, waterCol, wv);
+    env = mix(env, treeCol, tree);
+    // blur for rough metal: everything drifts toward the scene's average
+    half3 avg = (skyT + horT + gndT) / 3.0 * 0.8 + half3(0.06);
+    env = mix(env, avg, smoothstep(0.15, 0.6, roughness) * 0.6);
+    // the sun, and a soft rim light
     float3 keyDir = normalize(float3(uLightDir.x * 1.1, uLightDir.y * 1.1, 0.65));
     float3 rimDir = normalize(float3(-uLightDir.x * 0.9, -uLightDir.y * 0.4, 0.60));
-    float specExp = mix(72.0, 3.0, roughness * roughness);
-    float specGain = mix(1.20, 0.18, roughness);
+    float specExp = mix(90.0, 3.0, roughness * roughness);
+    float specGain = mix(1.30, 0.18, roughness);
     float keySpec = pow(max(dot(R, keyDir), 0.0), specExp);
     float rimSpec = pow(max(dot(R, rimDir), 0.0), specExp * 0.6);
-    env += half3(1.0, 0.98, 0.94) * (keySpec * specGain + rimSpec * specGain * 0.50);
+    env += half3(1.0, 0.97, 0.90) * (keySpec * specGain + rimSpec * specGain * 0.40);
     return env;
 }
 
@@ -186,6 +218,13 @@ half4 main(float2 fragCoord) {
         float crease = smoothstep(0.0, edge * 2.0, abs(abs(cell.x) - abs(cell.y)));
         N = normalize(N + float3(facet * crease, 0.0));
     }
+    // the surface itself, mapped to the ring (it turns with it): enamel's fine orange-peel
+    // ripple, hairline scratches running round the ring, now and then a deeper one
+    float2 sp = float2(arcX, v * h);
+    float peel = eNoise(sp * 0.45) - 0.5;
+    float hair = eNoise(float2(sp.x * 0.012, sp.y * 1.6)) - 0.5;                 // long, along the ring
+    float deep = smoothstep(0.985, 1.0, eNoise(float2(sp.x * 0.004 + uSeed, sp.y * 0.9)));
+    N = normalize(N + float3(peel * 0.06, peel * 0.06 + hair * 0.10, 0.0));
     // where it wears: the rims, the stud tips, unevenly round the ring
     float rimWear = smoothstep(0.025, 0.0, v) + smoothstep(0.975, 1.0, v);
     float tipWear = smoothstep(0.42, 0.05, apexDist) * uKnurled;
@@ -198,6 +237,7 @@ half4 main(float2 fragCoord) {
     float burnish = smoothstep(0.35, 0.85, wear);
     half3 brass = toBrass(evalEnvironment(N, mix(0.42, 0.05, burnish)));
     half3 col = mix(enamel, brass, smoothstep(0.20, 0.48, wear)) * grooveAO * (0.25 + 0.75 * cylFade);
+    col += half3(0.10, 0.09, 0.08) * deep * cylFade;                                // a deeper scratch catching light
     // the ring's edges: a hairline gap to the next ring
     col *= smoothstep(0.0, uPx * 2.0, v) * smoothstep(1.0, 1.0 - uPx * 2.0, v);
     return half4(col, 1.0);
