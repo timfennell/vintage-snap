@@ -394,15 +394,15 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
             at(W * 0.125f, mid, 92.dp, 92.dp) { FilmRewindKnob(body.counterShows) { openFilm(); haptics.click() } }
             // the parallax slide, its label engraved above
             if (body.parallaxAvailable) {
-                at(W * 0.335f - 6.dp, mid - 16.dp, 50.dp, 14.dp) { DeckLabel("PRLX") }
-                at(W * 0.335f, mid + 4.dp, 60.dp, 30.dp) { ParallaxSlide(body.parallaxOn) { body.toggleParallax(); haptics.click() } }
+                at(W * 0.335f, mid - 2.dp, 60.dp, 48.dp) { ParallaxSlide(body.parallaxOn) { body.toggleParallax(); haptics.click() } }
+                at(W * 0.335f, mid + 32.dp, 60.dp, 16.dp) { DeckLabel("PRLX") }
             }
             // the waist-level viewer onto the light table
             at(W * 0.50f, mid, 70.dp, 100.dp) { WaistLevelViewer(body.darkroom.firstOrNull()) { openDarkroom() } }
             // the right cluster: counter and DOF stacked, the shutter release beside them
             at(W * 0.69f, mid - 28.dp, 46.dp, 46.dp) { FrameCounter(body.counterShows, body.stock.exposures, Modifier.clickable { openFilm() }) }
             at(W * 0.69f, mid + 18.dp, 34.dp, 34.dp) { DofButton(body.dofPreview) { held -> body.dofPreview = held; if (held) haptics.tick() } }
-            at(W * 0.69f, mid + 42.dp, 40.dp, 12.dp) { DeckLabel("DOF") }
+            at(W * 0.69f, mid + 42.dp, 44.dp, 16.dp) { DeckLabel("DOF") }
             // the film plane mark, engraved by the winder
             at(W * 0.125f + 42.dp, mid + 46.dp, 22.dp, 14.dp) { FilmPlaneMark() }    // toward the back, where the film lies
             at(W * 0.865f, mid - 14.dp, 92.dp, 92.dp) {
@@ -1297,8 +1297,8 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.deckShadow(scale: F
 private fun DeckLabel(text: String) {
     val dens = androidx.compose.ui.platform.LocalDensity.current.density
     val img = remember(text) { Engraving.render(text, Color(0xFF121212), dens * 0.5f, text.hashCode()) }
-    Canvas(Modifier.size(width = 60.dp, height = 14.dp)) {
-        val h = 7.dp.toPx(); var w = h * img.width / img.height
+    Canvas(Modifier.size(width = 60.dp, height = 16.dp)) {
+        val h = 8.5.dp.toPx(); var w = h * img.width / img.height
         val maxW = size.width
         val hh2 = if (w > maxW) h * maxW / w else h; w = minOf(w, maxW)
         drawImage(img, dstOffset = androidx.compose.ui.unit.IntOffset((center.x - w / 2).toInt(), (center.y - hh2 / 2).toInt()),
@@ -1306,7 +1306,7 @@ private fun DeckLabel(text: String) {
     }
 }
 
-/** The parallax switch: a horizontal slide cut into the steel (right for on), a green LED set flush beside it. */
+/** The parallax switch: a horizontal slide cut into the steel (right for on), a green LED set flush above it. */
 @Composable
 private fun ParallaxSlide(on: Boolean, onToggle: () -> Unit) {
     val sdk33 = android.os.Build.VERSION.SDK_INT >= 33
@@ -1314,7 +1314,18 @@ private fun ParallaxSlide(on: Boolean, onToggle: () -> Unit) {
     val led = remember { if (sdk33) android.graphics.RuntimeShader(FLUSH_LED_AGSL) else null }
     val knob by animateFloatAsState(if (on) 1f else -1f, androidx.compose.animation.core.spring(dampingRatio = 0.6f, stiffness = 600f), label = "slide")
     val lit by animateFloatAsState(if (on) 1f else 0f, androidx.compose.animation.core.tween(180), label = "led")
-    Row(Modifier.fillMaxSize().clickable(onClick = onToggle), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+    Column(Modifier.fillMaxSize().clickable(onClick = onToggle), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Canvas(Modifier.size(10.dp)) {
+            if (lit > 0f) drawCircle(Brush.radialGradient(listOf(Color(0xFF40FF90).copy(alpha = 0.45f * lit), Color.Transparent), radius = size.minDimension * 1.6f), size.minDimension * 1.6f)
+            if (led != null) {
+                Chassis.bind(led)
+                led.setFloatUniform("iResolution", size.width, size.height)
+                led.setFloatUniform("uPx", 2f / size.minDimension)
+                led.setFloatUniform("uLit", lit)
+                drawRect(androidx.compose.ui.graphics.ShaderBrush(led))
+            } else drawCircle(if (on) Color(0xFF73F2B3) else Color(0xFF1F2A24), size.minDimension / 2)
+        }
+        Spacer(Modifier.height(5.dp))
         // the slide: the vertical slide's shader turned a quarter (up becomes right)
         // (the ball, 0.75 of the half-width of 24 dp: 18 dp across, as the DOF button)
         Box(Modifier.size(width = 40.dp, height = 24.dp), contentAlignment = Alignment.Center) {
@@ -1327,17 +1338,6 @@ private fun ParallaxSlide(on: Boolean, onToggle: () -> Unit) {
                     drawRect(androidx.compose.ui.graphics.ShaderBrush(slide))
                 } else drawRoundRect(Color(0xFF0A0A0A), cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.width / 2))
             }
-        }
-        Spacer(Modifier.width(3.dp))
-        Canvas(Modifier.size(10.dp)) {
-            if (lit > 0f) drawCircle(Brush.radialGradient(listOf(Color(0xFF40FF90).copy(alpha = 0.45f * lit), Color.Transparent), radius = size.minDimension * 1.6f), size.minDimension * 1.6f)
-            if (led != null) {
-                Chassis.bind(led)
-                led.setFloatUniform("iResolution", size.width, size.height)
-                led.setFloatUniform("uPx", 2f / size.minDimension)
-                led.setFloatUniform("uLit", lit)
-                drawRect(androidx.compose.ui.graphics.ShaderBrush(led))
-            } else drawCircle(if (on) Color(0xFF73F2B3) else Color(0xFF1F2A24), size.minDimension / 2)
         }
     }
 }
