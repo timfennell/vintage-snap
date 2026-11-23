@@ -34,6 +34,7 @@ object Chassis {
     private var glowBmp: android.graphics.Bitmap? = null
     private val glowAcc = FloatArray(24 * 36 * 3)
     private var glowPrimed = false
+    private var glowDark = 0
     private val glowPx = IntArray(24 * 36)
     private val glowMid = android.graphics.Bitmap.createBitmap(24, 36, android.graphics.Bitmap.Config.ARGB_8888)
     private val glowCv = android.graphics.Canvas(glowMid)
@@ -51,6 +52,9 @@ object Chassis {
         val small = android.graphics.Bitmap.createScaledBitmap(glowMid, 8, 12, true)
         val soft = android.graphics.Bitmap.createScaledBitmap(small, 24, 36, true); small.recycle()
         soft.getPixels(glowPx, 0, 24, 0, 0, 24, 36); soft.recycle()
+        // (a black frame from the preview isn't the scene: skip it unless the dark lasts)
+        var sum = 0L; for (c in glowPx) sum += ((c shr 16) and 0xFF) + ((c shr 8) and 0xFF) + (c and 0xFF)
+        if (sum / (glowPx.size * 3) < 6 && glowPrimed) { if (++glowDark < 8) return } else glowDark = 0
         val k = if (glowPrimed) 0.40f else 1f
         for (i in glowPx.indices) {
             val c = glowPx[i]
@@ -65,6 +69,7 @@ object Chassis {
         glowTick++
     }
 
+    private var darkRun = 0
     fun sample(bmp: android.graphics.Bitmap) {
         val w = bmp.width; val h = bmp.height
         if (w < 4 || h < 4) return
@@ -83,7 +88,12 @@ object Chassis {
             return if (n == 0) floatArrayOf(0.5f, 0.5f, 0.5f) else floatArrayOf(r / n, g / n, b / n)
         }
         val s = band(0, h * 3 / 8); val m = band(h * 3 / 8, h * 5 / 8); val gr = band(h * 5 / 8, h)
-        fun ease(old: FloatArray, new: FloatArray) = FloatArray(3) { old[it] + (new[it] - old[it]) * 0.35f }
+        // a frame that comes back (near) black while the camera is busy or re-opening isn't the
+        // scene: ignore a sudden collapse unless it lasts (a real dark scene persists)
+        val lum = (s.sum() + m.sum() + gr.sum()) / 9f
+        val was = (sky.sum() + horizon.sum() + ground.sum()) / 9f
+        if (lum < 0.04f || lum < was * 0.4f) { if (++darkRun < 6) return } else darkRun = 0
+        fun ease(old: FloatArray, new: FloatArray) = FloatArray(3) { old[it] + (new[it] - old[it]) * 0.25f }
         fun far(a: FloatArray, b: FloatArray) = (0..2).sumOf { kotlin.math.abs(a[it] - b[it]).toDouble() } > 0.03
         val ns = ease(sky, s); val nm = ease(horizon, m); val ng = ease(ground, gr)
         if (far(ns, sky) || far(nm, horizon) || far(ng, ground)) { sky = ns; horizon = nm; ground = ng }
