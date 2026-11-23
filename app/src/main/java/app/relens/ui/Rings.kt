@@ -77,6 +77,7 @@ fun BarrelRing(
     // each figure engraved once (its own wear), and the ring's scratches, dust and brass-worn spots
     val engraved = remember(labels) { HashMap<Pair<Int, Color>, androidx.compose.ui.graphics.ImageBitmap>() }   // (not keyed on the colour lambda: it's new each recomposition)
     val wear = remember(labels.size, caption) { Wear.make(labels.size, caption.hashCode()) }
+    val barrel = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(BARREL_CYLINDER_AGSL) else null }
 
     Canvas(
         modifier
@@ -105,12 +106,25 @@ fun BarrelRing(
             .pointerInput(onTap) { if (onTap != null) detectTapGestures { onTap() } },
     ) {
         val p = if (position.isNaN()) anim.value else position
-        drawBarrel(knurled)
         val step = spacing.toPx()
         val r = size.width * 0.62f                       // the cylinder's radius, px
         val cx = size.width / 2
-        // the ring's own wear, turning with it: scratches, dust, black paint rubbed through to brass
-        drawWear(wear, p, step, r, cx)
+        if (barrel != null) {
+            // the enamelled, knurled, worn cylinder on the GPU, lit by the shared studio
+            Chassis.bind(barrel)
+            barrel.setFloatUniform("iResolution", size.width, size.height)
+            barrel.setFloatUniform("uRingOffsetPx", p * step)
+            barrel.setFloatUniform("uCylRadius", r)
+            barrel.setFloatUniform("uKnurled", if (knurled) 1f else 0f)
+            barrel.setFloatUniform("uSeed", (labels.size * 1.7f + caption.length) % 6.28f)
+            barrel.setFloatUniform("uPx", 1f / size.height)
+            drawRect(androidx.compose.ui.graphics.ShaderBrush(barrel))
+            drawWear(wear, p, step, r, cx, brassSpots = false)          // scratches and dust on top
+        } else {
+            drawBarrel(knurled)
+            // the ring's own wear, turning with it: scratches, dust, black paint rubbed through to brass
+            drawWear(wear, p, step, r, cx)
+        }
         for ((i, label) in labels.withIndex()) {
             val theta = (i - p) * step / r
             if (abs(theta) > 1.45f) continue
@@ -127,7 +141,7 @@ fun BarrelRing(
             // a minor tick between marks
             val tx = cx + r * sin(theta + 0.5f * step / r)
             if (i < labels.size - 1) drawLine(Palette.engraving.copy(alpha = 0.35f * fade),
-                Offset(tx, size.height * 0.78f), Offset(tx, size.height * 0.88f), 1.5f)
+                Offset(tx, size.height * 0.62f), Offset(tx, size.height * 0.70f), 1.5f)
         }
         // the finder's glow from above, on the ring's upper surface: strongest under the finder's
         // middle and on the near (upper) edge, warm, fading over the cylinder's curve
@@ -269,11 +283,11 @@ private class Wear(val scratches: List<FloatArray>, val dust: List<FloatArray>, 
 
 private val BRASS = Color(0xFFB8914E)
 
-private fun DrawScope.drawWear(w: Wear, p: Float, step: Float, r: Float, cx: Float) {
+private fun DrawScope.drawWear(w: Wear, p: Float, step: Float, r: Float, cx: Float, brassSpots: Boolean = true) {
     fun xAt(m: Float): Float? { val t = (m - p) * step / r; return if (abs(t) > 1.45f) null else cx + r * sin(t) }
     fun fadeAt(m: Float) = cos((m - p) * step / r).coerceIn(0f, 1f)
     // brass showing through at the ring's edges: short, soft-ended wear along the rims
-    for (b in w.brass) {
+    if (brassSpots) for (b in w.brass) {
         val x0 = xAt(b[0]) ?: continue; val x1 = xAt(b[0] + b[2]) ?: continue
         val f = fadeAt(b[0]) * b[3]
         val y = if (b[1] == 0f) size.height * 0.035f else size.height * 0.965f

@@ -141,3 +141,65 @@ half4 main(float2 p) {
     return half4(col * a, a);
 }
 """
+
+/**
+ * A lens ring: a black-enamel cylinder over brass, turning (uRingOffsetPx) under the engraved
+ * figures. In its grip band (uKnurled), staggered rows of square pyramid studs, as on the classic
+ * rubber-and-metal focus rings. Wear in three stages: glossy enamel, dull exposed brass where it
+ * has rubbed through, burnished brass on the stud tips and the rims' edges.
+ */
+const val BARREL_CYLINDER_AGSL = ENV_CORE + """
+uniform float2 iResolution;
+uniform float uRingOffsetPx;
+uniform float uCylRadius;
+uniform float uKnurled;
+uniform float uSeed;
+uniform float uPx;           // a pixel, in v units (0..1 down the ring)
+
+float hash(float2 q) { return fract(sin(dot(q, float2(12.9898, 78.233)) + uSeed) * 43758.5453); }
+
+half4 main(float2 fragCoord) {
+    float w = iResolution.x;
+    float h = iResolution.y;
+    float cx = w * 0.5;
+    float v = fragCoord.y / h;
+    float dx = clamp((fragCoord.x - cx) / uCylRadius, -0.999, 0.999);
+    float theta = asin(dx);
+    float cylFade = cos(theta);
+    float arcX = theta * uCylRadius + uRingOffsetPx;
+    // the barrel's profile: a gentle bulge, rolling off at the rims
+    float ny = (v - 0.5) * 1.15;
+    float3 N = normalize(float3(sin(theta) * 0.85, ny, cos(theta)));
+    float apexDist = 1.0;
+    float grooveAO = 1.0;
+    if (uKnurled > 0.5 && v > 0.74 && v < 0.96) {
+        float gripV = (v - 0.74) / 0.22;
+        float cellSize = (h * 0.22) * 0.5;
+        float row = floor(gripV * 2.0);
+        float2 g = float2(arcX / cellSize + 0.5 * row, gripV * 2.0);     // odd rows half a stud along
+        float2 cell = fract(g) - 0.5;
+        apexDist = max(abs(cell.x), abs(cell.y)) * 2.0;
+        float edge = uPx / 0.11;                                          // a pixel, in cell units
+        grooveAO = mix(1.0, 0.18, smoothstep(0.78 - edge, 1.0, apexDist));
+        float2 facet = (abs(cell.x) > abs(cell.y)) ? float2(sign(cell.x) * 0.95, 0.0) : float2(0.0, sign(cell.y) * 0.95);
+        // soften the facet crease over a pixel or two so the studs don't shimmer
+        float crease = smoothstep(0.0, edge * 2.0, abs(abs(cell.x) - abs(cell.y)));
+        N = normalize(N + float3(facet * crease, 0.0));
+    }
+    // where it wears: the rims, the stud tips, unevenly round the ring
+    float rimWear = smoothstep(0.025, 0.0, v) + smoothstep(0.975, 1.0, v);
+    float tipWear = smoothstep(0.42, 0.05, apexDist) * uKnurled;
+    float organic = 0.40 + 0.60 * (0.55 + 0.45 * sin(arcX * 0.018 + uSeed + sin(arcX * 0.047)))
+                  * (0.7 + 0.3 * hash(floor(float2(arcX * 0.08, v * 30.0))));
+    float wear = clamp((rimWear * 0.85 + tipWear * 0.95) * organic, 0.0, 1.0);
+    // glossy black enamel: deep black, only the bright parts of the studio show in it
+    half3 e = evalEnvironment(N, 0.10);
+    half3 enamel = half3(0.014, 0.015, 0.017) + e * e * 0.16;
+    float burnish = smoothstep(0.35, 0.85, wear);
+    half3 brass = toBrass(evalEnvironment(N, mix(0.42, 0.05, burnish)));
+    half3 col = mix(enamel, brass, smoothstep(0.20, 0.48, wear)) * grooveAO * (0.25 + 0.75 * cylFade);
+    // the ring's edges: a hairline gap to the next ring
+    col *= smoothstep(0.0, uPx * 2.0, v) * smoothstep(1.0, 1.0 - uPx * 2.0, v);
+    return half4(col, 1.0);
+}
+"""
