@@ -1,5 +1,7 @@
 package app.relens.ui
 
+import kotlinx.coroutines.asCoroutineDispatcher
+
 import android.app.Application
 import android.content.Context
 import android.graphics.Bitmap
@@ -120,11 +122,16 @@ class Body(app: Application) : AndroidViewModel(app) {
     /** The depth model for the live finder: the original free-size Depth Anything (models/da2s_fp32.onnx). */
     val liveModel: File get() = File(getApplication<Application>().getExternalFilesDir(null), "models/da2s_fp32.onnx")
 
+    private val liveDispatcher = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); r.run() }, "live-depth")
+    }.let { with(kotlinx.coroutines.Dispatchers) { it.asCoroutineDispatcher() } }
+
     fun startLiveDepth() {
         startLiveCalibration()
         if (liveJob?.isActive == true || !liveModel.exists()) return
-        liveJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.Default) {
-            val est = runCatching { app.relens.engine.DepthEstimator(liveModel, Pair(168, 224)) }
+        // its own low-priority thread, and two threads for the model: the finder's drawing comes first
+        liveJob = viewModelScope.launch(liveDispatcher) {
+            val est = runCatching { app.relens.engine.DepthEstimator(liveModel, Pair(168, 224), threads = 2) }
                 .onFailure { Trace.w("live depth: model didn't load", it) }.getOrNull() ?: return@launch
             try {
                 while (kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]?.isActive == true) {
@@ -151,7 +158,7 @@ class Body(app: Application) : AndroidViewModel(app) {
                     val c = a + b * map.medianAround(0.5f, 0.5f, 0.03f)
                     val prev = centreD
                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { centreD = if (prev == null) c else prev + (c - prev) * 0.4f }
-                    kotlinx.coroutines.delay(40)
+                    kotlinx.coroutines.delay(260)           // three or four maps a second: the prism eases between them
                 }
             } finally { est.close() }
         }

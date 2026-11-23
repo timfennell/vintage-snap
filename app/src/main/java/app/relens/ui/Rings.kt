@@ -75,7 +75,7 @@ fun BarrelRing(
     LaunchedEffect(position) { if (!anim.isRunning && anim.value != position && !position.isNaN()) anim.snapTo(position) }
     val max = (labels.size - 1).coerceAtLeast(0).toFloat()
     // each figure engraved once (its own wear), and the ring's scratches, dust and brass-worn spots
-    val engraved = remember(labels, labelColor) { HashMap<Int, androidx.compose.ui.graphics.ImageBitmap>() }
+    val engraved = remember(labels) { HashMap<Pair<Int, Color>, androidx.compose.ui.graphics.ImageBitmap>() }   // (not keyed on the colour lambda: it's new each recomposition)
     val wear = remember(labels.size, caption) { Wear.make(labels.size, caption.hashCode()) }
 
     Canvas(
@@ -117,7 +117,8 @@ fun BarrelRing(
             val x = cx + r * sin(theta)
             val fade = cos(theta).coerceIn(0f, 1f)
             // engraved and enamel-filled, foreshortened toward the cylinder's sides
-            val img = engraved.getOrPut(i) { Engraving.render(label, labelColor(i), density, i * 7919 + label.hashCode()) }
+            val lc = labelColor(i)
+            val img = engraved.getOrPut(i to lc) { Engraving.render(label, lc, density, i * 7919 + label.hashCode()) }
             val sx = (0.75f + 0.25f * fade) * (0.35f + 0.65f * fade)
             val sy = 0.75f + 0.25f * fade
             val w = img.width * sx; val h = img.height * sy

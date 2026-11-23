@@ -78,10 +78,10 @@ fun depthToBitmap(m: DepthMap): Bitmap {
  * size; the original (free height and width) runs at [size] (height, width of the landscape
  * input, multiples of 14): 770 x 1036 for prints, a small one for the live finder.
  */
-class DepthEstimator(private val model: File, size: Pair<Int, Int> = Pair(770, 1036)) : AutoCloseable {
+class DepthEstimator(private val model: File, size: Pair<Int, Int> = Pair(770, 1036), threads: Int = 4) : AutoCloseable {
     private val env = OrtEnvironment.getEnvironment()
     private val session: OrtSession = OrtSession.SessionOptions().use { o ->
-        o.setIntraOpNumThreads(4)
+        o.setIntraOpNumThreads(threads)
         o.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
         env.createSession(model.absolutePath, o)
     }

@@ -5,7 +5,9 @@ import androidx.compose.ui.graphics.asAndroidPath
 import androidx.compose.ui.graphics.nativeCanvas
 
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithCache
 
 import androidx.compose.ui.layout.layout
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -142,8 +144,20 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
 
     // The ground glass, in screen pixels: the eyepiece effect over the whole body works round it.
     var glass by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
-    Column(Modifier.portraitBody().fillMaxSize().background(Palette.leather).eyepiece(glass, wall = 12.dp)
+    // (the eyepiece shader works on the finder's part of the body only, from the top plate to the
+    // readout: the rings and the deck below aren't redrawn through it with every camera frame)
+    val ringM = body.focusM
+    // While the mirror is up (the frame and the rangefinder sweep), the ring stays on the
+    // subject: the sweep's hops between points aren't the photographer's focus.
+    val liveM = liveD?.let { if (it > 0.01f) 1f / it else Float.POSITIVE_INFINITY }
+    var heldM by remember { mutableStateOf<Float?>(null) }
+    if (!(body.busy || body.sweeping)) heldM = liveM
+    val shownM = ringM ?: heldM
+    var eyeTop by remember { mutableStateOf(Offset.Zero) }
+    Column(Modifier.portraitBody().fillMaxSize().background(Palette.leather)
         .statusBarsPadding().navigationBarsPadding()) {
+      Column(Modifier.weight(1f).onGloballyPositioned { eyeTop = it.boundsInRoot().topLeft }
+          .eyepiece(glass?.translate(-eyeTop), wall = 12.dp)) {
         // ---- top plate: what's mounted and loaded, the frame counter ----
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f).clickable { openBag() }) {
@@ -184,9 +198,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                         if (lens.movement is Movement.Tilt) Movements.tiltDioptres(lens, floatArrayOf(body.tiltX, body.tiltY)) else floatArrayOf(0f, 0f),
                         body.focusX, body.focusY, body.finderFocusD, lens.focalMM, body.fNumber)
                     // the split-image spot and microprism collar at the centre
-                    .splitPrism(prismShift, lens.focalMM, lens.maxAperture)
-                    // a focusing screen is a little soft: its matte grain scatters the image
-                    .groundGlassSoftness())
+                    .splitPrism(prismShift, lens.focalMM, lens.maxAperture))
                 GroundGlass(Modifier.fillMaxSize())
                 // Taps and drags over the finder (a separate layer, so the view's own transform doesn't move them).
                 Box(Modifier.fillMaxSize()
@@ -268,13 +280,6 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
         }
 
         // ---- LED readout under the finder ----
-        val ringM = body.focusM
-        // While the mirror is up (the frame and the rangefinder sweep), the ring stays on the
-        // subject: the sweep's hops between points aren't the photographer's focus.
-        val liveM = liveD?.let { if (it > 0.01f) 1f / it else Float.POSITIVE_INFINITY }
-        var heldM by remember { mutableStateOf<Float?>(null) }
-        if (!(body.busy || body.sweeping)) heldM = liveM
-        val shownM = ringM ?: heldM
         Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
             Led(fLabel(body.fNumber), cells = 3, prefix = "F")
             body.shutterSeconds.let { t -> Led(if (t >= 0.5f) "%.0f".format(t) else "%.0f".format(1f / t), cells = 4, suffix = if (t >= 0.5f) "\"" else "") }
@@ -293,6 +298,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
             Led("${body.framesLeft}", cells = 2)
         }
 
+      }
         body.calib?.let { cal -> CalibrationBanner(body, cal, haptics) }
         if (body.collimating || body.collimationNote.isNotEmpty() && body.collimation.isNotEmpty()) Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -313,7 +319,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
         val focusPos = if (!body.focusPos.isNaN()) body.focusPos else positionFor(lens, shownM ?: 3f)
         val dof = dofMarks(lens, body.fNumber, shownM ?: 3f)
         // how much light the finder casts down on the rings: the scene's brightness through it
-        val finderLight = sceneEV?.let { ((it - 3f) / 9f).coerceIn(0.15f, 1f) } ?: 0.3f
+        val finderLight = sceneEV?.let { (((it - 3f) / 9f).coerceIn(0.15f, 1f) * 10f).roundToInt() / 10f } ?: 0.3f   // in steps: the rings don't redraw at every flicker
         BarrelRing(
             labels = marks.map(::mLabel),
             position = focusPos,
@@ -442,8 +448,15 @@ fun shutterLabel(t: Float): String = if (t >= 0.5f) "%.0f\"".format(t) else "1/%
  * wants. It has mass: it overshoots a little and settles.
  */
 private fun MeterCard(setPos: Float, meterPos: Float, modifier: Modifier) {
-    val needle by animateFloatAsState(meterPos.coerceIn(-1.5f, shutterSpeeds.size + 0.5f),
+    // the needle follows the reading, but not its every flicker (a moving needle redraws the meter)
+    var target by remember { mutableStateOf(meterPos) }
+    if (kotlin.math.abs(meterPos - target) > 0.12f) target = meterPos
+    val needle by animateFloatAsState(target.coerceIn(-1.5f, shutterSpeeds.size + 0.5f),
         androidx.compose.animation.core.spring(dampingRatio = 0.71f, stiffness = 60f), label = "needle")
+    // only the strip's own band of the finder is drawn and shaded (the eyepiece shader is costly per pixel)
+    androidx.compose.foundation.layout.BoxWithConstraints(modifier.fillMaxSize()) {
+    val finderW = constraints.maxWidth.toFloat(); val finderH = constraints.maxHeight.toFloat()
+    val band = Modifier.fillMaxHeight().width(88.dp)
     val measurer = androidx.compose.ui.text.rememberTextMeasurer()
     // A printed scale strip at the frame's left edge, as in the classic finders: it comes in from
     // under the frame's border (the part beyond is in the dark), cream with dark figures, the slow
@@ -460,12 +473,12 @@ private fun MeterCard(setPos: Float, meterPos: Float, modifier: Modifier) {
         }
         android.graphics.Bitmap.createBitmap(px, n, n, android.graphics.Bitmap.Config.ARGB_8888).asImageBitmap()
     }
-    Canvas(modifier.fillMaxSize().graphicsLayer {
+    Canvas(band.graphicsLayer {
         when {
             // the eyepiece: sharp in the middle of the finder, softening toward its corners, with a
             // little lateral colour growing the same way
             android.os.Build.VERSION.SDK_INT >= 33 && ca != null -> {
-                ca.setFloatUniform("size", size.width, size.height)
+                ca.setFloatUniform("size", finderW, finderH)
                 ca.setFloatUniform("maxBlur", 1.8f * density)
                 ca.setFloatUniform("maxShift", 0.7f * density)
                 ca.setFloatUniform("wobble", 0f)
@@ -476,8 +489,8 @@ private fun MeterCard(setPos: Float, meterPos: Float, modifier: Modifier) {
     }) {
         val u = 8.dp.toPx()
         val ink = Color(0xFF2E2A26); val red = Color(0xFFD83A22); val paper = Color(0xFFEFE6D4)
-        val stripH = size.height * 0.62f
-        val strip = androidx.compose.ui.geometry.Rect(Offset(-1.2f * u, (size.height - stripH) / 2), androidx.compose.ui.geometry.Size(5.0f * u, stripH))
+        val stripH = finderH * 0.62f
+        val strip = androidx.compose.ui.geometry.Rect(Offset(-1.2f * u, (finderH - stripH) / 2), androidx.compose.ui.geometry.Size(5.0f * u, stripH))
         val cap = 2.0f * u; val n = shutterSpeeds.size
         val step = (strip.height - 2 * cap) / n
         fun y(i: Float) = strip.top + cap + (n - 1 - i + 0.5f) * step         // fast at the top
@@ -518,12 +531,12 @@ private fun MeterCard(setPos: Float, meterPos: Float, modifier: Modifier) {
     // soft-edged and glowing, a little see-through, with the faint second image a reflection off
     // the far side of the glass leaves.
     val hudBlur = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(EYEPIECE_CA) else null }
-    Canvas(modifier.fillMaxSize().graphicsLayer {
+    Canvas(band.graphicsLayer {
         compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen
         blendMode = androidx.compose.ui.graphics.BlendMode.Plus
         // its focus wanders as it travels along the glass: softer toward the ends, and unevenly so
         if (android.os.Build.VERSION.SDK_INT >= 33 && hudBlur != null) {
-            hudBlur.setFloatUniform("size", size.width, size.height)
+            hudBlur.setFloatUniform("size", finderW, finderH)
             hudBlur.setFloatUniform("maxBlur", 2.6f * density)
             hudBlur.setFloatUniform("maxShift", 0.5f * density)
             hudBlur.setFloatUniform("wobble", 0.85f)
@@ -531,8 +544,8 @@ private fun MeterCard(setPos: Float, meterPos: Float, modifier: Modifier) {
         }
     }) {
         val u = 8.dp.toPx()
-        val stripH = size.height * 0.62f
-        val top = (size.height - stripH) / 2
+        val stripH = finderH * 0.62f
+        val top = (finderH - stripH) / 2
         val cap = 2.0f * u; val n = shutterSpeeds.size
         val step = (stripH - 2 * cap) / n
         val ty = top + cap + (n - 1 - setPos + 0.5f) * step
@@ -551,6 +564,7 @@ private fun MeterCard(setPos: Float, meterPos: Float, modifier: Modifier) {
         drawPath(tri(0.35f * u, -0.22f * u, 0f), hud.copy(alpha = 0.16f))                 // the ghost reflection
         drawPath(tri(0f, 0f, 0f), hud.copy(alpha = 0.78f))                                // the reflected light
         drawPath(tri(0.12f * u, 0f, -0.18f * u), Color(0xFF60FF90).copy(alpha = 0.30f))   // its brighter core
+    }
     }
 }
 
@@ -960,22 +974,26 @@ private fun GroundGlass(modifier: Modifier) {
         }
         android.graphics.Bitmap.createBitmap(px, n, n, android.graphics.Bitmap.Config.ARGB_8888).asImageBitmap()
     }
-    Canvas(modifier) {
-        // the grain, tiled at the screen's own fine scale
-        drawRect(androidx.compose.ui.graphics.ShaderBrush(androidx.compose.ui.graphics.ImageShader(grain,
-            androidx.compose.ui.graphics.TileMode.Repeated, androidx.compose.ui.graphics.TileMode.Repeated)))
-        // brighter in the middle, falling off to the corners (the screen's hot spot)
-        val r = size.maxDimension * 0.75f
-        drawRect(Brush.radialGradient(listOf(Color.White.copy(alpha = 0.05f), Color.Transparent, Color.Black.copy(alpha = 0.22f)),
-            center = center, radius = r))
-        // the Fresnel's rings, barely there
-        val step = 5.5f * density
-        var rad = step
-        while (rad < r) {
-            drawCircle(Color.White.copy(alpha = 0.018f), radius = rad, center = center, style = androidx.compose.ui.graphics.drawscope.Stroke(0.6f * density))
-            rad += step
+    // drawn once per size into a bitmap and reused (the rings are dozens of circles)
+    androidx.compose.foundation.layout.Spacer(modifier.drawWithCache {
+        val w = size.width.toInt().coerceAtLeast(1); val h = size.height.toInt().coerceAtLeast(1)
+        val img = androidx.compose.ui.graphics.ImageBitmap(w, h)
+        val cv = androidx.compose.ui.graphics.Canvas(img)
+        androidx.compose.ui.graphics.drawscope.CanvasDrawScope().draw(this, layoutDirection, cv, size) {
+            drawRect(androidx.compose.ui.graphics.ShaderBrush(androidx.compose.ui.graphics.ImageShader(grain,
+                androidx.compose.ui.graphics.TileMode.Repeated, androidx.compose.ui.graphics.TileMode.Repeated)))
+            val r = size.maxDimension * 0.75f
+            drawRect(Brush.radialGradient(listOf(Color.White.copy(alpha = 0.05f), Color.Transparent, Color.Black.copy(alpha = 0.22f)),
+                center = center, radius = r))
+            val step = 5.5f * density
+            var rad = step
+            while (rad < r) {
+                drawCircle(Color.White.copy(alpha = 0.018f), radius = rad, center = center, style = androidx.compose.ui.graphics.drawscope.Stroke(0.6f * density))
+                rad += step
+            }
         }
-    }
+        onDrawBehind { drawImage(img) }
+    })
 }
 
 /** A hair of softness on the finder's image (Android 12+): the ground surface scatters it. */
@@ -998,17 +1016,17 @@ half4 main(float2 p) {
     float blur = maxBlur * smoothstep(0.55, 1.35, r) * (1.0 + wobble * (0.5 + 0.5 * sin(p.y * 0.021 + 1.3) * sin(p.y * 0.0073 + 0.4)));
     float2 dir = d / max(r, 1e-3);
     float2 sh = dir * maxShift * smoothstep(0.3, 1.4, r);  // red outward, blue inward
+    // a five-tap disc for the softness; the colour fringe from one extra pair of samples
     half4 acc = half4(0);
-    for (int i = 0; i < 9; i++) {
+    for (int i = 0; i < 5; i++) {
         float a = float(i) * 2.39996;
-        float rr = (i == 0) ? 0.0 : blur * sqrt(float(i) / 8.0);
-        float2 o = float2(cos(a), sin(a)) * rr;
-        half4 g = image.eval(p + o);
-        half4 rd = image.eval(p + o - sh);
-        half4 bl = image.eval(p + o + sh);
-        acc += half4(rd.r, g.g, bl.b, max(g.a, max(rd.a, bl.a)));
+        float rr = (i == 0) ? 0.0 : blur * sqrt(float(i) / 4.0);
+        acc += image.eval(p + float2(cos(a), sin(a)) * rr);
     }
-    return acc / 9.0;
+    acc /= 5.0;
+    half4 rd = image.eval(p - sh);
+    half4 bl = image.eval(p + sh);
+    return half4(mix(acc.r, rd.r, 0.5), acc.g, mix(acc.b, bl.b, 0.5), max(acc.a, max(rd.a, bl.a) * 0.5));
 }
 """
 
@@ -1194,11 +1212,11 @@ private fun BrassLightSensor() {
                 val ty = (-0.55f * gy.coerceIn(-1f, 1f) - 0.05f).coerceIn(-0.75f, 0.75f)
                 sx += (tx - sx) * 0.12f; sy += (ty - sy) * 0.12f
                 val d = BrassLight.dir
-                if (kotlin.math.abs(d.x - sx) + kotlin.math.abs(d.y - sy) > 0.004f) BrassLight.dir = Offset(sx, sy)
+                if (kotlin.math.abs(d.x - sx) + kotlin.math.abs(d.y - sy) > 0.012f) BrassLight.dir = Offset(sx, sy)
             }
             override fun onAccuracyChanged(s: android.hardware.Sensor?, a: Int) {}
         }
-        if (sensor != null) sm.registerListener(listener, sensor, android.hardware.SensorManager.SENSOR_DELAY_GAME)
+        if (sensor != null) sm.registerListener(listener, sensor, android.hardware.SensorManager.SENSOR_DELAY_UI)
         onDispose { sm.unregisterListener(listener) }
     }
 }
