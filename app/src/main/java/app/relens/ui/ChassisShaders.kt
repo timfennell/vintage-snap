@@ -820,21 +820,20 @@ half4 main(float2 p) {
         col = half3(0.012, 0.012, 0.013) * (1.0 + 2.0 * smoothstep(-0.25, 0.0, slot));     // the slot's depth
     }
     // the knob
-    float travel = hh - 0.04 - 0.62;
+    float travel = hh - 0.04 - 0.46;
     float2 kc = float2(0.0, -uKnob * travel);
-    float knob = rrect(uv - kc, float2(0.34, 0.52), 0.30);
     // its shadow in the slot
-    col *= 1.0 - 0.45 * smoothstep(0.12, -0.05, rrect(uv - kc + uLightDir * 0.08, float2(0.34, 0.52), 0.30)) * step(slot, 0.0);
-    if (knob < 0.0) {
-        float gy = (uv.y - kc.y) / 0.52;
-        float ridge = 0.5 + 0.5 * cos(gy * 3.14159 * 5.0);     // grip lines across it
-        float edgeT = smoothstep(-0.10, 0.0, knob);
-        float3 N = normalize(float3(0.0, sin(gy * 3.14159 * 5.0) * 0.45, 1.0));
-        float wear = (smoothstep(0.82, 0.98, ridge) * 0.6 + edgeT * 0.8) * (0.6 + 0.4 * sin(uv.x * 9.0 + 1.0));
-        half3 en = enamel(N, 0.10) * (0.6 + 0.4 * ridge);
-        half3 br = toBrass(evalEnvironment(N, mix(0.40, 0.06, smoothstep(0.35, 0.85, wear))));
-        col = mix(en, br, smoothstep(0.30, 0.6, wear));
-        col = mix(col, half3(0.0), smoothstep(-uPx * 2.0, 0.0, knob) * 0.6);
+    col *= 1.0 - 0.5 * smoothstep(0.55, 0.30, length(uv - kc + uLightDir * 0.10)) * step(slot, 0.0);
+    // the knob: a black enamel sphere riding in the slot, its crown worn to brass
+    float2 kd = (uv - kc) / 0.40;
+    float kl = length(kd);
+    if (kl < 1.0) {
+        float3 N = normalize(float3(kd, sqrt(max(1.0 - kl * kl, 0.0))));
+        float2 w = kd - float2(-0.12, -0.18);
+        float patch = smoothstep(0.42, 0.18, length(w * float2(1.0, 1.3)) + 0.06 * sin(atan(w.y, w.x) * 5.0));
+        half3 k = mix(enamel(N, 0.06), toBrass(evalEnvironment(N, 0.10)), patch * 0.85);
+        col = mix(col, k, smoothstep(1.0, 1.0 - uPx * 3.0 / 0.40, kl));
+        a = max(a, smoothstep(1.0, 1.0 - uPx * 3.0 / 0.40, kl));
     }
     return half4(col * a, a);
 }
@@ -901,6 +900,31 @@ half4 main(float2 p) {
         half3 refl = evalEnvironment(float3(0.0, 0.0, 1.0), 0.04);
         col = body + refl * 0.06 * (1.0 - uLit * 0.8);
     }
+    float a = smoothstep(1.0 + uPx, 1.0 - uPx, r);
+    return half4(col * a, a);
+}
+"""
+
+/** A small sphere button in black enamel over brass, its crown worn through to brass where the thumb lands. */
+const val SPHERE_BUTTON_AGSL = ENV_CORE + """
+uniform float2 iResolution;
+uniform float uPx;
+uniform float uPressed;
+
+half3 sphere(float2 d) {
+    float l = length(d);
+    float3 N = normalize(float3(d, sqrt(max(1.0 - l * l, 0.0))));
+    // wear: brass showing at the crown, a soft-edged irregular patch
+    float2 w = d - float2(-0.12, -0.18);
+    float patch = smoothstep(0.42, 0.18, length(w * float2(1.0, 1.3)) + 0.06 * sin(atan(w.y, w.x) * 5.0));
+    return mix(enamel(N, 0.06), toBrass(evalEnvironment(N, 0.10)), patch * 0.85);
+}
+
+half4 main(float2 p) {
+    float2 uv = (p / iResolution) * 2.0 - 1.0;
+    float r = length(uv);
+    if (r > 1.0 + uPx) return half4(0.0);
+    half3 col = sphere(uv) * (1.0 - 0.15 * uPressed);
     float a = smoothstep(1.0 + uPx, 1.0 - uPx, r);
     return half4(col * a, a);
 }

@@ -402,7 +402,9 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
             at(W * 0.69f, mid - 28.dp, 46.dp, 46.dp) { FrameCounter(body.counterShows, body.stock.exposures, Modifier.clickable { openFilm() }) }
             at(W * 0.69f, mid + 18.dp, 34.dp, 34.dp) { DofButton(body.dofPreview) { held -> body.dofPreview = held; if (held) haptics.tick() } }
             at(W * 0.69f, mid + 42.dp, 40.dp, 12.dp) { DeckLabel("DOF") }
-            at(W * 0.865f, mid, 92.dp, 92.dp) {
+            // the film plane mark, engraved by the winder
+            at(W * 0.125f + 40.dp, mid - 44.dp, 22.dp, 14.dp) { FilmPlaneMark() }
+            at(W * 0.865f, mid - 14.dp, 92.dp, 92.dp) {
                 ShutterRelease(busy = body.busy) {
                     if (!body.busy && body.framesLeft > 0) { haptics.shutter(body.shutterSeconds); mirrorUp = true }
                     body.shoot(onShot = { haptics.advance() })
@@ -749,8 +751,8 @@ private fun ShutterRelease(busy: Boolean, onRelease: () -> Unit) {
     val src = remember { MutableInteractionSource() }
     val pressed by src.collectIsPressedAsState()
     val s by animateFloatAsState(if (pressed) 0.9f else 1f, label = "shutter")
-    Box(Modifier.size(92.dp).clip(CircleShape).background(Brush.radialGradient(listOf(Color(0xFF1A1918), Color(0xFF080808)))),
-        contentAlignment = Alignment.Center) {
+    Box(Modifier.size(92.dp), contentAlignment = Alignment.Center) {
+        Canvas(Modifier.size(64.dp)) { deckShadow() }
         val press by animateFloatAsState(if (pressed) 1f else 0f, label = "press")
         val shader = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(SOFT_RELEASE_AGSL) else null }
         Canvas(Modifier.size(64.dp).scale(s).graphicsLayer { translationY = press * 1.5f * density }.clip(CircleShape)
@@ -1368,12 +1370,12 @@ private fun WaistLevelViewer(last: DarkroomEntry?, onOpen: () -> Unit) {
     }
 }
 
-/** The depth-of-field preview button: black enamel, its knurled rim worn to brass; held, it previews. */
+/** The depth-of-field preview button: a small black enamel sphere worn to brass at its crown; held, it previews. */
 @Composable
 private fun DofButton(held: Boolean, onHeld: (Boolean) -> Unit) {
-    val shader = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(KNURL_BUTTON_AGSL) else null }
+    val shader = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(SPHERE_BUTTON_AGSL) else null }
     val press by animateFloatAsState(if (held) 1f else 0f, label = "dofpress")
-    Canvas(Modifier.fillMaxSize(0.82f).scale(1f - 0.06f * press)
+    Canvas(Modifier.fillMaxSize(0.62f).scale(1f - 0.06f * press)
         .pointerInput(Unit) { detectTapGestures(onPress = { onHeld(true); tryAwaitRelease(); onHeld(false) }) }) {
         deckShadow()
         if (shader != null) {
@@ -1413,6 +1415,22 @@ private fun LightTableLoupe(last: DarkroomEntry?, onOpen: () -> Unit) {
             loupeGlass.setFloatUniform("uBrass", 0f)
             loupeGlass.setFloatUniform("uKnurl", 1f)
             drawRect(androidx.compose.ui.graphics.ShaderBrush(loupeGlass))
+        }
+    }
+}
+
+
+/** The film plane mark: a circle with a line through it, engraved into the steel and filled black. */
+@Composable
+private fun FilmPlaneMark() {
+    Canvas(Modifier.fillMaxSize()) {
+        val c = center; val r = size.height * 0.30f
+        val ink = Color(0xFF121212); val lip = Color.White.copy(alpha = 0.35f)
+        val sw = 1.3.dp.toPx(); val d = 0.6.dp.toPx()
+        // the lip catching light just below the cut, then the black fill
+        for ((col, dy) in listOf(lip to d, ink to 0f)) {
+            drawCircle(col, r, c + Offset(0f, dy), style = androidx.compose.ui.graphics.drawscope.Stroke(sw))
+            drawLine(col, Offset(0f, c.y + dy), Offset(size.width, c.y + dy), sw)
         }
     }
 }
