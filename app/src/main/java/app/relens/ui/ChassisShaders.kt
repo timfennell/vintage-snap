@@ -125,6 +125,9 @@ half3 evalEnvironment(float3 N, float roughness) {
 }
 
 half3 toBrass(half3 envColor) { return envColor * half3(1.00, 0.81, 0.40); }
+
+// glossy black enamel: deep black, only the bright parts of the world caught in it
+half3 enamel(float3 N, float roughness) { half3 e = evalEnvironment(N, roughness); return half3(0.014, 0.015, 0.017) + e * e * 0.18; }
 """
 
 /**
@@ -413,6 +416,7 @@ uniform float2 iResolution;
 uniform float uPx;
 uniform float uRound;
 uniform float uAr;
+uniform float uBrass;        // 1: a polished brass bezel; 0: the window just set into black enamel
 
 half4 main(float2 p) {
     float aspect = iResolution.x / iResolution.y;
@@ -426,7 +430,7 @@ half4 main(float2 p) {
     if (r > 0.80) {                                          // the bezel
         float t = (r - 0.80) / 0.20;
         float3 N = normalize(float3(dir * (t - 0.4) * 1.5, 0.7));
-        half3 col = toBrass(evalEnvironment(N, 0.04));
+        half3 col = uBrass > 0.5 ? toBrass(evalEnvironment(N, 0.04)) : enamel(N, 0.08);
         col *= (r < 0.83) ? 0.3 : 1.0;
         float a = smoothstep(1.0 + uPx, 1.0 - uPx, r);
         return half4(col * a, a);
@@ -534,16 +538,14 @@ half4 main(float2 p) {
     if (plate > uPx) return half4(0.0);
     half3 col;
     if (plate > -0.10) {
-        // the polished brass chamfer round the plate's edge
+        // the plate's rounded edge, in the same black enamel (catching a line of light)
         float2 g = normalize(float2(abs(uv.x) > 0.97 - 0.30 ? sign(uv.x) : 0.0, abs(uv.y) > hh - 0.33 ? sign(uv.y) : 0.0) + float2(sign(uv.x) * 1e-3, 0.0));
-        float3 N = normalize(float3(g * 0.75, 0.66));
-        col = toBrass(evalEnvironment(N, 0.04));
+        col = enamel(normalize(float3(g * 0.75, 0.66)), 0.10);
     } else {
         // glossy black enamel: deep, only the bright parts of the world in it
-        half3 e = evalEnvironment(float3(0.0, 0.0, 1.0), 0.18);
-        col = half3(0.014, 0.015, 0.017) + e * e * 0.18;
+        col = enamel(float3(0.0, 0.0, 1.0), 0.18);
     }
-    // the slot, lined in brass
+    // the slot, cut into the enamel
     float2 sp = uv - float2(0.0, uSlot.x);
     float slot = rrect(sp, float2(uSlot.z, uSlot.y + uSlot.z), uSlot.z);
     if (slot < 0.0) {
@@ -551,7 +553,7 @@ half4 main(float2 p) {
     } else if (slot < 0.10) {
         float t = slot / 0.10;
         float2 g = normalize(sp - float2(0.0, clamp(sp.y, -uSlot.y, uSlot.y)) + 1e-4);
-        col = toBrass(evalEnvironment(normalize(float3(-g * (1.0 - t) * 0.9, 0.6)), 0.05));
+        col = enamel(normalize(float3(-g * (1.0 - t) * 0.9, 0.6)), 0.10);
     }
     // the ball
     float2 kc = float2(0.0, uSlot.x - uKnob * uSlot.y);
@@ -564,13 +566,13 @@ half4 main(float2 p) {
         float3 KN = normalize(float3(kd, sqrt(1.0 - kl * kl)));
         col = mix(col, toBrass(evalEnvironment(KN, 0.03)), smoothstep(1.0, 1.0 - uPx * 3.0 / kr, kl));
     }
-    // the window's polished seat (its opening is left to the drum behind)
+    // the window's rim, a chamfer in the enamel (its opening is left to the drum behind)
     float2 wp = uv - float2(0.0, uWin.x);
     float wo = rrect(wp, uWin.yz, uWin.z);
     if (wo > 0.0 && wo < uWin.w) {
         float t = wo / uWin.w;
         float2 g = normalize(wp - float2(clamp(wp.x, -uWin.y + uWin.z, uWin.y - uWin.z), 0.0) + 1e-4);
-        col = toBrass(evalEnvironment(normalize(float3(g * (t - 0.45) * 1.4, 0.7)), 0.04));
+        col = enamel(normalize(float3(g * (t - 0.45) * 1.4, 0.7)), 0.08);
     }
     float a = smoothstep(uPx, -uPx, plate);
     if (wo < 0.0) a = 0.0;                                                  // the opening: see through to the drum
@@ -595,10 +597,9 @@ half4 main(float2 p) {
     if (plate > -0.16) {
         float t = (plate + 0.16) / 0.16;
         float2 g = normalize(uv - float2(clamp(uv.x, -hw + 0.44, hw - 0.44), 0.0) + 1e-4);
-        col = toBrass(evalEnvironment(normalize(float3(g * (0.3 + t * 0.6), 0.7)), 0.04));
+        col = enamel(normalize(float3(g * (0.3 + t * 0.6), 0.7)), 0.10);     // its rounded edge, black too
     } else {
-        half3 e = evalEnvironment(float3(0.0, 0.0, 1.0), 0.18);
-        col = half3(0.014, 0.015, 0.017) + e * e * 0.18;
+        col = enamel(float3(0.0, 0.0, 1.0), 0.18);
     }
     float a = smoothstep(uPx, -uPx, plate);
     return half4(col * a, a);

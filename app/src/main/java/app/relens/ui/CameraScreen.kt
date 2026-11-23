@@ -414,6 +414,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                         loupeGlass.setFloatUniform("uPx", 2f / size.height)
                         loupeGlass.setFloatUniform("uRound", 1f)
                         loupeGlass.setFloatUniform("uAr", 1f)
+                        loupeGlass.setFloatUniform("uBrass", 1f)
                         drawRect(androidx.compose.ui.graphics.ShaderBrush(loupeGlass))
                     }
                 }
@@ -735,6 +736,7 @@ private fun FrameCounter(shot: Int, total: Int, modifier: Modifier = Modifier) {
         glass.setFloatUniform("uPx", 2f / size.height)
         glass.setFloatUniform("uRound", 1f)
         glass.setFloatUniform("uAr", 0f)
+        glass.setFloatUniform("uBrass", 1f)
         drawRect(androidx.compose.ui.graphics.ShaderBrush(glass))
     }
     }
@@ -892,6 +894,7 @@ private fun ParallaxSwitch(on: Boolean, focus: Pair<Int, Boolean>, onToggle: () 
                 window.setFloatUniform("uPx", 2f / size.height)
                 window.setFloatUniform("uRound", 0f)
                 window.setFloatUniform("uAr", 0f)
+                window.setFloatUniform("uBrass", 0f)
                 drawRect(androidx.compose.ui.graphics.ShaderBrush(window))
             }
         }
