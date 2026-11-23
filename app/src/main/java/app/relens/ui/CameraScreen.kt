@@ -834,70 +834,32 @@ fun dofMarks(lens: Lens, n: Float, s: Float): List<Pair<Float, Color>> {
  * shot is followed by the guided left and right frames (ParallaxCapture).
  */
 @Composable
-private fun ParallaxSwitch(on: Boolean, focus: Pair<Int, Boolean>, onToggle: () -> Unit) {
-    // A black enamel plate edged in polished brass: a vertical slide switch (up for on), PARALLAX
-    // engraved in the black, and below it a window where a drum behind glass shows the focus
-    // calibration's state.
-    val sdk33 = android.os.Build.VERSION.SDK_INT >= 33
-    val plateSh = remember { if (sdk33) android.graphics.RuntimeShader(PARALLAX_ENAMEL_AGSL) else null }
-    val window = remember { if (sdk33) android.graphics.RuntimeShader(GLASS_WINDOW_AGSL) else null }
+private fun ParallaxSwitch(on: Boolean, @Suppress("UNUSED_PARAMETER") focus: Pair<Int, Boolean>, onToggle: () -> Unit) {
+    // A black enamel plate: a vertical slide switch (up for on) with its brass ball, and
+    // PARALLAX engraved in the black beneath it.
+    val plateSh = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(PARALLAX_ENAMEL_AGSL) else null }
     val knob by animateFloatAsState(if (on) 1f else -1f, androidx.compose.animation.core.spring(dampingRatio = 0.6f, stiffness = 500f), label = "slide")
     val dens = androidx.compose.ui.platform.LocalDensity.current.density
     val label = remember { Engraving.render("PARALLAX", Color(0xFFEDE6D8), dens * 0.5f, 31) }
-    val (n, settled) = focus
-    val state = if (settled) 4 else if (on) minOf(n, 2).coerceAtLeast(0) + 1 else 0
-    val roll by animateFloatAsState(state.toFloat(), androidx.compose.animation.core.spring(dampingRatio = 0.7f, stiffness = 260f), label = "drum")
-    // layout, in units of half the plate's width (the shader's)
-    val slotY = -1.05f; val slotHalf = 0.34f; val slotW = 0.26f
-    val winY = 1.32f; val winHW = 0.80f; val winHH = 0.30f; val seat = 0.10f
-    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.size(width = 46.dp, height = 98.dp).clickable(onClick = onToggle)) {
-        val u = maxWidth.value / 2f                    // dp per unit
-        val cyDp = maxHeight.value / 2f
-        Canvas(Modifier.fillMaxSize()) {
-            if (plateSh != null) {
-                Chassis.bind(plateSh)
-                plateSh.setFloatUniform("iResolution", size.width, size.height)
-                plateSh.setFloatUniform("uPx", 2f / size.width)
-                plateSh.setFloatUniform("uKnob", knob)
-                plateSh.setFloatUniform("uSlot", slotY, slotHalf, slotW)
-                plateSh.setFloatUniform("uWin", winY, winHW, winHH, seat)
-                drawRect(androidx.compose.ui.graphics.ShaderBrush(plateSh))
-            } else {
-                drawRoundRect(Color(0xFF0C0C0C), cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.width * 0.15f))
-                drawCircle(Color(0xFFC49A4E), size.width * 0.12f, Offset(center.x, center.y + (slotY - knob * slotHalf) * size.width / 2))
-            }
-            // PARALLAX, engraved in the black between the switch and the window
-            val w = size.width * 0.84f; val h = w * label.height / label.width
-            drawImage(label, dstOffset = androidx.compose.ui.unit.IntOffset((center.x - w / 2).toInt(), (center.y + 0.32f * size.width / 2 - h / 2).toInt()),
-                dstSize = androidx.compose.ui.unit.IntSize(w.toInt(), h.toInt()))
+    // (the DOF plate engraves its label at the same height)
+    // layout, in units of half the plate's width (the shader's); the window is gone (far below the plate)
+    val slotY = -0.55f; val slotHalf = 0.36f; val slotW = 0.26f
+    Canvas(Modifier.size(width = 46.dp, height = 76.dp).clickable(onClick = onToggle)) {
+        if (plateSh != null) {
+            Chassis.bind(plateSh)
+            plateSh.setFloatUniform("iResolution", size.width, size.height)
+            plateSh.setFloatUniform("uPx", 2f / size.width)
+            plateSh.setFloatUniform("uKnob", knob)
+            plateSh.setFloatUniform("uSlot", slotY, slotHalf, slotW)
+            plateSh.setFloatUniform("uWin", 50f, 0.01f, 0.01f, 0.001f)
+            drawRect(androidx.compose.ui.graphics.ShaderBrush(plateSh))
+        } else {
+            drawRoundRect(Color(0xFF0C0C0C), cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.width * 0.15f))
+            drawCircle(Color(0xFFC49A4E), size.width * 0.12f, Offset(center.x, center.y + (slotY - knob * slotHalf) * size.width / 2))
         }
-        // the drum behind the window's opening
-        val ow = (2 * winHW * u).dp; val oh = (2 * winHH * u).dp
-        Box(Modifier.align(Alignment.TopStart).offset(x = (maxWidth.value / 2f - winHW * u).dp, y = (cyDp + (winY - winHH) * u).dp)
-            .size(width = ow, height = oh).clip(RoundedCornerShape(50)).background(Color(0xFF16120D)), contentAlignment = Alignment.Center) {
-            val labels = listOf("FOCUS ?" to Palette.amber, "FOCUS 0/3" to Palette.cream, "FOCUS 1/3" to Palette.cream, "FOCUS 2/3" to Palette.cream, "FOCUS ✓" to Color(0xFF73F2B3))
-            for ((k, lab) in labels.withIndex()) {
-                val off = k - roll
-                if (kotlin.math.abs(off) > 1.2f) continue
-                val ang = off * 62f
-                Text(lab.first, color = lab.second, fontSize = 5.5.sp, letterSpacing = 0.5.sp, fontWeight = FontWeight.Bold, fontFamily = Futuraish, maxLines = 1,
-                    modifier = Modifier.graphicsLayer {
-                        translationY = kotlin.math.sin(Math.toRadians(ang.toDouble())).toFloat() * size.height * 1.2f
-                        rotationX = -ang
-                        alpha = kotlin.math.cos(Math.toRadians(ang.toDouble())).toFloat().coerceIn(0f, 1f)
-                    })
-            }
-            Canvas(Modifier.fillMaxSize()) { drawRect(Brush.verticalGradient(0f to Color.Black.copy(alpha = 0.85f), 0.38f to Color.Transparent, 0.62f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.85f))) }
-            if (window != null) Canvas(Modifier.fillMaxSize()) {
-                Chassis.bind(window)
-                window.setFloatUniform("iResolution", size.width, size.height)
-                window.setFloatUniform("uPx", 2f / size.height)
-                window.setFloatUniform("uRound", 0f)
-                window.setFloatUniform("uAr", 0f)
-                window.setFloatUniform("uBrass", 0f)
-                drawRect(androidx.compose.ui.graphics.ShaderBrush(window))
-            }
-        }
+        val h = parallaxLabelHeight.toPx(); val w = h * label.width / label.height
+        drawImage(label, dstOffset = androidx.compose.ui.unit.IntOffset((center.x - w / 2).toInt(), (center.y + 0.95f * size.width / 2 - h / 2).toInt()),
+            dstSize = androidx.compose.ui.unit.IntSize(w.toInt(), h.toInt()))
     }
 }
 
@@ -1016,9 +978,13 @@ private fun DofLever(held: Boolean, onHeld: (Boolean) -> Unit) {
                 Chassis.bind(plateSh)
                 plateSh.setFloatUniform("iResolution", size.width, size.height)
                 plateSh.setFloatUniform("uPx", 2f / size.height)
+                val hh = size.height / 2
+                plateSh.setFloatUniform("uCorner", 4.dp.toPx() / hh)
+                plateSh.setFloatUniform("uEdge", 2.dp.toPx() / hh)
                 drawRect(androidx.compose.ui.graphics.ShaderBrush(plateSh))
-            } else drawRoundRect(Color(0xFF0C0C0C), cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height * 0.4f))
-            val h = size.height * 0.62f; val w = h * dofLabel.width / dofLabel.height
+            } else drawRoundRect(Color(0xFF0C0C0C), cornerRadius = androidx.compose.ui.geometry.CornerRadius(4.dp.toPx()))
+            // engraved at the same size as PARALLAX on the switch's plate
+            val h = parallaxLabelHeight.toPx(); val w = h * dofLabel.width / dofLabel.height
             drawImage(dofLabel, dstOffset = androidx.compose.ui.unit.IntOffset((center.x - w / 2).toInt(), (center.y - h / 2).toInt()),
                 dstSize = androidx.compose.ui.unit.IntSize(w.toInt(), h.toInt()))
         }
@@ -1371,3 +1337,7 @@ private fun FilmRewindKnob(frame: Int, onTap: () -> Unit) {
         }
     }
 }
+
+
+/** The engraved labels on the black enamel plates (PARALLAX, DOF), all one height. */
+private val parallaxLabelHeight = 7.dp

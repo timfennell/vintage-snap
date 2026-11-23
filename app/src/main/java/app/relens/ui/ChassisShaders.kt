@@ -534,13 +534,16 @@ half4 main(float2 p) {
     float hw = iResolution.x * 0.5;
     float2 uv = (p - iResolution * 0.5) / hw;
     float hh = iResolution.y / iResolution.x;
-    float plate = rrect(uv, float2(0.97, hh - 0.03), 0.30);
+    float cr = 0.174; float ew = 0.087;                       // corner 4 dp, rounded edge 2 dp (as the DOF plate)
+    float plate = rrect(uv, float2(0.98, hh - 0.02), cr);
     if (plate > uPx) return half4(0.0);
     half3 col;
-    if (plate > -0.10) {
-        // the plate's rounded edge, in the same black enamel (catching a line of light)
-        float2 g = normalize(float2(abs(uv.x) > 0.97 - 0.30 ? sign(uv.x) : 0.0, abs(uv.y) > hh - 0.33 ? sign(uv.y) : 0.0) + float2(sign(uv.x) * 1e-3, 0.0));
-        col = enamel(normalize(float3(g * 0.75, 0.66)), 0.10);
+    if (plate > -ew) {
+        float t = (plate + ew) / ew;
+        float e = 0.001;
+        float2 g = normalize(float2(rrect(uv + float2(e, 0.0), float2(0.98, hh - 0.02), cr) - rrect(uv - float2(e, 0.0), float2(0.98, hh - 0.02), cr),
+                                    rrect(uv + float2(0.0, e), float2(0.98, hh - 0.02), cr) - rrect(uv - float2(0.0, e), float2(0.98, hh - 0.02), cr)) + 1e-6);
+        col = enamel(normalize(float3(g * (0.3 + t * 0.6), 0.7)), 0.10);
     } else {
         // glossy black enamel: deep, only the bright parts of the world in it
         col = enamel(float3(0.0, 0.0, 1.0), 0.18);
@@ -584,6 +587,8 @@ half4 main(float2 p) {
 const val LABEL_PLATE_AGSL = ENV_CORE + """
 uniform float2 iResolution;
 uniform float uPx;           // a pixel, in half-height units
+uniform float uCorner;
+uniform float uEdge;
 
 float rrect(float2 p, float2 b, float r) { float2 q = abs(p) - b + r; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r; }
 
@@ -591,12 +596,16 @@ half4 main(float2 p) {
     float hh = iResolution.y * 0.5;
     float2 uv = (p - iResolution * 0.5) / hh;
     float hw = iResolution.x / iResolution.y;
-    float plate = rrect(uv, float2(hw - 0.04, 0.96), 0.40);
+    float cr = uCorner; float ew = uEdge;                      // in half-heights: corner 4 dp, rounded edge 2 dp
+    float2 bx = float2(hw - 0.02, 0.98);
+    float plate = rrect(uv, bx, cr);
     if (plate > uPx) return half4(0.0);
     half3 col;
-    if (plate > -0.16) {
-        float t = (plate + 0.16) / 0.16;
-        float2 g = normalize(uv - float2(clamp(uv.x, -hw + 0.44, hw - 0.44), 0.0) + 1e-4);
+    if (plate > -ew) {
+        float t = (plate + ew) / ew;
+        float e = 0.001;
+        float2 g = normalize(float2(rrect(uv + float2(e, 0.0), bx, cr) - rrect(uv - float2(e, 0.0), bx, cr),
+                                    rrect(uv + float2(0.0, e), bx, cr) - rrect(uv - float2(0.0, e), bx, cr)) + 1e-6);
         col = enamel(normalize(float3(g * (0.3 + t * 0.6), 0.7)), 0.10);     // its rounded edge, black too
     } else {
         col = enamel(float3(0.0, 0.0, 1.0), 0.18);
