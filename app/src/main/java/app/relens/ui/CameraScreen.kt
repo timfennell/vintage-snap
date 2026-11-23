@@ -6,6 +6,7 @@ import androidx.compose.ui.graphics.nativeCanvas
 
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithCache
@@ -393,8 +394,8 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
             at(W * 0.125f, mid, 92.dp, 92.dp) { FilmRewindKnob(body.counterShows) { openFilm(); haptics.click() } }
             // the parallax slide, its label engraved above
             if (body.parallaxAvailable) {
-                at(W * 0.315f, mid - 20.dp, 70.dp, 14.dp) { DeckLabel("PARALLAX") }
-                at(W * 0.315f, mid + 4.dp, 76.dp, 30.dp) { ParallaxSlide(body.parallaxOn) { body.toggleParallax(); haptics.click() } }
+                at(W * 0.335f - 6.dp, mid - 16.dp, 50.dp, 14.dp) { DeckLabel("PRLX") }
+                at(W * 0.335f, mid + 4.dp, 60.dp, 30.dp) { ParallaxSlide(body.parallaxOn) { body.toggleParallax(); haptics.click() } }
             }
             // the waist-level viewer onto the light table
             at(W * 0.50f, mid, 70.dp, 100.dp) { WaistLevelViewer(body.darkroom.firstOrNull()) { openDarkroom() } }
@@ -403,7 +404,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
             at(W * 0.69f, mid + 18.dp, 34.dp, 34.dp) { DofButton(body.dofPreview) { held -> body.dofPreview = held; if (held) haptics.tick() } }
             at(W * 0.69f, mid + 42.dp, 40.dp, 12.dp) { DeckLabel("DOF") }
             // the film plane mark, engraved by the winder
-            at(W * 0.125f + 40.dp, mid - 44.dp, 22.dp, 14.dp) { FilmPlaneMark() }
+            at(W * 0.125f + 42.dp, mid + 46.dp, 22.dp, 14.dp) { FilmPlaneMark() }    // toward the back, where the film lies
             at(W * 0.865f, mid - 14.dp, 92.dp, 92.dp) {
                 ShutterRelease(busy = body.busy) {
                     if (!body.busy && body.framesLeft > 0) { haptics.shutter(body.shutterSeconds); mirrorUp = true }
@@ -1315,8 +1316,9 @@ private fun ParallaxSlide(on: Boolean, onToggle: () -> Unit) {
     val lit by animateFloatAsState(if (on) 1f else 0f, androidx.compose.animation.core.tween(180), label = "led")
     Row(Modifier.fillMaxSize().clickable(onClick = onToggle), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
         // the slide: the vertical slide's shader turned a quarter (up becomes right)
-        Box(Modifier.size(width = 54.dp, height = 22.dp), contentAlignment = Alignment.Center) {
-            Canvas(Modifier.size(width = 22.dp, height = 54.dp).graphicsLayer { rotationZ = 90f }) {
+        // (the ball, 0.75 of the half-width of 24 dp: 18 dp across, as the DOF button)
+        Box(Modifier.size(width = 46.dp, height = 24.dp), contentAlignment = Alignment.Center) {
+            Canvas(Modifier.requiredSize(width = 24.dp, height = 46.dp).graphicsLayer { rotationZ = 90f }) {
                 if (slide != null) {
                     Chassis.bind(slide)
                     slide.setFloatUniform("iResolution", size.width, size.height)
@@ -1326,7 +1328,7 @@ private fun ParallaxSlide(on: Boolean, onToggle: () -> Unit) {
                 } else drawRoundRect(Color(0xFF0A0A0A), cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.width / 2))
             }
         }
-        Spacer(Modifier.width(7.dp))
+        Spacer(Modifier.width(3.dp))
         Canvas(Modifier.size(10.dp)) {
             if (lit > 0f) drawCircle(Brush.radialGradient(listOf(Color(0xFF40FF90).copy(alpha = 0.45f * lit), Color.Transparent), radius = size.minDimension * 1.6f), size.minDimension * 1.6f)
             if (led != null) {
@@ -1370,12 +1372,12 @@ private fun WaistLevelViewer(last: DarkroomEntry?, onOpen: () -> Unit) {
     }
 }
 
-/** The depth-of-field preview button: a small black enamel sphere worn to brass at its crown; held, it previews. */
+/** The depth-of-field preview button: a small polished steel sphere; held, it previews. */
 @Composable
 private fun DofButton(held: Boolean, onHeld: (Boolean) -> Unit) {
     val shader = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(SPHERE_BUTTON_AGSL) else null }
     val press by animateFloatAsState(if (held) 1f else 0f, label = "dofpress")
-    Canvas(Modifier.fillMaxSize(0.62f).scale(1f - 0.06f * press)
+    Canvas(Modifier.size(18.dp).scale(1f - 0.06f * press)
         .pointerInput(Unit) { detectTapGestures(onPress = { onHeld(true); tryAwaitRelease(); onHeld(false) }) }) {
         deckShadow()
         if (shader != null) {

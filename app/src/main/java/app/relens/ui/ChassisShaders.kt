@@ -744,8 +744,9 @@ half4 main(float2 p) {
     // the plate is gently curved front to back, catching the world across its width
     float v = p.y / iResolution.y;
     N = normalize(N + float3((p.x / iResolution.x - 0.5) * 0.25, (v - 0.4) * 0.35, 0.0));
-    half3 col = toMetal(evalEnvironment(N, 0.34)) * 0.62 + half3(0.05);
-    col *= 0.90 + 0.18 * streak;
+    // matte: the world only as a soft average, a faint broad sheen, the grain doing the work
+    half3 col = toMetal(evalEnvironment(N, 0.75)) * 0.30 + half3(0.34, 0.35, 0.36);
+    col *= 0.93 + 0.12 * streak;
     // a soft darkening toward the edges where it rolls away
     col *= 1.0 - 0.25 * smoothstep(0.75, 1.0, v);
     return half4(col, 1.0);
@@ -820,20 +821,20 @@ half4 main(float2 p) {
         col = half3(0.012, 0.012, 0.013) * (1.0 + 2.0 * smoothstep(-0.25, 0.0, slot));     // the slot's depth
     }
     // the knob
-    float travel = hh - 0.04 - 0.46;
+    float travel = hh - 0.04 - 0.80;
     float2 kc = float2(0.0, -uKnob * travel);
     // its shadow in the slot
-    col *= 1.0 - 0.5 * smoothstep(0.55, 0.30, length(uv - kc + uLightDir * 0.10)) * step(slot, 0.0);
+    col *= 1.0 - 0.5 * smoothstep(0.95, 0.55, length(uv - kc + uLightDir * 0.12)) * step(slot, 0.0);
     // the knob: a black enamel sphere riding in the slot, its crown worn to brass
-    float2 kd = (uv - kc) / 0.40;
+    float2 kd = (uv - kc) / 0.75;
     float kl = length(kd);
     if (kl < 1.0) {
         float3 N = normalize(float3(kd, sqrt(max(1.0 - kl * kl, 0.0))));
         float2 w = kd - float2(-0.12, -0.18);
         float patch = smoothstep(0.42, 0.18, length(w * float2(1.0, 1.3)) + 0.06 * sin(atan(w.y, w.x) * 5.0));
-        half3 k = mix(enamel(N, 0.06), toBrass(evalEnvironment(N, 0.10)), patch * 0.85);
-        col = mix(col, k, smoothstep(1.0, 1.0 - uPx * 3.0 / 0.40, kl));
-        a = max(a, smoothstep(1.0, 1.0 - uPx * 3.0 / 0.40, kl));
+        half3 k = toMetal(evalEnvironment(N, 0.03));            // polished steel
+        col = mix(col, k, smoothstep(1.0, 1.0 - uPx * 3.0 / 0.75, kl));
+        a = max(a, smoothstep(1.0, 1.0 - uPx * 3.0 / 0.75, kl));
     }
     return half4(col * a, a);
 }
@@ -905,7 +906,7 @@ half4 main(float2 p) {
 }
 """
 
-/** A small sphere button in black enamel over brass, its crown worn through to brass where the thumb lands. */
+/** A small polished steel sphere button. */
 const val SPHERE_BUTTON_AGSL = ENV_CORE + """
 uniform float2 iResolution;
 uniform float uPx;
@@ -917,7 +918,7 @@ half3 sphere(float2 d) {
     // wear: brass showing at the crown, a soft-edged irregular patch
     float2 w = d - float2(-0.12, -0.18);
     float patch = smoothstep(0.42, 0.18, length(w * float2(1.0, 1.3)) + 0.06 * sin(atan(w.y, w.x) * 5.0));
-    return mix(enamel(N, 0.06), toBrass(evalEnvironment(N, 0.10)), patch * 0.85);
+    return toMetal(evalEnvironment(N, 0.03));                // polished steel
 }
 
 half4 main(float2 p) {
