@@ -672,7 +672,9 @@ private fun FrameCounter(shot: Int, total: Int, modifier: Modifier = Modifier) {
         androidx.compose.animation.core.tween(durationMillis = 600, delayMillis = 500,
             easing = androidx.compose.animation.core.FastOutSlowInEasing), label = "counter")
     val measurer = androidx.compose.ui.text.rememberTextMeasurer()
-    Canvas(modifier.size(48.dp)) {
+    val glass = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(GLASS_WINDOW_AGSL) else null }
+    Box(modifier.size(48.dp)) {
+    Canvas(Modifier.fillMaxSize()) {
         val c = center
         val outer = size.minDimension / 2
         val win = outer * 0.72f
@@ -724,6 +726,17 @@ private fun FrameCounter(shot: Int, total: Int, modifier: Modifier = Modifier) {
         }
         // the window's rim
         drawCircle(Color(0xFF050505), win, c, style = Stroke(outer * 0.06f))
+    }
+    // the polished brass bezel and the curved crystal over the dial, in the shared environment
+    // (the window is the bezel's inner 0.80; the dial's own window sits at 0.72 inside it)
+    if (glass != null) Canvas(Modifier.fillMaxSize()) {
+        Chassis.bind(glass)
+        glass.setFloatUniform("iResolution", size.width, size.height)
+        glass.setFloatUniform("uPx", 2f / size.height)
+        glass.setFloatUniform("uRound", 1f)
+        glass.setFloatUniform("uAr", 0f)
+        drawRect(androidx.compose.ui.graphics.ShaderBrush(glass))
+    }
     }
 }
 
