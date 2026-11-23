@@ -301,7 +301,7 @@ private fun DrawScope.drawWear(w: Wear, p: Float, step: Float, r: Float, cx: Flo
     for (sc in w.scratches) {
         val x0 = xAt(sc[0]) ?: continue; val x1 = xAt(sc[0] + sc[2]) ?: continue
         val y = size.height * sc[1]
-        drawLine(Color.White.copy(alpha = sc[4] * fadeAt(sc[0])), Offset(x0, y), Offset(x1, y + sc[3] * size.height * 0.3f), 0.8f)
+        drawLine(Color.White.copy(alpha = sc[4] * 0.4f * fadeAt(sc[0])), Offset(x0, y), Offset(x1, y + sc[3] * size.height * 0.3f), 0.7f)
     }
     // dust: pale specks, a few darker
     for (d in w.dust) {

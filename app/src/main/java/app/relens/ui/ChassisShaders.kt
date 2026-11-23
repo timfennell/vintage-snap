@@ -224,7 +224,7 @@ half4 main(float2 fragCoord) {
     float peel = eNoise(sp * 0.45) - 0.5;
     float hair = eNoise(float2(sp.x * 0.012, sp.y * 1.6)) - 0.5;                 // long, along the ring
     float deep = smoothstep(0.985, 1.0, eNoise(float2(sp.x * 0.004 + uSeed, sp.y * 0.9)));
-    N = normalize(N + float3(peel * 0.06, peel * 0.06 + hair * 0.10, 0.0));
+    N = normalize(N + float3(peel * 0.018, peel * 0.018 + hair * 0.03, 0.0));
     // where it wears: the rims, the stud tips, unevenly round the ring
     float rimWear = smoothstep(0.025, 0.0, v) + smoothstep(0.975, 1.0, v);
     float tipWear = smoothstep(0.42, 0.05, apexDist) * uKnurled;
@@ -232,12 +232,12 @@ half4 main(float2 fragCoord) {
                   * (0.7 + 0.3 * hash(floor(float2(arcX * 0.08, v * 30.0))));
     float wear = clamp((rimWear * 0.85 + tipWear * 0.95) * organic, 0.0, 1.0);
     // glossy black enamel: deep black, only the bright parts of the studio show in it
-    half3 e = evalEnvironment(N, 0.10);
+    half3 e = evalEnvironment(N, 0.30);                   // the enamel sees the world softly: no busy streaks
     half3 enamel = half3(0.014, 0.015, 0.017) + e * e * 0.16;
     float burnish = smoothstep(0.35, 0.85, wear);
     half3 brass = toBrass(evalEnvironment(N, mix(0.42, 0.05, burnish)));
     half3 col = mix(enamel, brass, smoothstep(0.20, 0.48, wear)) * grooveAO * (0.25 + 0.75 * cylFade);
-    col += half3(0.10, 0.09, 0.08) * deep * cylFade;                                // a deeper scratch catching light
+    col += half3(0.05, 0.045, 0.04) * deep * cylFade;                                // a deeper scratch catching light
     // the ring's edges: a hairline gap to the next ring
     col *= smoothstep(0.0, uPx * 2.0, v) * smoothstep(1.0, 1.0 - uPx * 2.0, v);
     return half4(col, 1.0);
