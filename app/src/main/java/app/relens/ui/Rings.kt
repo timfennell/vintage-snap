@@ -19,6 +19,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
@@ -83,6 +84,8 @@ fun BarrelRing(
         modifier
             .fillMaxWidth()
             .height(height)
+            // its own cached layer: re-rendered only when the ring itself changes, not with every camera frame
+            .graphicsLayer { compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen }
             .pointerInput(labels) {
                 val step = spacing.toPx()
                 detectHorizontalDragGestures(

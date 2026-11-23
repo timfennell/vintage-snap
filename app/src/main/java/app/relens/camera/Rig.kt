@@ -384,6 +384,7 @@ class Rig(private val context: Context) {
         d.createCaptureSession(cfg)
     }
 
+    private var evSmooth = Float.NaN
     private val resultCallback = object : CameraCaptureSession.CaptureCallback() {
         override fun onCaptureCompleted(s: CameraCaptureSession, r: CaptureRequest, result: TotalCaptureResult) {
             lastResult = result
@@ -395,7 +396,10 @@ class Rig(private val context: Context) {
                 if (t != null && iso != null && t > 0) {
                     val ev = (Math.log((n * n) / (t / 1e9)) / Math.log(2.0) - Math.log(iso / 100.0) / Math.log(2.0)).toFloat()
                     val prev = _sceneEV.value
-                    _sceneEV.value = if (prev == null) ev else prev + (ev - prev) * 0.15f
+                    // smoothed, and published only on a real change (a twentieth of a stop): every
+                    // published value recomposes the camera screen
+                    evSmooth = if (evSmooth.isNaN()) ev else evSmooth + (ev - evSmooth) * 0.15f
+                    if (prev == null || kotlin.math.abs(evSmooth - prev) > 0.05f) _sceneEV.value = evSmooth
                     lastEV = ev
                 }
             }

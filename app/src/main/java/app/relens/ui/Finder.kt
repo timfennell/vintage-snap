@@ -1,5 +1,7 @@
 package app.relens.ui
 
+import androidx.compose.ui.draw.drawWithContent
+
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.asAndroidPath
 import androidx.compose.ui.graphics.nativeCanvas
@@ -153,15 +155,12 @@ fun Modifier.eyepiece(glass: androidx.compose.ui.geometry.Rect?, wall: Dp): Modi
             sh.setFloatUniform("ca", 0.0035f)
             sh.setFloatUniform("glowPass", pass)
         }
-        // The glow reads a blurred copy, so its gathered light is a smooth wash, never
-        // ghost copies of sharp things (the meter's figures); it is added over the sharp pass.
-        val blurPx = 14.dp.toPx()
-        val blurred = RenderEffect.createBlurEffect(blurPx, blurPx, android.graphics.Shader.TileMode.CLAMP)
-        val light = RenderEffect.createRuntimeShaderEffect(glow, "image")
-        val glowFx = RenderEffect.createChainEffect(light, blurred)
+        // The optical pass only (pincushion, the mirrored walls). The glow that used to be a
+        // blurred second pass here (the costliest thing on screen, every camera frame) is drawn
+        // as soft gradients round the glass instead: [finderGlow].
         val sharpFx = RenderEffect.createRuntimeShaderEffect(sharp, "image")
         clip = true
-        renderEffect = RenderEffect.createBlendModeEffect(sharpFx, glowFx, android.graphics.BlendMode.PLUS).asComposeRenderEffect()
+        renderEffect = sharpFx.asComposeRenderEffect()
     }
 }
 
@@ -405,5 +404,38 @@ fun Modifier.splitPrism(defocusD: Float?, focalMM: Float, maxAperture: Float): M
         shader.setFloatUniform("prisms", minOf(kotlin.math.abs(sh) * 0.5f, r * 0.12f))
         clip = true
         renderEffect = RenderEffect.createRuntimeShaderEffect(shader, "image").asComposeRenderEffect()
+    }
+}
+
+
+/**
+ * The light from the lit glass spilling into the dark eyepiece and over the readouts round it,
+ * as soft gradients (cheap: no blur pass), coloured by the scene through the finder: the sky's
+ * tone off the top edge, the horizon's off the sides, the ground's off the bottom.
+ */
+fun Modifier.finderGlow(glass: androidx.compose.ui.geometry.Rect?): Modifier = this.drawWithContent {
+    drawContent()
+    val g = glass ?: return@drawWithContent
+    if (g.isEmpty) return@drawWithContent
+    fun tone(t: FloatArray, k: Float) = Color(t[0], t[1], t[2]).copy(alpha = k)
+    val sky = Chassis.sky; val hor = Chassis.horizon; val gnd = Chassis.ground
+    val reach = 26.dp.toPx(); val near = 8.dp.toPx()
+    val bright = (0.30f + 0.70f * ((sky.sum() + hor.sum() + gnd.sum()) / 9f)).coerceIn(0.3f, 1f)
+    fun band(c: Color, from: Offset, to: Offset, rect: androidx.compose.ui.geometry.Rect) {
+        val brush = androidx.compose.ui.graphics.Brush.linearGradient(listOf(c, c.copy(alpha = c.alpha * 0.35f), Color.Transparent), from, to)
+        drawRect(brush, rect.topLeft, rect.size, blendMode = androidx.compose.ui.graphics.BlendMode.Plus)
+    }
+    val a = 0.55f * bright
+    // top, sides, bottom: a tight bright spill and a long faint one
+    for ((len, k) in listOf(near to 1f, reach to 0.45f)) {
+        band(tone(sky, a * k), Offset(0f, g.top), Offset(0f, g.top - len), androidx.compose.ui.geometry.Rect(g.left, g.top - len, g.right, g.top))
+        band(tone(gnd, a * k), Offset(0f, g.bottom), Offset(0f, g.bottom + len), androidx.compose.ui.geometry.Rect(g.left, g.bottom, g.right, g.bottom + len))
+        band(tone(hor, a * k), Offset(g.left, 0f), Offset(g.left - len, 0f), androidx.compose.ui.geometry.Rect(g.left - len, g.top, g.left, g.bottom))
+        band(tone(hor, a * k), Offset(g.right, 0f), Offset(g.right + len, 0f), androidx.compose.ui.geometry.Rect(g.right, g.top, g.right + len, g.bottom))
+    }
+    // the corners: round spills joining them
+    for ((c, t) in listOf(g.topLeft to sky, g.topRight to sky, g.bottomLeft to gnd, g.bottomRight to gnd)) {
+        drawCircle(androidx.compose.ui.graphics.Brush.radialGradient(listOf(tone(t, a * 0.7f), Color.Transparent), c, reach), reach, c,
+            blendMode = androidx.compose.ui.graphics.BlendMode.Plus)
     }
 }

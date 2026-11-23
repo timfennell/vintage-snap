@@ -157,6 +157,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
     Column(Modifier.portraitBody().fillMaxSize().background(Palette.leather)
         .statusBarsPadding().navigationBarsPadding()) {
       Column(Modifier.weight(1f).onGloballyPositioned { eyeTop = it.boundsInRoot().topLeft }
+          .finderGlow(glass?.translate(-eyeTop))
           .eyepiece(glass?.translate(-eyeTop), wall = 12.dp)) {
         // ---- top plate: what's mounted and loaded, the frame counter ----
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -363,7 +364,9 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
 
         // ---- the deck: black leatherette round the brass controls ----
         val leather = remember { Leatherette.texture() }
-        Row(Modifier.fillMaxWidth().height(104.dp).drawBehind { with(Leatherette) { draw(leather) } }
+        Row(Modifier.fillMaxWidth().height(104.dp)
+            .graphicsLayer { compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen }   // cached: not redrawn with every camera frame
+            .drawBehind { with(Leatherette) { draw(leather) } }
             .padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
                 DeckButton("BAG", Modifier) { openBag() }
