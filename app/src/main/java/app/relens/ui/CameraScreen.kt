@@ -282,9 +282,17 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
 
         // ---- LED readout under the finder ----
         Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-            Led(fLabel(body.fNumber), cells = 3, prefix = "F")
-            body.shutterSeconds.let { t -> Led(if (t >= 0.5f) "%.0f".format(t) else "%.0f".format(1f / t), cells = 4, suffix = if (t >= 0.5f) "\"" else "") }
-            Led(when { shownM == null -> "---"; shownM.isInfinite() -> "∞"; shownM < 10f -> "%.2f".format(shownM); shownM < 100f -> "%.1f".format(shownM); else -> "%.0f".format(shownM) }, cells = 3, suffix = "m",
+            // the readouts show what the rings are set to: the nearest engraved value, never in between
+            val stops = lens.apertureStops
+            Led(fLabel(stops[body.aperturePos.roundToInt().coerceIn(0, stops.size - 1)]), cells = 3, prefix = "F")
+            shutterSpeeds[body.shutterPos.roundToInt().coerceIn(0, shutterSpeeds.size - 1)].let { (label, t) ->
+                Led(label, cells = 4, suffix = if (t >= 0.5f) "\"" else "") }
+            val markM = shownM?.let { m ->
+                // the focus ring's nearest engraved distance (judged in dioptres, as the ring turns)
+                val d = if (m.isInfinite()) 0f else 1f / m
+                lens.focusMarks.minByOrNull { mk -> kotlin.math.abs((if (mk.isInfinite()) 0f else 1f / mk) - d) } ?: m
+            }
+            Led(when { markM == null -> "---"; markM.isInfinite() -> "∞"; else -> mLabel(markM) }, cells = 3, suffix = "m",
                 // long-press the distance: collimate this camera's focus readings
                 modifier = Modifier.pointerInput(Unit) { detectTapGestures(onLongPress = {
                     body.calibCameras().firstOrNull { it.camera.id == body.rig.currentCameraId }?.let { body.startCalibration(it) }
