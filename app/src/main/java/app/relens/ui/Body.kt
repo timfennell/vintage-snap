@@ -547,7 +547,16 @@ class Body(app: Application) : AndroidViewModel(app) {
      * the table too. Roll and frame come from the note in each print's EXIF; older prints fall
      * back on the sidecar or negative the app kept for them then. Small previews, off the main thread.
      */
-    fun refreshLightTable(recent: Int = 48) { if (!refreshing) { refreshing = true; loadLightTable(recent).invokeOnCompletion { refreshing = false } } }
+    fun refreshLightTable(recent: Int = 48) {
+        if (refreshing) { pendingRecent = maxOf(pendingRecent, recent); return }       // run it after the one under way
+        refreshing = true
+        loadLightTable(recent).invokeOnCompletion {
+            refreshing = false
+            val next = pendingRecent; pendingRecent = 0
+            if (next > 0) viewModelScope.launch { refreshLightTable(next) }
+        }
+    }
+    @Volatile private var pendingRecent = 0
     @Volatile private var refreshing = false
     private fun loadLightTable(recent: Int) = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
         val app = getApplication<Application>()

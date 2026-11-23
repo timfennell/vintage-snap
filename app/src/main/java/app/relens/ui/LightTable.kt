@@ -88,7 +88,7 @@ fun LightTableScreen(body: Body, onBack: () -> Unit, openBench: () -> Unit, init
     var pan by remember { mutableStateOf(Offset.Zero) }
     var centred by remember { mutableStateOf(false) }
     var viewing by remember { mutableStateOf<DarkroomEntry?>(null) }
-    val measurer = rememberTextMeasurer()
+    val measurer = rememberTextMeasurer(cacheSize = 256)   // the strips' rebate printing: dozens of labels, laid out once
     // the darkroom timers run while any frame is still developing
     val nowMs = frameClock(body.darkroom.any { !it.done && it.preview == null && !it.status.startsWith("failed") })
     // The frames by day, oldest first; within a day by roll and frame, cut into strips of six.
@@ -578,21 +578,31 @@ half4 main(float2 p) {
     float blur = t * (0.8 + 5.0 * r2 * r2);
     float jit = fract(52.9829189 * fract(dot(p, float2(0.06711056, 0.00583715))));
     half3 col = half3(0);
-    half3 wsum = half3(0);
-    for (int i = 0; i < 16; i++) {
-        float fi = (float(i) + 0.5) / 16.0;
-        float s = fi * 2.0 - 1.0;                       // -1 red .. +1 blue
-        float2 q = c + (p - c) * (1.0 - k * r2 + ca * r2 * s);
-        float a = float(i) * 2.39996 + jit * 6.2832;
-        float rr = blur * sqrt(fract(fi * 7.0 + jit));
-        q += float2(cos(a), sin(a)) * rr;
-        half3 w = half3(clamp(1.0 - (s + 1.0) * 0.75, 0.0, 1.0),
-                        clamp(1.0 - abs(s) * 1.2, 0.0, 1.0),
-                        clamp(1.0 - (1.0 - s) * 0.75, 0.0, 1.0));
-        col += image.eval(q).rgb * w;
-        wsum += w;
+    if (r > 1.08) {
+        col = half3(0.02, 0.02, 0.025);                 // past the glass: the barrel's dark (only its glow below)
+    } else if (blur < 1.6) {
+        // the middle of the glass: barely soft, so three samples carry the colour fringe
+        col = half3(image.eval(c + (p - c) * (1.0 - k * r2 - ca * r2)).r,
+                    image.eval(c + (p - c) * (1.0 - k * r2)).g,
+                    image.eval(c + (p - c) * (1.0 - k * r2 + ca * r2)).b);
+    } else {
+        // toward the rim: eight samples over a disc and along the spectrum, turned per pixel
+        half3 wsum = half3(0);
+        for (int i = 0; i < 8; i++) {
+            float fi = (float(i) + 0.5) / 8.0;
+            float s = fi * 2.0 - 1.0;                   // -1 red .. +1 blue
+            float2 q = c + (p - c) * (1.0 - k * r2 + ca * r2 * s);
+            float a = float(i) * 2.39996 + jit * 6.2832;
+            float rr = blur * sqrt(fract(fi * 5.0 + jit));
+            q += float2(cos(a), sin(a)) * rr;
+            half3 w = half3(clamp(1.0 - (s + 1.0) * 0.75, 0.0, 1.0),
+                            clamp(1.0 - abs(s) * 1.2, 0.0, 1.0),
+                            clamp(1.0 - (1.0 - s) * 0.75, 0.0, 1.0));
+            col += image.eval(q).rgb * w;
+            wsum += w;
+        }
+        col /= wsum;
     }
-    col /= wsum;
     // falling off inside the glass, dark past its edge (the barrel), a faint glint on the rim
     col *= 1.0 - 0.35 * t * r2 * r2;
     float outside = smoothstep(0.95, 1.07, r);          // a soft edge: the barrel is out of focus
@@ -607,12 +617,12 @@ half4 main(float2 p) {
         // depths inside the rim, each pixel's samples shifted at random: a soft spread, no rays
         float spread = 0.08 + out_ * 2.2;
         half3 rim = half3(0);
-        for (int i = 0; i < 14; i++) {
-            float fi = (float(i) + jit) / 14.0;
+        for (int i = 0; i < 6; i++) {
+            float fi = (float(i) + jit) / 6.0;
             float2 q = c + (dir * (0.86 + 0.07 * step(0.5, fract(float(i) * 0.5))) + tang * (fi * 2.0 - 1.0) * spread) * R;
             rim += image.eval(q).rgb;
         }
-        rim /= 14.0;
+        rim /= 6.0;
         float bloom = 0.55 * exp(-out_ / 0.035) + 0.22 * exp(-out_ / 0.16);
         col += rim * rim * half3(1.0, 0.97, 0.92) * bloom * t * smoothstep(0.9, 0.99, r);
     }
