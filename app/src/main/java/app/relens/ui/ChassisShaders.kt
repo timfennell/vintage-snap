@@ -806,22 +806,22 @@ half4 main(float2 p) {
     float hw = iResolution.x * 0.5;
     float2 uv = (p - iResolution * 0.5) / hw;
     float hh = iResolution.y / iResolution.x;
-    float slot = rrect(uv, float2(0.42, hh - 0.04), 0.42);
-    if (slot > 0.16 + uPx) return half4(0.0);
+    float slot = rrect(uv, float2(0.80, hh - 0.08), 0.80);
+    if (slot > 0.14 + uPx) return half4(0.0);
     half3 col;
     float a = 1.0;
     if (slot > 0.0) {                                        // the chamfered steel lip
-        float t = slot / 0.16;
+        float t = slot / 0.14;
         float e = 0.001;
-        float2 g = normalize(float2(rrect(uv + float2(e, 0.0), float2(0.42, hh - 0.04), 0.42) - rrect(uv - float2(e, 0.0), float2(0.42, hh - 0.04), 0.42),
-                                    rrect(uv + float2(0.0, e), float2(0.42, hh - 0.04), 0.42) - rrect(uv - float2(0.0, e), float2(0.42, hh - 0.04), 0.42)) + 1e-6);
+        float2 g = normalize(float2(rrect(uv + float2(e, 0.0), float2(0.80, hh - 0.08), 0.80) - rrect(uv - float2(e, 0.0), float2(0.80, hh - 0.08), 0.80),
+                                    rrect(uv + float2(0.0, e), float2(0.80, hh - 0.08), 0.80) - rrect(uv - float2(0.0, e), float2(0.80, hh - 0.08), 0.80)) + 1e-6);
         col = toMetal(evalEnvironment(normalize(float3(-g * (1.0 - t) * 0.9, 0.6)), 0.10));
-        a = smoothstep(0.16 + uPx, 0.16 - uPx, slot);
+        a = smoothstep(0.14 + uPx, 0.14 - uPx, slot);
     } else {
         col = half3(0.012, 0.012, 0.013) * (1.0 + 2.0 * smoothstep(-0.25, 0.0, slot));     // the slot's depth
     }
     // the knob
-    float travel = hh - 0.04 - 0.80;
+    float travel = hh - 0.08 - 0.80;      // the ball rolls end to end inside the pill
     float2 kc = float2(0.0, -uKnob * travel);
     // its shadow in the slot
     col *= 1.0 - 0.5 * smoothstep(0.95, 0.55, length(uv - kc + uLightDir * 0.12)) * step(slot, 0.0);

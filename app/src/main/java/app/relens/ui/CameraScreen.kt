@@ -1317,8 +1317,8 @@ private fun ParallaxSlide(on: Boolean, onToggle: () -> Unit) {
     Row(Modifier.fillMaxSize().clickable(onClick = onToggle), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
         // the slide: the vertical slide's shader turned a quarter (up becomes right)
         // (the ball, 0.75 of the half-width of 24 dp: 18 dp across, as the DOF button)
-        Box(Modifier.size(width = 46.dp, height = 24.dp), contentAlignment = Alignment.Center) {
-            Canvas(Modifier.requiredSize(width = 24.dp, height = 46.dp).graphicsLayer { rotationZ = 90f }) {
+        Box(Modifier.size(width = 40.dp, height = 24.dp), contentAlignment = Alignment.Center) {
+            Canvas(Modifier.requiredSize(width = 24.dp, height = 40.dp).graphicsLayer { rotationZ = 90f }) {
                 if (slide != null) {
                     Chassis.bind(slide)
                     slide.setFloatUniform("iResolution", size.width, size.height)
