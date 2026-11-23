@@ -130,18 +130,23 @@ fun LightTableScreen(body: Body, onBack: () -> Unit, openBench: () -> Unit, init
             fun toSheet(p: Offset) = (p - pan) / scale
             // Opened on the newest frame: the last of the latest roll, in the middle of the table
             // at the zoom it opens at (once, when the frames are there).
-            androidx.compose.runtime.LaunchedEffect(strips.size, wPx, hPx) {
-                // (the newest strip: the last of the latest day)
+            // Kept on the newest frame while you haven't moved the table yourself: as prints load
+            // or a new one arrives, the view follows it. A new frame brings you back to it.
+            val newest = body.darkroom.firstOrNull()
+            androidx.compose.runtime.LaunchedEffect(newest) { centred = false }
+            androidx.compose.runtime.LaunchedEffect(strips.size, newest, newest?.preview, wPx, hPx) {
                 if (centred || strips.isEmpty()) return@LaunchedEffect
-                val i = strips.lastIndex; val st = strips[i]
-                val c = frameRect(stripRect(i, st.size), st.lastIndex).center
+                // where the newest frame lies (the last of the latest day, if it isn't found)
+                var at: Offset? = null
+                for ((i, st) in strips.withIndex()) { val j = st.indexOf(newest); if (j >= 0) at = frameRect(stripRect(i, st.size), j).center }
+                val c = at ?: strips.last().let { st -> frameRect(stripRect(strips.lastIndex, st.size), st.lastIndex).center }
                 pan = Offset(wPx / 2f, hPx / 2f) - c * scale
-                centred = true
             }
 
             Canvas(Modifier.fillMaxSize()
                 .pointerInput(Unit) {
                     detectTransformGestures { centroid, panBy, zoom, _ ->
+                        centred = true                       // moved by hand: stop following the newest
                         val ns = (scale * zoom).coerceIn(0.6f, 8f)
                         // zoom about the fingers
                         pan = centroid - (centroid - pan) * (ns / scale) + panBy
