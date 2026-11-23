@@ -172,7 +172,7 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
                     color = Palette.dim, fontSize = 10.sp)
             }
             Spacer(Modifier.width(10.dp))
-            FrameCounter(body.counterShows, body.stock.exposures, Modifier.clickable { openFilm() })
+
         }
 
         // ---- the finder: the lens's own field of view, 3:2 like 35 mm film (2:3 held upright) ----
@@ -287,12 +287,8 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
             Led(fLabel(stops[body.aperturePos.roundToInt().coerceIn(0, stops.size - 1)]), cells = 3, prefix = "F")
             shutterSpeeds[body.shutterPos.roundToInt().coerceIn(0, shutterSpeeds.size - 1)].let { (label, t) ->
                 Led(label, cells = 4, suffix = if (t >= 0.5f) "\"" else "") }
-            val markM = shownM?.let { m ->
-                // the focus ring's nearest engraved distance (judged in dioptres, as the ring turns)
-                val d = if (m.isInfinite()) 0f else 1f / m
-                lens.focusMarks.minByOrNull { mk -> kotlin.math.abs((if (mk.isInfinite()) 0f else 1f / mk) - d) } ?: m
-            }
-            Led(when { markM == null -> "---"; markM.isInfinite() -> "∞"; else -> mLabel(markM) }, cells = 3, suffix = "m",
+            // the focus ring turns smoothly (no clicks): its distance is shown as it is
+            Led(when { shownM == null -> "---"; shownM.isInfinite() -> "∞"; shownM < 10f -> "%.2f".format(shownM); shownM < 100f -> "%.1f".format(shownM); else -> "%.0f".format(shownM) }, cells = 3, suffix = "m",
                 // long-press the distance: collimate this camera's focus readings
                 modifier = Modifier.pointerInput(Unit) { detectTapGestures(onLongPress = {
                     body.calibCameras().firstOrNull { it.camera.id == body.rig.currentCameraId }?.let { body.startCalibration(it) }
@@ -372,60 +368,44 @@ fun CameraScreen(body: Body, haptics: Haptics, openBag: () -> Unit, openFilm: ()
             finderLight = finderLight * 0.30f,
         )
 
-        // ---- the deck: black leatherette round the brass controls ----
-        val leather = remember { Leatherette.texture() }
-        Row(Modifier.fillMaxWidth().height(104.dp)
+        // ---- the deck: a brushed steel top plate ----
+        // left, the big film winder; then the parallax slide; in the middle a waist-level viewer
+        // onto the light table; on the right the frame counter, the shutter release and DOF.
+        val steel = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(BRUSHED_STEEL_AGSL) else null }
+        androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth().height(132.dp)
             .graphicsLayer { compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen }   // cached: not redrawn with every camera frame
-            .drawBehind { with(Leatherette) { draw(leather) } }
-            .padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
-            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                // the film rewind knob (the lens bag opens from the lens's name up top): turns as the
-                // film winds on; a tap opens the film (rewinding is how a roll comes out)
-                FilmRewindKnob(body.counterShows) { openFilm(); haptics.click() }
-                if (body.parallaxAvailable) {
-                    Spacer(Modifier.width(12.dp))
-                    @Suppress("UNUSED_VARIABLE") val tick = body.focusLearnTick
-                    ParallaxSwitch(body.parallaxOn, body.focusLearning(framing?.camera?.id)) { body.toggleParallax(); haptics.click() }
-                }
+            .drawBehind {
+                if (steel != null) {
+                    Chassis.bind(steel)
+                    steel.setFloatUniform("iResolution", size.width, size.height)
+                    steel.setFloatUniform("uDens", density)
+                    drawRect(androidx.compose.ui.graphics.ShaderBrush(steel))
+                } else drawRect(Brush.verticalGradient(listOf(Color(0xFF9A9EA3), Color(0xFF6C7075))))
+                drawRect(Color.Black.copy(alpha = 0.7f), size = androidx.compose.ui.geometry.Size(size.width, 2f))
+                drawRect(Color.White.copy(alpha = 0.25f), topLeft = Offset(0f, 2f), size = androidx.compose.ui.geometry.Size(size.width, 1f))
+            }) {
+            val W = maxWidth; val H = maxHeight
+            @Composable fun at(cx: androidx.compose.ui.unit.Dp, cy: androidx.compose.ui.unit.Dp, w: androidx.compose.ui.unit.Dp, h: androidx.compose.ui.unit.Dp, content: @Composable () -> Unit) {
+                Box(Modifier.offset(x = cx - w / 2, y = cy - h / 2).size(w, h), contentAlignment = Alignment.Center) { content() }
             }
-            ShutterRelease(busy = body.busy) {
-                if (!body.busy && body.framesLeft > 0) { haptics.shutter(body.shutterSeconds); mirrorUp = true }
-                body.shoot(onShot = { haptics.advance() })
+            val mid = H * 0.52f
+            // the winder
+            at(W * 0.125f, mid, 92.dp, 92.dp) { FilmRewindKnob(body.counterShows) { openFilm(); haptics.click() } }
+            // the parallax slide, its label engraved above
+            if (body.parallaxAvailable) {
+                at(W * 0.315f, mid - 20.dp, 70.dp, 14.dp) { DeckLabel("PARALLAX") }
+                at(W * 0.315f, mid + 4.dp, 76.dp, 30.dp) { ParallaxSlide(body.parallaxOn) { body.toggleParallax(); haptics.click() } }
             }
-            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) {
-                DofLever(body.dofPreview) { held -> body.dofPreview = held; if (held) haptics.tick() }
-                Spacer(Modifier.width(12.dp))
-                val last = body.darkroom.firstOrNull()
-                // a loupe set in the body: the latest frame (or its darkroom timer) seen through
-                // a magnifier's glass, in a polished brass bezel with a coated lens's sheen
-                val loupeGlass = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(GLASS_WINDOW_AGSL) else null }
-                val loupeLens = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(LOUPE_LENS_AGSL) else null }
-                Box(Modifier.size(66.dp).clickable { openDarkroom() }, contentAlignment = Alignment.Center) {
-                    Canvas(Modifier.fillMaxSize()) {
-                        drawCircle(Brush.radialGradient(listOf(Color.Black.copy(alpha = 0.55f), Color.Transparent), center + Offset(2f, 4f), size.minDimension * 0.56f),
-                            size.minDimension * 0.56f, center + Offset(2f, 4f))
-                    }
-                    Box(Modifier.fillMaxSize(0.80f).clip(CircleShape).background(Color(0xFF0C0B0A)).graphicsLayer {
-                        if (loupeLens != null) {
-                            loupeLens.setFloatUniform("size", size.width, size.height)
-                            renderEffect = android.graphics.RenderEffect.createRuntimeShaderEffect(loupeLens, "image").asComposeRenderEffect()
-                        }
-                    }, contentAlignment = Alignment.Center) {
-                        val bmp = last?.preview
-                        if (bmp != null) Image(bmp.asImageBitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-                        else if (last != null && !last.status.startsWith("failed"))
-                            DarkroomTimerView(last.devStart, last.devSet, Modifier.fillMaxSize().background(Color(0xFF020302)).padding(2.dp))
-                        else Text(if (last != null) "…" else "LIGHT\nTABLE", color = Palette.dim, fontSize = 8.sp, lineHeight = 9.sp)
-                    }
-                    if (loupeGlass != null) Canvas(Modifier.fillMaxSize()) {
-                        Chassis.bind(loupeGlass)
-                        loupeGlass.setFloatUniform("iResolution", size.width, size.height)
-                        loupeGlass.setFloatUniform("uPx", 2f / size.height)
-                        loupeGlass.setFloatUniform("uRound", 1f)
-                        loupeGlass.setFloatUniform("uAr", 1f)
-                        loupeGlass.setFloatUniform("uBrass", 1f)
-                        drawRect(androidx.compose.ui.graphics.ShaderBrush(loupeGlass))
-                    }
+            // the waist-level viewer onto the light table
+            at(W * 0.50f, mid, 70.dp, 100.dp) { WaistLevelViewer(body.darkroom.firstOrNull()) { openDarkroom() } }
+            // the right cluster: counter and DOF stacked, the shutter release beside them
+            at(W * 0.69f, mid - 28.dp, 46.dp, 46.dp) { FrameCounter(body.counterShows, body.stock.exposures, Modifier.clickable { openFilm() }) }
+            at(W * 0.69f, mid + 18.dp, 34.dp, 34.dp) { DofButton(body.dofPreview) { held -> body.dofPreview = held; if (held) haptics.tick() } }
+            at(W * 0.69f, mid + 42.dp, 40.dp, 12.dp) { DeckLabel("DOF") }
+            at(W * 0.865f, mid, 92.dp, 92.dp) {
+                ShutterRelease(busy = body.busy) {
+                    if (!body.busy && body.framesLeft > 0) { haptics.shutter(body.shutterSeconds); mirrorUp = true }
+                    body.shoot(onShot = { haptics.advance() })
                 }
             }
         }
@@ -683,7 +663,7 @@ private fun FrameCounter(shot: Int, total: Int, modifier: Modifier = Modifier) {
             easing = androidx.compose.animation.core.FastOutSlowInEasing), label = "counter")
     val measurer = androidx.compose.ui.text.rememberTextMeasurer()
     val glass = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(GLASS_WINDOW_AGSL) else null }
-    Box(modifier.size(48.dp)) {
+    Box(modifier.fillMaxSize()) {
     Canvas(Modifier.fillMaxSize()) {
         val c = center
         val outer = size.minDimension / 2
@@ -691,7 +671,7 @@ private fun FrameCounter(shot: Int, total: Int, modifier: Modifier = Modifier) {
         // the bezel: turned brass (as the shutter release), light from above
         val bl = BrassLight.dir
         val bn = maxOf(kotlin.math.hypot(bl.x, bl.y), 0.2f)
-        drawCircle(Brush.linearGradient(listOf(Color(0xFFF2D892), Color(0xFF7A5A2A), Color(0xFFD2AC62), Color(0xFF3A2A12)),
+        drawCircle(Brush.linearGradient(listOf(Color(0xFFE8ECF0), Color(0xFF6E7378), Color(0xFFBFC4C9), Color(0xFF3A3D40)),
             start = c + Offset(bl.x / bn * outer, bl.y / bn * outer), end = c - Offset(bl.x / bn * outer, bl.y / bn * outer)), outer, c)
         var rr = outer * 0.87f
         while (rr < outer * 0.99f) { drawCircle(Color.White.copy(alpha = 0.06f), rr, c, style = androidx.compose.ui.graphics.drawscope.Stroke(0.6f)); rr += maxOf(1.1f, outer * 0.03f) }
@@ -746,6 +726,7 @@ private fun FrameCounter(shot: Int, total: Int, modifier: Modifier = Modifier) {
         glass.setFloatUniform("uRound", 1f)
         glass.setFloatUniform("uAr", 0f)
         glass.setFloatUniform("uBrass", 1f)
+        glass.setFloatUniform("uKnurl", 0f)
         drawRect(androidx.compose.ui.graphics.ShaderBrush(glass))
     }
     }
@@ -781,6 +762,7 @@ private fun ShutterRelease(busy: Boolean, onRelease: () -> Unit) {
                 shader.setFloatUniform("uPx", 2f / size.minDimension)
                 shader.setFloatUniform("uPressed", press)
                 shader.setFloatUniform("uSocket", 1f)
+                shader.setFloatUniform("uEnamel", 0f)
                 drawRect(androidx.compose.ui.graphics.ShaderBrush(shader))
             } else with(Brass) { release(center, size.minDimension / 2, pressed = pressed) }
             if (busy) drawCircle(Palette.led.copy(alpha = 0.8f), size.minDimension / 2 - 1.dp.toPx(), style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
@@ -842,35 +824,7 @@ fun dofMarks(lens: Lens, n: Float, s: Float): List<Pair<Float, Color>> {
  * The parallax switch on the deck: a small lever, its lamp glowing green when on. On, each
  * shot is followed by the guided left and right frames (ParallaxCapture).
  */
-@Composable
-private fun ParallaxSwitch(on: Boolean, @Suppress("UNUSED_PARAMETER") focus: Pair<Int, Boolean>, onToggle: () -> Unit) {
-    // A black enamel plate: a vertical slide switch (up for on) with its brass ball, and
-    // PARALLAX engraved in the black beneath it.
-    val plateSh = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(PARALLAX_ENAMEL_AGSL) else null }
-    val knob by animateFloatAsState(if (on) 1f else -1f, androidx.compose.animation.core.spring(dampingRatio = 0.6f, stiffness = 500f), label = "slide")
-    val dens = androidx.compose.ui.platform.LocalDensity.current.density
-    val label = remember { Engraving.render("PARALLAX", Color(0xFFEDE6D8), dens * 0.5f, 31) }
-    // (the DOF plate engraves its label at the same height)
-    // layout, in units of half the plate's width (the shader's); the window is gone (far below the plate)
-    val slotY = -0.55f; val slotHalf = 0.36f; val slotW = 0.26f
-    Canvas(Modifier.size(width = 46.dp, height = 76.dp).clickable(onClick = onToggle)) {
-        if (plateSh != null) {
-            Chassis.bind(plateSh)
-            plateSh.setFloatUniform("iResolution", size.width, size.height)
-            plateSh.setFloatUniform("uPx", 2f / size.width)
-            plateSh.setFloatUniform("uKnob", knob)
-            plateSh.setFloatUniform("uSlot", slotY, slotHalf, slotW)
-            plateSh.setFloatUniform("uWin", 50f, 0.01f, 0.01f, 0.001f)
-            drawRect(androidx.compose.ui.graphics.ShaderBrush(plateSh))
-        } else {
-            drawRoundRect(Color(0xFF0C0C0C), cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.width * 0.15f))
-            drawCircle(Color(0xFFC49A4E), size.width * 0.12f, Offset(center.x, center.y + (slotY - knob * slotHalf) * size.width / 2))
-        }
-        val h = parallaxLabelHeight.toPx(); val w = h * label.width / label.height
-        drawImage(label, dstOffset = androidx.compose.ui.unit.IntOffset((center.x - w / 2).toInt(), (center.y + 0.95f * size.width / 2 - h / 2).toInt()),
-            dstSize = androidx.compose.ui.unit.IntSize(w.toInt(), h.toInt()))
-    }
-}
+
 
 /**
  * The finder during parallax capture: ARCore's view (in a TextureView, so the eyepiece
@@ -961,44 +915,7 @@ private fun Modifier.portraitBody() = this.then(Modifier.layout { m, c ->
  * (from the live depth map); let go, the clean live view. As on an SLR, where the finder is
  * wide open until the lever stops the lens down.
  */
-@Composable
-private fun DofLever(held: Boolean, onHeld: (Boolean) -> Unit) {
-    // the button centred on the deck's line (with the other round controls); its plate hangs below
-    Box(Modifier.size(width = 42.dp, height = 104.dp)
-        .pointerInput(Unit) { detectTapGestures(onPress = { onHeld(true); tryAwaitRelease(); onHeld(false) }) }) {
-        val shader = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(SOFT_RELEASE_AGSL) else null }
-        val dens = androidx.compose.ui.platform.LocalDensity.current.density
-        val press by animateFloatAsState(if (held) 1f else 0f, label = "dofpress")
-        Canvas(Modifier.align(Alignment.Center).size(34.dp).scale(1f - 0.06f * press)) {
-            if (shader != null) {
-                Chassis.bind(shader)
-                shader.setFloatUniform("iResolution", size.width, size.height)
-                shader.setFloatUniform("uPx", 2f / size.minDimension)
-                shader.setFloatUniform("uPressed", press)
-                shader.setFloatUniform("uSocket", 0f)
-                drawRect(androidx.compose.ui.graphics.ShaderBrush(shader))
-            } else with(Brass) { disc(center, size.minDimension / 2, pressed = held, rings = true) }
-        }
-        // DOF, engraved and enamelled on a small black plate below the button
-        val plateSh = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(LABEL_PLATE_AGSL) else null }
-        val dofLabel = remember { Engraving.render("DOF", Color(0xFFEDE6D8), dens * 0.62f, 78) }
-        Canvas(Modifier.align(Alignment.Center).offset(y = 27.dp).size(width = 34.dp, height = 14.dp)) {
-            if (plateSh != null) {
-                Chassis.bind(plateSh)
-                plateSh.setFloatUniform("iResolution", size.width, size.height)
-                plateSh.setFloatUniform("uPx", 2f / size.height)
-                val hh = size.height / 2
-                plateSh.setFloatUniform("uCorner", 4.dp.toPx() / hh)
-                plateSh.setFloatUniform("uEdge", 2.dp.toPx() / hh)
-                drawRect(androidx.compose.ui.graphics.ShaderBrush(plateSh))
-            } else drawRoundRect(Color(0xFF0C0C0C), cornerRadius = androidx.compose.ui.geometry.CornerRadius(4.dp.toPx()))
-            // engraved at the same size as PARALLAX on the switch's plate
-            val h = parallaxLabelHeight.toPx(); val w = h * dofLabel.width / dofLabel.height
-            drawImage(dofLabel, dstOffset = androidx.compose.ui.unit.IntOffset((center.x - w / 2).toInt(), (center.y - h / 2).toInt()),
-                dstSize = androidx.compose.ui.unit.IntSize(w.toInt(), h.toInt()))
-        }
-    }
-}
+
 
 
 /**
@@ -1290,6 +1207,8 @@ private object Leatherette {
 /** Where the light falls on the brass, as a direction on the screen (-1..1): the phone's tilt moves it. */
 object BrassLight {
     var dir by mutableStateOf(Offset(-0.35f, -0.42f))
+    /** Up, on the screen (gravity's opposite): portrait (0, -1), turned on its side (+-1, 0). */
+    var up by mutableStateOf(Offset(0f, -1f))
 }
 
 /**
@@ -1304,6 +1223,7 @@ private fun BrassLightSensor() {
         val sm = ctx.getSystemService(android.content.Context.SENSOR_SERVICE) as android.hardware.SensorManager
         val sensor = sm.getDefaultSensor(android.hardware.Sensor.TYPE_GRAVITY) ?: sm.getDefaultSensor(android.hardware.Sensor.TYPE_ACCELEROMETER)
         var sx = -0.35f; var sy = -0.42f
+        var upX = 0f; var upY = -1f
         val listener = object : android.hardware.SensorEventListener {
             override fun onSensorChanged(e: android.hardware.SensorEvent) {
                 val gx = e.values[0] / 9.81f; val gy = e.values[1] / 9.81f
@@ -1312,6 +1232,14 @@ private fun BrassLightSensor() {
                 sx += (tx - sx) * 0.12f; sy += (ty - sy) * 0.12f
                 val d = BrassLight.dir
                 if (kotlin.math.abs(d.x - sx) + kotlin.math.abs(d.y - sy) > 0.012f) BrassLight.dir = Offset(sx, sy)
+                // which way is up, for the world the metal reflects (kept when the phone lies flat)
+                val ux = e.values[0]; val uy = -e.values[1]; val ul = kotlin.math.hypot(ux, uy)
+                if (ul > 3f) {
+                    upX += (ux / ul - upX) * 0.15f; upY += (uy / ul - upY) * 0.15f
+                    val n = kotlin.math.hypot(upX, upY)
+                    val nu = Offset(upX / n, upY / n); val ou = BrassLight.up
+                    if (kotlin.math.abs(nu.x - ou.x) + kotlin.math.abs(nu.y - ou.y) > 0.02f) BrassLight.up = nu
+                }
             }
             override fun onAccuracyChanged(s: android.hardware.Sensor?, a: Int) {}
         }
@@ -1324,24 +1252,24 @@ private fun BrassLightSensor() {
 /** The film rewind knob in polished brass, turning a step with every frame wound on. */
 @Composable
 private fun FilmRewindKnob(frame: Int, onTap: () -> Unit) {
-    val angle by animateFloatAsState(frame * -240f,
+    // counter-clockwise as the film winds on (a positive shader angle turns it that way on screen)
+    val angle by animateFloatAsState(frame * 240f,
         androidx.compose.animation.core.tween(durationMillis = 600, delayMillis = 500,
             easing = androidx.compose.animation.core.FastOutSlowInEasing), label = "rewind")
     val shader = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(REWIND_KNOB_AGSL) else null }
-    Box(Modifier.clickable(onClick = onTap), contentAlignment = Alignment.Center) {
-        Canvas(Modifier.size(58.dp)) {
-            // the drum's shadow on the leather
-            drawCircle(Brush.radialGradient(listOf(Color.Black.copy(alpha = 0.55f), Color.Transparent), center + Offset(2f, 4f), size.minDimension * 0.56f),
-                size.minDimension * 0.56f, center + Offset(2f, 4f))
+    Box(Modifier.fillMaxSize().clickable(onClick = onTap), contentAlignment = Alignment.Center) {
+        Canvas(Modifier.fillMaxSize()) {
+            deckShadow()
             if (shader != null) {
                 Chassis.bind(shader)
                 shader.setFloatUniform("iResolution", size.width, size.height)
                 shader.setFloatUniform("uPx", 2f / size.minDimension)
                 shader.setFloatUniform("uKnobAngle", Math.toRadians(angle.toDouble()).toFloat())
+                shader.setFloatUniform("uEnamel", 0f)
                 drawRect(androidx.compose.ui.graphics.ShaderBrush(shader))
             } else {
                 with(Brass) { disc(center, size.minDimension / 2, pressed = false, rings = true) }
-                rotate(angle) { drawRect(Color(0xFF3A2A12), topLeft = Offset(size.width * 0.15f, size.height * 0.42f), size = androidx.compose.ui.geometry.Size(size.width * 0.7f, size.height * 0.16f)) }
+                rotate(-angle) { drawRect(Color(0xFF3A2A12), topLeft = Offset(size.width * 0.15f, size.height * 0.42f), size = androidx.compose.ui.geometry.Size(size.width * 0.7f, size.height * 0.16f)) }
             }
         }
     }
@@ -1350,3 +1278,141 @@ private fun FilmRewindKnob(frame: Int, onTap: () -> Unit) {
 
 /** The engraved labels on the black enamel plates (PARALLAX, DOF), all one height. */
 private val parallaxLabelHeight = 7.dp
+
+
+/** One soft shadow under a round control on the leather, falling away from the light. */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.deckShadow(scale: Float = 1f) {
+    val l = BrassLight.dir
+    val off = Offset(-l.x * 5.dp.toPx(), -l.y * 5.dp.toPx() + 3.dp.toPx())
+    val r = size.minDimension / 2 * scale
+    drawCircle(Brush.radialGradient(0.70f to Color.Black.copy(alpha = 0.62f), 1f to Color.Transparent, center = center + off, radius = r * 1.18f),
+        r * 1.18f, center + off)
+}
+
+/** A label for the deck: engraved into the steel and filled black (all one size and baseline). */
+@Composable
+private fun DeckLabel(text: String) {
+    val dens = androidx.compose.ui.platform.LocalDensity.current.density
+    val img = remember(text) { Engraving.render(text, Color(0xFF121212), dens * 0.5f, text.hashCode()) }
+    Canvas(Modifier.size(width = 60.dp, height = 14.dp)) {
+        val h = 7.dp.toPx(); var w = h * img.width / img.height
+        val maxW = size.width
+        val hh2 = if (w > maxW) h * maxW / w else h; w = minOf(w, maxW)
+        drawImage(img, dstOffset = androidx.compose.ui.unit.IntOffset((center.x - w / 2).toInt(), (center.y - hh2 / 2).toInt()),
+            dstSize = androidx.compose.ui.unit.IntSize(w.toInt(), hh2.toInt()))
+    }
+}
+
+/** The parallax switch: a horizontal slide cut into the steel (right for on), a green LED set flush beside it. */
+@Composable
+private fun ParallaxSlide(on: Boolean, onToggle: () -> Unit) {
+    val sdk33 = android.os.Build.VERSION.SDK_INT >= 33
+    val slide = remember { if (sdk33) android.graphics.RuntimeShader(SLIDE_V_AGSL) else null }
+    val led = remember { if (sdk33) android.graphics.RuntimeShader(FLUSH_LED_AGSL) else null }
+    val knob by animateFloatAsState(if (on) 1f else -1f, androidx.compose.animation.core.spring(dampingRatio = 0.6f, stiffness = 600f), label = "slide")
+    val lit by animateFloatAsState(if (on) 1f else 0f, androidx.compose.animation.core.tween(180), label = "led")
+    Row(Modifier.fillMaxSize().clickable(onClick = onToggle), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+        // the slide: the vertical slide's shader turned a quarter (up becomes right)
+        Box(Modifier.size(width = 54.dp, height = 22.dp), contentAlignment = Alignment.Center) {
+            Canvas(Modifier.size(width = 22.dp, height = 54.dp).graphicsLayer { rotationZ = 90f }) {
+                if (slide != null) {
+                    Chassis.bind(slide)
+                    slide.setFloatUniform("iResolution", size.width, size.height)
+                    slide.setFloatUniform("uPx", 2f / size.width)
+                    slide.setFloatUniform("uKnob", knob)
+                    drawRect(androidx.compose.ui.graphics.ShaderBrush(slide))
+                } else drawRoundRect(Color(0xFF0A0A0A), cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.width / 2))
+            }
+        }
+        Spacer(Modifier.width(7.dp))
+        Canvas(Modifier.size(10.dp)) {
+            if (lit > 0f) drawCircle(Brush.radialGradient(listOf(Color(0xFF40FF90).copy(alpha = 0.45f * lit), Color.Transparent), radius = size.minDimension * 1.6f), size.minDimension * 1.6f)
+            if (led != null) {
+                Chassis.bind(led)
+                led.setFloatUniform("iResolution", size.width, size.height)
+                led.setFloatUniform("uPx", 2f / size.minDimension)
+                led.setFloatUniform("uLit", lit)
+                drawRect(androidx.compose.ui.graphics.ShaderBrush(led))
+            } else drawCircle(if (on) Color(0xFF73F2B3) else Color(0xFF1F2A24), size.minDimension / 2)
+        }
+    }
+}
+
+/** The light table seen through a waist-level viewer: the latest frame (or its darkroom timer) under glass in a stainless bezel. */
+@Composable
+private fun WaistLevelViewer(last: DarkroomEntry?, onOpen: () -> Unit) {
+    val bezel = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(VIEWER_BEZEL_AGSL) else null }
+    Box(Modifier.fillMaxSize().clickable(onClick = onOpen), contentAlignment = Alignment.Center) {
+        // the picture, sunk under the frame (its edges darkened, as a ground glass seen from above)
+        Box(Modifier.fillMaxSize(0.80f).clip(RoundedCornerShape(2.dp)).background(Color(0xFF0B0A09)), contentAlignment = Alignment.Center) {
+            val bmp = last?.preview
+            if (bmp != null) Image(bmp.asImageBitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            else if (last != null && !last.status.startsWith("failed"))
+                DarkroomTimerView(last.devStart, last.devSet, Modifier.fillMaxSize().background(Color(0xFF020302)).padding(4.dp))
+            Canvas(Modifier.fillMaxSize()) {
+                drawRect(Brush.radialGradient(0.55f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.55f), center = center, radius = size.maxDimension * 0.62f))
+            }
+        }
+        Canvas(Modifier.fillMaxSize()) {
+            if (bezel != null) {
+                Chassis.bind(bezel)
+                bezel.setFloatUniform("iResolution", size.width, size.height)
+                val hh = size.height / 2
+                bezel.setFloatUniform("uPx", 1f / hh)
+                bezel.setFloatUniform("uOpen", size.width * 0.40f / hh, size.height * 0.40f / hh)
+                bezel.setFloatUniform("uFrame", size.height * 0.10f / hh)
+                drawRect(androidx.compose.ui.graphics.ShaderBrush(bezel))
+            } else drawRoundRect(Color(0xFF8E9297), style = androidx.compose.ui.graphics.drawscope.Stroke(size.height * 0.1f),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(6.dp.toPx()))
+        }
+    }
+}
+
+/** The depth-of-field preview button: black enamel, its knurled rim worn to brass; held, it previews. */
+@Composable
+private fun DofButton(held: Boolean, onHeld: (Boolean) -> Unit) {
+    val shader = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(KNURL_BUTTON_AGSL) else null }
+    val press by animateFloatAsState(if (held) 1f else 0f, label = "dofpress")
+    Canvas(Modifier.fillMaxSize(0.82f).scale(1f - 0.06f * press)
+        .pointerInput(Unit) { detectTapGestures(onPress = { onHeld(true); tryAwaitRelease(); onHeld(false) }) }) {
+        deckShadow()
+        if (shader != null) {
+            Chassis.bind(shader)
+            shader.setFloatUniform("iResolution", size.width, size.height)
+            shader.setFloatUniform("uPx", 2f / size.minDimension)
+            shader.setFloatUniform("uPressed", press)
+            drawRect(androidx.compose.ui.graphics.ShaderBrush(shader))
+        } else drawCircle(Color(0xFF0C0C0C), size.minDimension / 2)
+    }
+}
+
+/** The light table: a loupe in a black enamel bezel showing the latest frame (or its darkroom timer). */
+@Composable
+private fun LightTableLoupe(last: DarkroomEntry?, onOpen: () -> Unit) {
+    val loupeGlass = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(GLASS_WINDOW_AGSL) else null }
+    val loupeLens = remember { if (android.os.Build.VERSION.SDK_INT >= 33) android.graphics.RuntimeShader(LOUPE_LENS_AGSL) else null }
+    Box(Modifier.fillMaxSize().clickable(onClick = onOpen), contentAlignment = Alignment.Center) {
+        Canvas(Modifier.fillMaxSize()) { deckShadow() }
+        Box(Modifier.fillMaxSize(0.80f).clip(CircleShape).background(Color(0xFF0C0B0A)).graphicsLayer {
+            if (loupeLens != null) {
+                loupeLens.setFloatUniform("size", size.width, size.height)
+                renderEffect = android.graphics.RenderEffect.createRuntimeShaderEffect(loupeLens, "image").asComposeRenderEffect()
+            }
+        }, contentAlignment = Alignment.Center) {
+            val bmp = last?.preview
+            if (bmp != null) Image(bmp.asImageBitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            else if (last != null && !last.status.startsWith("failed"))
+                DarkroomTimerView(last.devStart, last.devSet, Modifier.fillMaxSize().background(Color(0xFF020302)).padding(2.dp))
+        }
+        if (loupeGlass != null) Canvas(Modifier.fillMaxSize()) {
+            Chassis.bind(loupeGlass)
+            loupeGlass.setFloatUniform("iResolution", size.width, size.height)
+            loupeGlass.setFloatUniform("uPx", 2f / size.height)
+            loupeGlass.setFloatUniform("uRound", 1f)
+            loupeGlass.setFloatUniform("uAr", 1f)
+            loupeGlass.setFloatUniform("uBrass", 0f)
+            loupeGlass.setFloatUniform("uKnurl", 1f)
+            drawRect(androidx.compose.ui.graphics.ShaderBrush(loupeGlass))
+        }
+    }
+}

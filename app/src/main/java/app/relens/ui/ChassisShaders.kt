@@ -96,6 +96,9 @@ object Chassis {
         sh.setFloatUniform("uSkyTone", sky[0], sky[1], sky[2])
         sh.setFloatUniform("uHorizonTone", horizon[0], horizon[1], horizon[2])
         sh.setFloatUniform("uGroundTone", ground[0], ground[1], ground[2])
+        runCatching { sh.setFloatUniform("uSteel", 1f) }      // (absent where a shader has no plain metal)
+        val u = BrassLight.up
+        sh.setFloatUniform("uUp", u.x, u.y)
     }
 }
 
@@ -105,6 +108,7 @@ uniform float2 uLightDir;
 uniform float3 uSkyTone;
 uniform float3 uHorizonTone;
 uniform float3 uGroundTone;
+uniform float2 uUp;          // which way is up on the screen (unit): the world turns with the phone
 
 float eHash(float2 q) { return fract(sin(dot(q, float2(127.1, 311.7))) * 43758.5453); }
 float eNoise(float2 q) {
@@ -122,6 +126,9 @@ half3 evalEnvironment(float3 N, float roughness) {
     float3 R = reflect(float3(0.0, 0.0, -1.0), normalize(N));
     R.xy += uLightDir * 0.55;
     R = normalize(R);
+    // into the world's frame: up is the way gravity says, not the screen's top
+    float2 hAx = float2(-uUp.y, uUp.x);
+    R.xy = float2(dot(R.xy, hAx), -dot(R.xy, uUp));
     float el = -R.y;                                   // up is up
     float az = atan(R.x, max(R.z, 0.05));
     // the world seen softly even in mirror polish (an impression, not a picture)
@@ -165,6 +172,8 @@ half3 evalEnvironment(float3 N, float roughness) {
 }
 
 half3 toBrass(half3 envColor) { return envColor * half3(1.00, 0.81, 0.40); }
+uniform float uSteel;        // 1: the body's metal is stainless steel (brass stays only where paint wears through)
+half3 toMetal(half3 envColor) { return uSteel > 0.5 ? envColor * half3(0.86, 0.89, 0.93) + half3(0.015) : toBrass(envColor); }
 
 // glossy black enamel: deep black, only the bright parts of the world caught in it
 half3 enamel(float3 N, float roughness) { half3 e = evalEnvironment(N, roughness); return half3(0.014, 0.015, 0.017) + e * e * 0.18; }
@@ -180,6 +189,7 @@ uniform float2 iResolution;
 uniform float uPx;          // a pixel, in uv units
 uniform float uPressed;     // 0..1
 uniform float uSocket;      // 1: the threaded socket at the centre
+uniform float uEnamel;      // 1: black enamel, brass showing only at the worn outer edge
 
 half4 main(float2 p) {
     float2 uv = (p / iResolution) * 2.0 - 1.0;
@@ -206,13 +216,14 @@ half4 main(float2 p) {
             if (r < 0.10) { return half4(half3(0.02, 0.015, 0.01), 1.0); }          // the bore
             if (r < 0.15) {                                                        // threads
                 float th = 0.5 + 0.5 * sin(r * 260.0);
-                half3 c = toBrass(evalEnvironment(normalize(float3(-dir * 0.6, 0.8)), 0.35)) * (0.25 + 0.35 * th);
+                half3 c = toMetal(evalEnvironment(normalize(float3(-dir * 0.6, 0.8)), 0.35)) * (0.25 + 0.35 * th);
                 return half4(c * (1.0 - 0.15 * uPressed), 1.0);
             }
             if (r < 0.20) { N = normalize(float3(-dir * 0.8, 0.6)); rough = 0.05; } // its chamfer
         }
     }
-    half3 col = toBrass(evalEnvironment(N, rough)) * ao;
+    half3 col = toMetal(evalEnvironment(N, rough)) * ao;
+    if (uEnamel > 0.5 && r < 0.955) col = enamel(N, 0.10) * ao;          // black, the brass only at the rim
     col *= 1.0 - 0.15 * uPressed;                    // the thumb shades it
     float a = smoothstep(1.0 + uPx, 1.0 - uPx, r);
     return half4(col * a, a);
@@ -299,6 +310,7 @@ const val REWIND_KNOB_AGSL = ENV_CORE + """
 uniform float2 iResolution;
 uniform float uPx;
 uniform float uKnobAngle;      // radians
+uniform float uEnamel;         // 1: black enamel over brass (brass at the worn knurl), arrow filled cream
 
 half4 main(float2 p) {
     float2 uv = (p / iResolution) * 2.0 - 1.0;
@@ -351,7 +363,12 @@ half4 main(float2 p) {
             if (u > 0.0 && u < 0.16 && w < (0.16 - u) * 0.7) ink = half3(0.02);
         }
     }
-    half3 col = toBrass(evalEnvironment(N, rough)) * ao;
+    half3 col = toMetal(evalEnvironment(N, rough)) * ao;
+    if (uEnamel > 0.5) {
+        // black enamel everywhere but the knurled edge, where it has worn through to brass
+        if (r < 0.95) col = enamel(N, 0.10) * ao;
+        if (ink.r >= 0.0) ink = half3(0.86, 0.82, 0.74);                  // the engraving filled cream
+    }
     if (ink.r >= 0.0) col = mix(col, ink + half3(0.03) * evalEnvironment(N, 0.1).r, 0.92);     // enamel keeps a faint gloss
     float a = smoothstep(1.0 + uPx, 1.0 - uPx, r);
     // the drum's shadow edge outside the knob is left to the deck
@@ -374,7 +391,7 @@ half4 main(float2 p) {
     if (r > 0.68) {                                          // the bezel
         float t = (r - 0.68) / 0.32;
         float3 N = normalize(float3(dir * (t - 0.35) * 1.3, 0.8));
-        col = toBrass(evalEnvironment(N, 0.04)) * (r < 0.71 ? 0.4 : 1.0);
+        col = toMetal(evalEnvironment(N, 0.04)) * (r < 0.71 ? 0.4 : 1.0);
     } else {                                                 // the glass dome
         float gr = r / 0.68;
         float gz = sqrt(max(1.0 - gr * gr, 0.0));
@@ -418,12 +435,12 @@ half4 main(float2 p) {
     if (r > 0.70) {                                          // the bezel, rounded
         float t = (r - 0.70) / 0.30;
         float3 N = normalize(float3(dir * (t - 0.4) * 1.4, 0.75));
-        col = toBrass(evalEnvironment(N, 0.04));
+        col = toMetal(evalEnvironment(N, 0.04));
         col *= (r < 0.73) ? 0.35 : 1.0;                      // the step down into the track
     } else {                                                 // the brushed track
         float groove = 0.5 + 0.5 * sin(uv.y * 95.0);
         float3 N = normalize(float3(0.0, (groove - 0.5) * 0.12, 1.0));
-        col = toBrass(evalEnvironment(N, 0.28)) * 0.62;
+        col = toMetal(evalEnvironment(N, 0.28)) * 0.62;
         col *= 0.78 + 0.22 * smoothstep(0.70, 0.40, r);       // shadowed under the bezel's lip
     }
     // the ball
@@ -437,7 +454,7 @@ half4 main(float2 p) {
     if (kl < 1.0) {
         float kz = sqrt(1.0 - kl * kl);
         float3 N = normalize(float3(kd, kz));
-        half3 ball = toBrass(evalEnvironment(N, 0.03));
+        half3 ball = toMetal(evalEnvironment(N, 0.03));
         float ka = smoothstep(1.0, 1.0 - uPx * 2.0 / kr, kl);
         col = mix(col, ball, ka);
     }
@@ -456,7 +473,8 @@ uniform float2 iResolution;
 uniform float uPx;
 uniform float uRound;
 uniform float uAr;
-uniform float uBrass;        // 1: a polished brass bezel; 0: the window just set into black enamel
+uniform float uBrass;        // 1: a polished metal bezel; 0: the window just set into black enamel
+uniform float uKnurl;        // 1: the bezel is knurled black enamel, worn to brass on the ridges
 
 half4 main(float2 p) {
     float aspect = iResolution.x / iResolution.y;
@@ -470,7 +488,14 @@ half4 main(float2 p) {
     if (r > 0.80) {                                          // the bezel
         float t = (r - 0.80) / 0.20;
         float3 N = normalize(float3(dir * (t - 0.4) * 1.5, 0.7));
-        half3 col = uBrass > 0.5 ? toBrass(evalEnvironment(N, 0.04)) : enamel(N, 0.08);
+        half3 col = uBrass > 0.5 ? toMetal(evalEnvironment(N, 0.04)) : enamel(N, 0.08);
+        if (uKnurl > 0.5) {
+            float ang = atan(d.y, d.x);
+            float ridge = 0.5 + 0.5 * cos(ang * 72.0);
+            float3 KN = normalize(N + float3(float2(-dir.y, dir.x) * sin(ang * 72.0) * 0.5, 0.0));
+            float wear = smoothstep(0.80, 0.98, ridge) * (0.45 + 0.55 * sin(ang * 3.0 + 1.3) * 0.5 + 0.275) * smoothstep(0.84, 0.96, r);
+            col = mix(enamel(KN, 0.10) * (0.55 + 0.45 * ridge), toBrass(evalEnvironment(KN, mix(0.42, 0.06, wear))), smoothstep(0.25, 0.6, wear));
+        }
         col *= (r < 0.83) ? 0.3 : 1.0;
         float a = smoothstep(1.0 + uPx, 1.0 - uPx, r);
         return half4(col * a, a);
@@ -531,14 +556,14 @@ half4 main(float2 p) {
     float3 N = float3(0.0, 0.0, 1.0);
     float rough = 0.26;
     if (plate > -0.10) { float2 g = normalize(float2(sign(uv.x) * step(abs(uv.y) * aspect, abs(uv.x)), sign(uv.y) * step(abs(uv.x), abs(uv.y) * aspect)) + 1e-4); N = normalize(float3(g * 0.7, 0.7)); rough = 0.05; }
-    half3 col = toBrass(evalEnvironment(N, rough)) + half3(0.10, 0.075, 0.035);   // satin brass keeps its warmth in the dark
+    half3 col = toMetal(evalEnvironment(N, rough)) + half3(0.10, 0.075, 0.035);   // satin brass keeps its warmth in the dark
     // the slot
     float2 sp = uv - float2(uSlotCx, uSlot.x);
     float slot = rrect(sp, float2(uSlot.y + 0.30, 0.30), 0.30);
     if (slot < 0.0) {
         float depth = smoothstep(0.0, -0.12, slot);
-        col = toBrass(evalEnvironment(float3(0.0, 0.0, 1.0), 0.4)) * 0.10 * (1.0 - depth * 0.5);
-        if (sp.y < 0.0 && slot > -0.08) col += toBrass(evalEnvironment(float3(0.0, 0.7, 0.7), 0.1)) * 0.25;   // the top wall caught by light
+        col = toMetal(evalEnvironment(float3(0.0, 0.0, 1.0), 0.4)) * 0.10 * (1.0 - depth * 0.5);
+        if (sp.y < 0.0 && slot > -0.08) col += toMetal(evalEnvironment(float3(0.0, 0.7, 0.7), 0.1)) * 0.25;   // the top wall caught by light
     } else col *= 1.0 - 0.35 * smoothstep(0.08, 0.0, slot);             // the slot's chamfered lip
     // the ball in the slot
     float2 kc = float2(uSlotCx + uKnob * uSlot.y, uSlot.x);
@@ -546,11 +571,11 @@ half4 main(float2 p) {
     float kl = length(kd);
     if (kl < 1.0) {
         float3 KN = normalize(float3(kd, sqrt(1.0 - kl * kl)));
-        col = mix(col, toBrass(evalEnvironment(KN, 0.03)), smoothstep(1.0, 1.0 - uPx * 6.0, kl));
+        col = mix(col, toMetal(evalEnvironment(KN, 0.03)), smoothstep(1.0, 1.0 - uPx * 6.0, kl));
     }
     // the window's seat: a polished ring sunk into the plate
     float wr = length(uv - uWin);
-    if (wr < 0.40 && wr > 0.30) { float t = (wr - 0.30) / 0.10; col = toBrass(evalEnvironment(normalize(float3((uv - uWin) / wr * (t - 0.5) * 1.2, 0.8)), 0.04)); }
+    if (wr < 0.40 && wr > 0.30) { float t = (wr - 0.30) / 0.10; col = toMetal(evalEnvironment(normalize(float3((uv - uWin) / wr * (t - 0.5) * 1.2, 0.8)), 0.04)); }
     float a = smoothstep(uPx, -uPx, plate);
     return half4(col * a, a);
 }
@@ -607,7 +632,7 @@ half4 main(float2 p) {
     if (slot < 0.0) col *= 1.0 - 0.5 * smoothstep(1.4, 0.8, length(uv - kc + uLightDir * 0.12) / kr);
     if (kl < 1.0) {
         float3 KN = normalize(float3(kd, sqrt(1.0 - kl * kl)));
-        col = mix(col, toBrass(evalEnvironment(KN, 0.03)), smoothstep(1.0, 1.0 - uPx * 3.0 / kr, kl));
+        col = mix(col, toMetal(evalEnvironment(KN, 0.03)), smoothstep(1.0, 1.0 - uPx * 3.0 / kr, kl));
     }
     // the window's rim, a chamfer in the enamel (its opening is left to the drum behind)
     float2 wp = uv - float2(0.0, uWin.x);
@@ -651,6 +676,232 @@ half4 main(float2 p) {
         col = enamel(float3(0.0, 0.0, 1.0), 0.18);
     }
     float a = smoothstep(uPx, -uPx, plate);
+    return half4(col * a, a);
+}
+"""
+
+/**
+ * A toggle switch seen from above: a black enamel collar (a polished bevel catching light)
+ * round a dark well, and a short brass bat-handle lever tipped toward uLever (-1 down off,
+ * 1 up on), foreshortened as it leans, with a ball end.
+ */
+const val TOGGLE_AGSL = ENV_CORE + """
+uniform float2 iResolution;
+uniform float uPx;
+uniform float uLever;
+
+half4 main(float2 p) {
+    float2 uv = (p / iResolution) * 2.0 - 1.0;
+    float r = length(uv);
+    if (r > 1.0 + uPx) return half4(0.0);
+    float2 dir = uv / max(r, 1e-4);
+    half3 col;
+    if (r > 0.80) {                                          // the collar's rounded edge
+        float t = (r - 0.80) / 0.20;
+        col = enamel(normalize(float3(dir * (t * 0.9), 0.7)), 0.08);
+    } else if (r > 0.42) {                                   // its flat face: black enamel
+        col = enamel(float3(0.0, 0.0, 1.0), 0.16);
+    } else {                                                 // the well the lever stands in
+        col = half3(0.010, 0.009, 0.008) + enamel(normalize(float3(-dir * 0.5, 0.8)), 0.2) * 0.4 * smoothstep(0.30, 0.42, r);
+    }
+    // the lever: from the centre toward its tip, leaning up (on) or down (off)
+    float lean = uLever;
+    float2 tip = float2(0.0, -0.62 * lean);
+    float2 pa = uv; float2 ba = tip;
+    float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-4), 0.0, 1.0);
+    float w = mix(0.17, 0.11, h);                            // tapering toward the tip
+    float dl = length(pa - ba * h) - w;
+    // its shadow on the face, away from the light
+    float2 so = -uLightDir * 0.10;
+    float ds = length(uv - so - ba * clamp(dot(uv - so, ba) / max(dot(ba, ba), 1e-4), 0.0, 1.0)) - w;
+    col *= 1.0 - 0.5 * smoothstep(0.10, -0.02, ds);
+    if (dl < 0.0) {
+        float across = clamp((length(pa - ba * h)) / w, 0.0, 1.0);
+        float2 side = normalize(float2(-ba.y, ba.x) + 1e-4) * sign(dot(pa - ba * h, float2(-ba.y, ba.x)));
+        float3 N = normalize(float3(side * across * 0.9, sqrt(max(1.0 - across * across * 0.8, 0.05))));
+        col = mix(col, toMetal(evalEnvironment(N, 0.05)), smoothstep(0.0, -uPx * 3.0, dl));
+    }
+    // the ball at its end
+    float kb = length(uv - tip) / 0.17;
+    if (kb < 1.0) {
+        float3 N = normalize(float3((uv - tip) / 0.17, sqrt(1.0 - kb * kb)));
+        col = mix(col, toMetal(evalEnvironment(N, 0.03)), smoothstep(1.0, 1.0 - uPx * 6.0, kb));
+    }
+    float a = smoothstep(1.0 + uPx, 1.0 - uPx, r);
+    return half4(col * a, a);
+}
+"""
+
+/** Brushed stainless steel, the deck's top: fine streaks running across it, a soft sheen of the world. */
+const val BRUSHED_STEEL_AGSL = ENV_CORE + """
+uniform float2 iResolution;
+uniform float uDens;
+
+half4 main(float2 p) {
+    float2 q = p / uDens;                                   // in dp: the grain keeps its scale
+    float streak = eNoise(float2(q.x * 0.015, q.y * 2.2)) * 0.6 + eNoise(float2(q.x * 0.05, q.y * 5.0)) * 0.4;
+    float3 N = normalize(float3(0.0, (streak - 0.5) * 0.10, 1.0));
+    // the plate is gently curved front to back, catching the world across its width
+    float v = p.y / iResolution.y;
+    N = normalize(N + float3((p.x / iResolution.x - 0.5) * 0.25, (v - 0.4) * 0.35, 0.0));
+    half3 col = toMetal(evalEnvironment(N, 0.34)) * 0.62 + half3(0.05);
+    col *= 0.90 + 0.18 * streak;
+    // a soft darkening toward the edges where it rolls away
+    col *= 1.0 - 0.25 * smoothstep(0.75, 1.0, v);
+    return half4(col, 1.0);
+}
+"""
+
+/**
+ * A round button in black enamel over brass, seen from above: a gently domed top, a knurled
+ * rim whose ridges have worn through to brass at their tips and here and there along it.
+ */
+const val KNURL_BUTTON_AGSL = ENV_CORE + """
+uniform float2 iResolution;
+uniform float uPx;
+uniform float uPressed;
+
+half4 main(float2 p) {
+    float2 uv = (p / iResolution) * 2.0 - 1.0;
+    float r = length(uv);
+    if (r > 1.0 + uPx) return half4(0.0);
+    float2 dir = uv / max(r, 1e-4);
+    half3 col;
+    if (r > 0.74) {                                          // the knurled rim
+        float ang = atan(uv.y, uv.x);
+        float ridge = 0.5 + 0.5 * cos(ang * 48.0);
+        float t = (r - 0.74) / 0.26;
+        float3 N = normalize(float3(dir * (t - 0.3) * 0.9 + float2(-dir.y, dir.x) * sin(ang * 48.0) * 0.55, 0.75));
+        float organic = 0.5 + 0.5 * sin(ang * 2.0 + 0.7) * sin(ang * 5.0 + 2.1);
+        float wear = smoothstep(0.78, 0.98, ridge) * (0.35 + 0.65 * organic) + smoothstep(0.9, 1.0, r) * 0.5 * organic;
+        wear = clamp(wear, 0.0, 1.0);
+        half3 en = enamel(N, 0.10) * (0.45 + 0.55 * ridge);
+        half3 br = toBrass(evalEnvironment(N, mix(0.42, 0.05, smoothstep(0.35, 0.85, wear))));
+        col = mix(en, br, smoothstep(0.22, 0.5, wear));
+        col *= (r < 0.76) ? 0.45 : 1.0;                      // the step down to the face
+    } else {                                                 // the face: domed black enamel
+        float3 N = normalize(float3(uv * 0.35, 1.0));
+        col = enamel(N, 0.08);
+    }
+    col *= 1.0 - 0.15 * uPressed;
+    float a = smoothstep(1.0 + uPx, 1.0 - uPx, r);
+    return half4(col * a, a);
+}
+"""
+
+/**
+ * A vertical slide switch cut into the steel: a dark slot with a chamfered steel lip, and a
+ * black enamel knob with knurled grip lines (worn to brass at their edges) at the top (on) or
+ * bottom (off). Units: half the width.
+ */
+const val SLIDE_V_AGSL = ENV_CORE + """
+uniform float2 iResolution;
+uniform float uPx;
+uniform float uKnob;          // -1 down .. 1 up
+
+float rrect(float2 p, float2 b, float r) { float2 q = abs(p) - b + r; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r; }
+
+half4 main(float2 p) {
+    float hw = iResolution.x * 0.5;
+    float2 uv = (p - iResolution * 0.5) / hw;
+    float hh = iResolution.y / iResolution.x;
+    float slot = rrect(uv, float2(0.42, hh - 0.04), 0.42);
+    if (slot > 0.16 + uPx) return half4(0.0);
+    half3 col;
+    float a = 1.0;
+    if (slot > 0.0) {                                        // the chamfered steel lip
+        float t = slot / 0.16;
+        float e = 0.001;
+        float2 g = normalize(float2(rrect(uv + float2(e, 0.0), float2(0.42, hh - 0.04), 0.42) - rrect(uv - float2(e, 0.0), float2(0.42, hh - 0.04), 0.42),
+                                    rrect(uv + float2(0.0, e), float2(0.42, hh - 0.04), 0.42) - rrect(uv - float2(0.0, e), float2(0.42, hh - 0.04), 0.42)) + 1e-6);
+        col = toMetal(evalEnvironment(normalize(float3(-g * (1.0 - t) * 0.9, 0.6)), 0.10));
+        a = smoothstep(0.16 + uPx, 0.16 - uPx, slot);
+    } else {
+        col = half3(0.012, 0.012, 0.013) * (1.0 + 2.0 * smoothstep(-0.25, 0.0, slot));     // the slot's depth
+    }
+    // the knob
+    float travel = hh - 0.04 - 0.62;
+    float2 kc = float2(0.0, -uKnob * travel);
+    float knob = rrect(uv - kc, float2(0.34, 0.52), 0.30);
+    // its shadow in the slot
+    col *= 1.0 - 0.45 * smoothstep(0.12, -0.05, rrect(uv - kc + uLightDir * 0.08, float2(0.34, 0.52), 0.30)) * step(slot, 0.0);
+    if (knob < 0.0) {
+        float gy = (uv.y - kc.y) / 0.52;
+        float ridge = 0.5 + 0.5 * cos(gy * 3.14159 * 5.0);     // grip lines across it
+        float edgeT = smoothstep(-0.10, 0.0, knob);
+        float3 N = normalize(float3(0.0, sin(gy * 3.14159 * 5.0) * 0.45, 1.0));
+        float wear = (smoothstep(0.82, 0.98, ridge) * 0.6 + edgeT * 0.8) * (0.6 + 0.4 * sin(uv.x * 9.0 + 1.0));
+        half3 en = enamel(N, 0.10) * (0.6 + 0.4 * ridge);
+        half3 br = toBrass(evalEnvironment(N, mix(0.40, 0.06, smoothstep(0.35, 0.85, wear))));
+        col = mix(en, br, smoothstep(0.30, 0.6, wear));
+        col = mix(col, half3(0.0), smoothstep(-uPx * 2.0, 0.0, knob) * 0.6);
+    }
+    return half4(col * a, a);
+}
+"""
+
+/**
+ * The waist-level viewer's bezel: a chamfered stainless frame round a rectangular opening, the
+ * opening's glass faintly reflecting the world (a soft Fresnel sheen and a diagonal sweep); the
+ * picture shows through from beneath. Units: half the height.
+ */
+const val VIEWER_BEZEL_AGSL = ENV_CORE + """
+uniform float2 iResolution;
+uniform float uPx;
+uniform float2 uOpen;        // the opening's half size
+uniform float uFrame;        // the frame's width
+
+float rrect(float2 p, float2 b, float r) { float2 q = abs(p) - b + r; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r; }
+
+half4 main(float2 p) {
+    float hh = iResolution.y * 0.5;
+    float2 uv = (p - iResolution * 0.5) / hh;
+    float2 outer = uOpen + uFrame;
+    float o = rrect(uv, outer, 0.10);
+    if (o > uPx) return half4(0.0);
+    float io = rrect(uv, uOpen, 0.04);
+    if (io > 0.0) {
+        // the frame: rising from the deck at the outside, chamfered down into the opening
+        float t = clamp(io / uFrame, 0.0, 1.0);
+        float e = 0.002;
+        float2 g = normalize(float2(rrect(uv + float2(e, 0.0), uOpen, 0.04) - rrect(uv - float2(e, 0.0), uOpen, 0.04),
+                                    rrect(uv + float2(0.0, e), uOpen, 0.04) - rrect(uv - float2(0.0, e), uOpen, 0.04)) + 1e-6);
+        float slope = t < 0.35 ? -(0.35 - t) / 0.35 * 1.1 : (t > 0.75 ? (t - 0.75) / 0.25 * 0.9 : 0.0);
+        half3 col = toMetal(evalEnvironment(normalize(float3(g * slope, 0.8)), t > 0.35 && t < 0.75 ? 0.22 : 0.05));
+        col *= (t < 0.05) ? 0.35 : 1.0;                       // the dark seam at the opening
+        float a = smoothstep(uPx, -uPx, o);
+        return half4(col * a, a);
+    }
+    // the glass over the picture: mostly clear, a sheen toward its edges and a soft sweep
+    float2 q = uv / uOpen;
+    float edge = pow(clamp(max(abs(q.x), abs(q.y)), 0.0, 1.0), 6.0);
+    float sweep = smoothstep(0.10, 0.0, abs(q.x * 0.6 + q.y * 0.8 - 0.2 + uLightDir.x * 0.5)) * 0.14;
+    half3 refl = evalEnvironment(normalize(float3(q * 0.3, 1.0)), 0.05);
+    float a = clamp(0.04 + edge * 0.35 + sweep, 0.0, 1.0);
+    return half4(refl * a, a);
+}
+"""
+
+/** A green LED set flush in the steel: a thin dark ring, a flat lens, glowing from within when lit. */
+const val FLUSH_LED_AGSL = ENV_CORE + """
+uniform float2 iResolution;
+uniform float uPx;
+uniform float uLit;
+
+half4 main(float2 p) {
+    float2 uv = (p / iResolution) * 2.0 - 1.0;
+    float r = length(uv);
+    if (r > 1.0 + uPx) return half4(0.0);
+    half3 col;
+    if (r > 0.82) col = half3(0.02);                                     // the seam in the steel
+    else {
+        float gr = r / 0.82;
+        half3 body = mix(half3(0.015, 0.05, 0.03), half3(0.12, 0.95, 0.45), uLit * (1.0 - gr * 0.5));
+        body += half3(0.6, 1.0, 0.75) * uLit * smoothstep(0.45, 0.0, gr) * 0.5;
+        half3 refl = evalEnvironment(float3(0.0, 0.0, 1.0), 0.04);
+        col = body + refl * 0.06 * (1.0 - uLit * 0.8);
+    }
+    float a = smoothstep(1.0 + uPx, 1.0 - uPx, r);
     return half4(col * a, a);
 }
 """
